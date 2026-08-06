@@ -1242,14 +1242,54 @@ def resolve_unified_timeline(
         from otio_app.services.without_voiceover_enhanced.keyword_flow_closing import (
             validate_keyword_flow_closing,
         )
+        from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+            enforce_asset_reuse_as_coverage_gaps,
+        )
 
         if plan_has_unsupported_keyword_flow_pause_directives(plan):
             raise UnifiedTimelineError(
                 KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE
             )
+        intro_asset_ids = {
+            str(aid)
+            for aid, entry in (catalog.by_id or {}).items()
+            if _is_intro_folder(str((entry or {}).get("folder") or ""))
+        }
+        plan, reuse_notes = enforce_asset_reuse_as_coverage_gaps(
+            plan,
+            max_asset_usage=int(options.max_asset_usage),
+            min_asset_reuse_distance_shots=int(
+                options.min_asset_reuse_distance_shots
+            ),
+            intro_asset_ids=intro_asset_ids,
+            prefer_closing_fallback=True,
+        )
+        for note in reuse_notes:
+            repairs.append(f"reuse→gap: {note}")
         closing_errors = validate_keyword_flow_closing(plan, catalog=catalog)
         if closing_errors:
-            errors.extend(closing_errors)
+            # Closing als ehrliche Gap nach Reuse-Demote: soft bei open gaps.
+            if allow_open_gaps and plan.slots:
+                last = plan.slots[-1]
+                last_is_gap = (
+                    str(last.asset_fit or "") == "none"
+                    or not str(last.local_asset_id or "").strip()
+                )
+                if last_is_gap:
+                    soft_closing = [
+                        e
+                        for e in closing_errors
+                        if "Primary Closing" in e or "Fallback Closing" in e
+                    ]
+                    hard_closing = [
+                        e for e in closing_errors if e not in soft_closing
+                    ]
+                    repairs.extend(f"open-gap soft: {m}" for m in soft_closing)
+                    errors.extend(hard_closing)
+                else:
+                    errors.extend(closing_errors)
+            else:
+                errors.extend(closing_errors)
     words_by_segment: dict[str, list[dict]] = {}
     sentence_rows_by_id: dict[str, dict] | None = None
     if keyword_flow:
@@ -1657,15 +1697,29 @@ def resolve_unified_timeline(
     ordered = sorted(ordered, key=_resolved_shot_sort_key)
     _count_chapter_continuity(chapter_envelopes, ordered, fps=fps)
 
+    # Abstand: alle redaktionellen Shots inkl. open-gap Trenner; Usage nur
+    # belegte Assets. Nach Keyword-Flow-Demote sollten Verletzungen leer sein.
     editorial_shots = [
         shot
         for shot in ordered
         if not str(shot.editorial_function or "").startswith("technical_chapter_")
-        and not shot.open_gap
-        and shot.asset_id
     ]
-    for prev, curr in zip(editorial_shots, editorial_shots[1:]):
+    filled_shots = [
+        shot for shot in editorial_shots if not shot.open_gap and shot.asset_id
+    ]
+    for prev, curr in zip(filled_shots, filled_shots[1:]):
         if not prev.asset_id or prev.asset_id != curr.asset_id:
+            continue
+        # Nur direkt benachbart auf der redaktionellen Spur (Gaps dazwischen OK).
+        prev_i = next(
+            (i for i, s in enumerate(editorial_shots) if s.shot_id == prev.shot_id),
+            None,
+        )
+        curr_i = next(
+            (i for i, s in enumerate(editorial_shots) if s.shot_id == curr.shot_id),
+            None,
+        )
+        if prev_i is None or curr_i is None or curr_i - prev_i != 1:
             continue
         prev_folder = str(
             prev.folder_name
@@ -1679,7 +1733,7 @@ def resolve_unified_timeline(
             f"{prev.shot_id} → {curr.shot_id}."
         )
 
-    usage_counts = Counter(shot.asset_id for shot in editorial_shots)
+    usage_counts = Counter(shot.asset_id for shot in filled_shots)
     for asset_id, count in sorted(usage_counts.items()):
         folder = str((catalog.by_id.get(asset_id) or {}).get("folder") or "")
         if _is_intro_folder(folder):
@@ -1690,30 +1744,34 @@ def resolve_unified_timeline(
                 f"(max_asset_usage={options.max_asset_usage})."
             )
 
-    reuse_distance = int(options.min_asset_reuse_distance_shots)
-    if reuse_distance > 0:
-        last_index: dict[str, int] = {}
-        for index, shot in enumerate(editorial_shots):
-            folder = str(
-                shot.folder_name
-                or (catalog.by_id.get(shot.asset_id) or {}).get("folder")
-                or ""
-            )
-            if _is_intro_folder(folder):
-                continue
-            prev_index = last_index.get(shot.asset_id)
-            if prev_index is not None:
-                gap_shots = index - prev_index - 1
-                if gap_shots < reuse_distance:
-                    message = (
-                        f"{shot.shot_id}: Asset {shot.asset_id} erneut nach "
-                        f"{gap_shots} Shots (min Abstand {reuse_distance})."
-                    )
-                    if gap_shots == 0:
-                        errors.append(message)
-                    else:
-                        repairs.append(message)
-            last_index[shot.asset_id] = index
+    # min_gap wie Classic: mind. 1 (kein Direkt-Reuse); Setting erhöht.
+    min_gap = max(1, int(options.min_asset_reuse_distance_shots or 0))
+    last_index: dict[str, int] = {}
+    for index, shot in enumerate(editorial_shots):
+        if shot.open_gap or not shot.asset_id:
+            continue
+        folder = str(
+            shot.folder_name
+            or (catalog.by_id.get(shot.asset_id) or {}).get("folder")
+            or ""
+        )
+        if _is_intro_folder(folder):
+            continue
+        prev_index = last_index.get(shot.asset_id)
+        if prev_index is not None:
+            gap_shots = index - prev_index - 1
+            if gap_shots < min_gap:
+                message = (
+                    f"{shot.shot_id}: Asset {shot.asset_id} erneut nach "
+                    f"{gap_shots} Shots (min Abstand {min_gap})."
+                )
+                # Keyword Flow: nach Pre-Resolve-Demote Rest hart failen.
+                # Andere Stile: Direkt-Reuse hart, sonst soft (wie zuvor).
+                if keyword_flow or gap_shots == 0:
+                    errors.append(message)
+                else:
+                    repairs.append(message)
+        last_index[shot.asset_id] = index
 
     repairs.extend(assess_cut_rhythm(final_shadow, ordered))
 

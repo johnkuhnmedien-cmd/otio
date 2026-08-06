@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from otio_app.services.gemini_client import _extract_json
 from otio_app.services.without_voiceover_enhanced.models import (
@@ -79,6 +79,189 @@ def _boundary_to_narration_anchor(boundary: CutBoundary) -> NarrationAnchor:
 
 def _default_gap_id(slot_id: str) -> str:
     return f"gap_{slot_id}"
+
+
+def _demote_slot_to_coverage_gap(
+    slot: CutSlot,
+    *,
+    reason: str,
+) -> CutSlot:
+    """Asset entfernen und Slot als ehrliche Coverage-Gap markieren."""
+    gap_id = (slot.coverage_gap_id or "").strip() or _default_gap_id(slot.slot_id)
+    needed = (
+        (slot.needed_visual or "").strip()
+        or (slot.visual_intent or "").strip()
+        or reason
+    )
+    concepts = [str(c).strip() for c in (slot.search_concepts or []) if str(c).strip()]
+    if not concepts:
+        seed = (slot.visual_intent or needed or "missing visual").strip()
+        concepts = [seed[:40] or "missing visual"]
+    prev_reason = (slot.asset_fit_reason or "").strip()
+    combined = f"{prev_reason} | {reason}".strip(" |") if prev_reason else reason
+    return slot.model_copy(
+        update={
+            "local_asset_id": None,
+            "asset_fit": "none",
+            "asset_fit_reason": combined,
+            "coverage_gap_id": gap_id,
+            "needed_visual": needed,
+            "search_concepts": concepts,
+        }
+    )
+
+
+def _reuse_violation_reason(
+    asset_id: str,
+    *,
+    shot_index: int,
+    usage: Mapping[str, int],
+    last_index: Mapping[str, int],
+    max_usage: int,
+    min_gap: int,
+) -> str | None:
+    if int(usage.get(asset_id, 0)) >= max_usage:
+        return (
+            f"Asset {asset_id} überschreitet max_asset_usage={max_usage} "
+            "— Coverage-Gap statt Overuse."
+        )
+    prev = last_index.get(asset_id)
+    if prev is None:
+        return None
+    gap_shots = shot_index - int(prev) - 1
+    if gap_shots < min_gap:
+        return (
+            f"Asset {asset_id} erneut nach {gap_shots} Shots "
+            f"(min Abstand {min_gap}) — Coverage-Gap statt Früh-Reuse."
+        )
+    return None
+
+
+def enforce_asset_reuse_as_coverage_gaps(
+    plan: UnifiedCutPlanDocument,
+    *,
+    max_asset_usage: int,
+    min_asset_reuse_distance_shots: int,
+    prior_usage_counts: Mapping[str, int] | None = None,
+    prior_editorial_asset_ids: list[str] | None = None,
+    intro_asset_ids: set[str] | None = None,
+    prefer_closing_fallback: bool = True,
+) -> tuple[UnifiedCutPlanDocument, list[str]]:
+    """Früh-Reuse / Max-Usage → Coverage-Gap statt stiller Regelverletzung.
+
+    Walkt Slots in Plan-Reihenfolge. Offene Gaps (ohne Asset) zählen als
+    Abstand-Trenner, erhöhen aber weder Usage noch last-use. Intro-Assets
+    (optional per ID) sind ausgenommen — wie im Timeline-Resolver.
+
+    Am letzten Slot: bei Verletzung zuerst ``closing_fallback_asset_id``
+    versuchen (Keyword Flow), sonst Gap.
+    """
+    max_usage = max(1, int(max_asset_usage))
+    # Wie Classic-Selector: Direkt-Reuse ist immer verboten; Setting erhöht.
+    min_gap = max(1, int(min_asset_reuse_distance_shots or 0))
+    intro_ids = {str(a).strip() for a in (intro_asset_ids or set()) if str(a).strip()}
+    closing_fallback = str(plan.closing_fallback_asset_id or "").strip()
+
+    usage: dict[str, int] = {
+        str(k): int(v)
+        for k, v in dict(prior_usage_counts or {}).items()
+        if str(k).strip() and int(v) > 0
+    }
+    last_index: dict[str, int] = {}
+    shot_index = 0
+    notes: list[str] = []
+
+    # Filmweite Vorgänger-Shots seed'en den Abstand (Kapitel vorher).
+    for asset_id in prior_editorial_asset_ids or []:
+        key = str(asset_id or "").strip()
+        if not key or key in intro_ids:
+            shot_index += 1
+            continue
+        last_index[key] = shot_index
+        shot_index += 1
+
+    updated: list[CutSlot] = []
+    slot_count = len(plan.slots)
+    for slot_pos, slot in enumerate(plan.slots):
+        asset_id = str(slot.local_asset_id or "").strip()
+        fit = str(slot.asset_fit or "none").strip().lower()
+        # Bereits offene Gaps / null: nur Index vorwärts (Trenner).
+        if not asset_id or fit == "none":
+            updated.append(
+                slot
+                if not asset_id
+                else slot.model_copy(update={"local_asset_id": None})
+            )
+            shot_index += 1
+            continue
+        if asset_id in intro_ids:
+            updated.append(slot)
+            shot_index += 1
+            continue
+
+        reason = _reuse_violation_reason(
+            asset_id,
+            shot_index=shot_index,
+            usage=usage,
+            last_index=last_index,
+            max_usage=max_usage,
+            min_gap=min_gap,
+        )
+        chosen = slot
+        if (
+            reason
+            and prefer_closing_fallback
+            and slot_pos == slot_count - 1
+            and closing_fallback
+            and closing_fallback != asset_id
+            and closing_fallback not in intro_ids
+        ):
+            fb_reason = _reuse_violation_reason(
+                closing_fallback,
+                shot_index=shot_index,
+                usage=usage,
+                last_index=last_index,
+                max_usage=max_usage,
+                min_gap=min_gap,
+            )
+            if fb_reason is None:
+                fb_fit = str(plan.closing_fallback_asset_fit or "acceptable").strip()
+                if fb_fit not in {"strong", "acceptable"}:
+                    fb_fit = "acceptable"
+                chosen = slot.model_copy(
+                    update={
+                        "local_asset_id": closing_fallback,
+                        "asset_fit": fb_fit,
+                        "asset_fit_reason": (
+                            f"{(slot.asset_fit_reason or '').strip()} | "
+                            f"Closing Primary reuse-illegal — Fallback "
+                            f"{closing_fallback}."
+                        ).strip(" |"),
+                        "coverage_gap_id": None,
+                    }
+                )
+                notes.append(
+                    f"{slot.slot_id}: Primary {asset_id} reuse-illegal — "
+                    f"Fallback {closing_fallback}."
+                )
+                reason = None
+                asset_id = closing_fallback
+
+        if reason:
+            demoted = _demote_slot_to_coverage_gap(slot, reason=reason)
+            updated.append(demoted)
+            notes.append(f"{slot.slot_id}: {reason}")
+            shot_index += 1
+            continue
+
+        usage[asset_id] = usage.get(asset_id, 0) + 1
+        last_index[asset_id] = shot_index
+        updated.append(chosen)
+        shot_index += 1
+
+    if not notes:
+        return plan, []
+    return plan.model_copy(update={"slots": updated}), notes
 
 
 def _covered_sentence_ids(

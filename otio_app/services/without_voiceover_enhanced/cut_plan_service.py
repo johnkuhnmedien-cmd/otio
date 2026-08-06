@@ -1733,8 +1733,8 @@ class FolderUnifiedCutResult:
     gap_count: int = 0
 
 
-def _used_in_ledger_text(plans: list[Any]) -> str:
-    """Filmweite Asset-Nutzung bisheriger Kapitel für den Prompt."""
+def _used_in_ledger_counts(plans: list[Any]) -> dict[str, int]:
+    """Filmweite Asset-Nutzungszählung bisheriger Kapitel."""
     from collections import Counter
 
     counts: Counter[str] = Counter()
@@ -1745,6 +1745,28 @@ def _used_in_ledger_text(plans: list[Any]) -> str:
             asset_id = getattr(slot, "local_asset_id", None)
             if asset_id:
                 counts[str(asset_id)] += 1
+    return dict(counts)
+
+
+def _prior_editorial_asset_ids(plans: list[Any]) -> list[str]:
+    """Asset-IDs bisheriger Kapitel in Slot-Reihenfolge (Abstand-Seed).
+
+    Offene Gaps (kein Asset) werden als leerer Trenner mit ``""`` gezählt,
+    damit der Reuse-Abstand kapitelübergreifend stimmt.
+    """
+    ordered: list[str] = []
+    for plan in plans:
+        if plan is None:
+            continue
+        for slot in getattr(plan, "slots", []) or []:
+            asset_id = str(getattr(slot, "local_asset_id", None) or "").strip()
+            ordered.append(asset_id)
+    return ordered
+
+
+def _used_in_ledger_text(plans: list[Any]) -> str:
+    """Filmweite Asset-Nutzung bisheriger Kapitel für den Prompt."""
+    counts = _used_in_ledger_counts(plans)
     if not counts:
         return ""
     lines = ["asset_id\tuses"]
@@ -1787,6 +1809,8 @@ def generate_unified_cut_for_folder(
     llm_callable: Callable[..., Any] | None = None,
     context: _ChapterCutContext | None = None,
     used_in_ledger_text: str = "",
+    prior_usage_counts: dict[str, int] | None = None,
+    prior_editorial_asset_ids: list[str] | None = None,
 ) -> FolderUnifiedCutResult:
     """Ein Unified-LLM-Call für genau ein Kapitel (mit Parse-Retry)."""
     from otio_app.services.voiceover_generation.model_settings_service import (
@@ -2080,6 +2104,20 @@ def generate_unified_cut_for_folder(
             )
 
             plan = enforce_intro_strong_only(plan, options=options)
+        elif use_keyword_flow:
+            from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+                enforce_asset_reuse_as_coverage_gaps,
+            )
+
+            plan, _reuse_notes = enforce_asset_reuse_as_coverage_gaps(
+                plan,
+                max_asset_usage=int(options.max_asset_usage),
+                min_asset_reuse_distance_shots=int(
+                    options.min_asset_reuse_distance_shots
+                ),
+                prior_usage_counts=prior_usage_counts,
+                prior_editorial_asset_ids=prior_editorial_asset_ids,
+            )
         _rough, coverage = unified_to_rough(plan)
         return FolderUnifiedCutResult(
             folder_name=display_name,
@@ -2141,6 +2179,8 @@ def generate_all_unified_cuts(
             llm_callable=llm_callable,
             context=context,
             used_in_ledger_text=ledger,
+            prior_usage_counts=_used_in_ledger_counts(prior_plans),
+            prior_editorial_asset_ids=_prior_editorial_asset_ids(prior_plans),
         )
         results.append(result)
         if result.status == "PASS" and result.plan is not None:
