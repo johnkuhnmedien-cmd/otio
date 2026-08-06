@@ -238,7 +238,7 @@ def still_hold_cover_pan_filter(
     width: int,
     height: int,
     direction: str = "ltr",
-    pan_travel: float = 0.12,
+    pan_travel: float = 0.02,
     end_zoom_factor: float = 1.0,
 ) -> str:
     """16:9 Cover-Fill + horizontaler Schwenk ohne schwarze Ränder.
@@ -253,7 +253,7 @@ def still_hold_cover_pan_filter(
     denom = max(1, frames - 1)
     tw = max(2, (int(width) // 2) * 2)
     th = max(2, (int(height) // 2) * 2)
-    travel = max(0.05, min(0.30, float(pan_travel)))
+    travel = max(0.01, min(0.30, float(pan_travel)))
     # Sichtbarer Anteil = 1/z → z muss ≥ 1/(1-travel) sein, sonst Ränder.
     z_start = 1.0 / (1.0 - travel)
     end_mult = max(1.0, float(end_zoom_factor) or 1.0)
@@ -291,7 +291,7 @@ def ensure_still_hold_video(
     dynamic_zoom: bool = False,
     zoom_factor: float = 1.12,
     pan_direction: str | None = None,
-    pan_travel: float = 0.12,
+    pan_travel: float = 0.02,
 ) -> Path:
     """JPEG/PNG → kurzes H.264-Video der geplanten Haltedauer (Resolve-sicher)."""
     if duration_seconds <= 0:

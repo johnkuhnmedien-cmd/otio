@@ -96,17 +96,20 @@ STILL_PAN_MODE_CHOICES = (
     STILL_PAN_MODE_RTL,
     STILL_PAN_MODE_ALTERNATE,
 )
-DEFAULT_STILL_PAN_TRAVEL = 0.12
-STILL_PAN_TRAVEL_MIN = 0.05
+# Sehr subtiler Default (~2 % Frame-Breite); 0.12/0.04 wirkten zu stark.
+DEFAULT_STILL_PAN_TRAVEL = 0.02
+LEGACY_STILL_PAN_TRAVELS = (0.12, 0.04)
+STILL_PAN_TRAVEL_MIN = 0.01
 STILL_PAN_TRAVEL_MAX = 0.30
-# Cover+Pan nur wenn Bild-Seitenverhältnis nahe 16:9 (sonst Vintage-Fallback).
+# Cover+Pan wenn Bild-Seitenverhältnis nahe 16:9 (sonst Paper-Edge/Vintage).
 DEFAULT_STILL_PAN_MIN_ASPECT = 1.50  # ~3:2
 DEFAULT_STILL_PAN_MAX_ASPECT = 2.05  # etwas breiter als 16:9
 STILL_PAN_FALLBACK_ZOOM = 0.8
+CUT_PLAN_OPTIONS_SCHEMA_VERSION = "1.9"
 
 
 class CutPlanOptions(BaseModel):
-    schema_version: str = "1.7"
+    schema_version: str = CUT_PLAN_OPTIONS_SCHEMA_VERSION
     # Phase 7: Unified (1 LLM) vs Legacy (Rough + Final).
     cut_plan_mode: CutPlanMode = CUT_PLAN_MODE_LEGACY
     # Unified Stil: Rhythmus (Default) oder Keyword-Sync (Wort↔Bild).
@@ -192,7 +195,7 @@ class CutPlanOptions(BaseModel):
         ge=STILL_PAN_TRAVEL_MIN,
         le=STILL_PAN_TRAVEL_MAX,
     )
-    # Cover+Pan nur in diesem Aspect-Fenster (Breite/Höhe); sonst Fallback.
+    # Cover+Pan in diesem Aspect-Fenster (Breite/Höhe); außerhalb Paper-Edge.
     still_image_pan_min_aspect: float = Field(
         default=DEFAULT_STILL_PAN_MIN_ASPECT, ge=1.0, le=3.0
     )
@@ -345,7 +348,7 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
     if shot_max < shot_min:
         shot_max = shot_min
 
-    return CutPlanOptions(
+    options = CutPlanOptions(
         schema_version=str(raw.get("schema_version") or defaults.schema_version),
         cut_plan_mode=_normalize_cut_plan_mode(  # type: ignore[arg-type]
             raw.get("cut_plan_mode", defaults.cut_plan_mode),
@@ -535,6 +538,24 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             hi=4.0,
         ),
     )
+    return _migrate_cut_plan_options(options)
+
+
+def _migrate_cut_plan_options(options: CutPlanOptions) -> CutPlanOptions:
+    """Einmalige Defaults: alte Schwenk-Defaults → aktueller subtiler Wert."""
+    updates: dict[str, Any] = {}
+    legacy_schema = str(options.schema_version or "") != CUT_PLAN_OPTIONS_SCHEMA_VERSION
+    if legacy_schema:
+        updates["schema_version"] = CUT_PLAN_OPTIONS_SCHEMA_VERSION
+        # Nur frühere Defaults ersetzen — bewusst gesetzte Werte bleiben.
+        travel = float(options.still_image_pan_travel)
+        if any(abs(travel - legacy) < 1e-9 for legacy in LEGACY_STILL_PAN_TRAVELS):
+            updates["still_image_pan_travel"] = DEFAULT_STILL_PAN_TRAVEL
+    if options.shot_max_sec < options.shot_min_sec:
+        updates["shot_max_sec"] = options.shot_min_sec
+    if not updates:
+        return options
+    return options.model_copy(update=updates)
 
 
 def load_cut_plan_options(project: Project) -> CutPlanOptions:
@@ -552,9 +573,7 @@ def load_cut_plan_options(project: Project) -> CutPlanOptions:
         except (OSError, UnicodeError, json.JSONDecodeError):
             pass
         return default_cut_plan_options()
-    if loaded.shot_max_sec < loaded.shot_min_sec:
-        return loaded.model_copy(update={"shot_max_sec": loaded.shot_min_sec})
-    return loaded
+    return _migrate_cut_plan_options(loaded)
 
 
 def save_cut_plan_options(project: Project, options: CutPlanOptions) -> CutPlanOptions:

@@ -64,7 +64,8 @@ def test_export_recovers_original_still_from_hold_mp4(tmp_path: Path) -> None:
     work.mkdir(parents=True)
     folder = root / "Yosemite"
     folder.mkdir()
-    photo = _write_photo(folder / "cliff.jpg", size=(640, 360), color=(20, 40, 200))
+    # Quadratisch → Paper-Edge-Pfad (nahe 16:9 ginge Cover+Pan ohne Style).
+    photo = _write_photo(folder / "cliff.jpg", size=(800, 800), color=(20, 40, 200))
     hold = work / "hold_cache" / "still_hold_abc.mp4"
     hold.parent.mkdir(parents=True)
     hold.write_bytes(b"fake")
@@ -116,8 +117,8 @@ def test_export_recovers_original_still_from_hold_mp4(tmp_path: Path) -> None:
 
     styled_hold = work / "hold_cache" / "still_hold_styled.mp4"
 
-    def _fake_hold(project, image_path, *, duration_seconds, fps, width=None, height=None):
-        del project, duration_seconds, fps, width, height
+    def _fake_hold(project, image_path, *, duration_seconds, fps, width=None, height=None, **kwargs):
+        del project, duration_seconds, fps, width, height, kwargs
         # Styled JPEG sollte existieren (nicht das ungestylte Hold).
         assert Path(image_path).suffix.lower() in {".jpg", ".jpeg", ".png"}
         styled_hold.parent.mkdir(parents=True, exist_ok=True)

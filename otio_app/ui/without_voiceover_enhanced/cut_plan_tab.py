@@ -914,7 +914,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             ),
         )
         pan_labels = {
-            "off": "Aus",
+            "off": "Aus (Cover + L→R)",
             "ltr": "Links → Rechts",
             "rtl": "Rechts → Links",
             "alternate": "Abwechselnd L→R / R→L",
@@ -932,52 +932,50 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             format_func=lambda v: pan_labels.get(v, v),
             key=f"enh_opt_still_pan_{project.id}",
             help=(
-                "Nur für Fotos nahe 16:9: Frame komplett füllen (Cover) und "
-                "horizontal schwenken — Extra-Zoom verhindert schwarze Ränder. "
-                "1:1 / stark abweichende Formate: Fallback mit Zoom 0.8, "
-                "Dynamic Zoom und Vintage/Paper-Edge-Hintergrund. "
-                "Wirkt beim nächsten OTIO-Export."
+                "Aspect zuerst: Fotos nahe 16:9 füllen den Frame (Cover) und "
+                "bekommen Extra-Zoom für den Schwenk — kein Paper-Edge. "
+                "„Aus“ = Cover mit L→R. Richtung wählbar über L→R / R→L / "
+                "Abwechselnd. Quadratisch/hochkant: Zoom 0.8 + Paper-Edge/"
+                "Vintage. Wirkt beim nächsten OTIO-Export."
             ),
         )
         still_image_pan_travel = st.number_input(
             "Schwenk-Weg (Anteil der Bildbreite)",
-            min_value=0.05,
+            min_value=0.01,
             max_value=0.30,
             value=float(current.still_image_pan_travel),
             step=0.01,
             key=f"enh_opt_still_pan_travel_{project.id}",
-            disabled=still_image_pan_mode == "off",
             help=(
-                "0.12 = ca. 12 % der Frame-Breite. Mehr Weg = stärkerer Schwenk "
-                "und etwas mehr Zoom (keine Ränder)."
+                "Default 0.02 = ca. 2 % der Frame-Breite (sehr subtil). "
+                "Mehr Weg = stärkerer Schwenk und etwas mehr Zoom. "
+                "Gilt für Cover-fähige Stills."
             ),
         )
         pan_a1, pan_a2 = st.columns(2)
         with pan_a1:
             still_image_pan_min_aspect = st.number_input(
-                "Pan ab Aspect min (Breite/Höhe)",
+                "Cover ab Aspect min (Breite/Höhe)",
                 min_value=1.0,
                 max_value=3.0,
                 value=float(current.still_image_pan_min_aspect),
                 step=0.05,
                 key=f"enh_opt_still_pan_min_ar_{project.id}",
-                disabled=still_image_pan_mode == "off",
-                help="Default 1.50 (~3:2). Darunter → Vintage-Fallback.",
+                help="Default 1.50 (~3:2). Darunter → Paper-Edge-Fallback.",
             )
         with pan_a2:
             still_image_pan_max_aspect = st.number_input(
-                "Pan bis Aspect max (Breite/Höhe)",
+                "Cover bis Aspect max (Breite/Höhe)",
                 min_value=1.0,
                 max_value=4.0,
                 value=float(current.still_image_pan_max_aspect),
                 step=0.05,
                 key=f"enh_opt_still_pan_max_ar_{project.id}",
-                disabled=still_image_pan_mode == "off",
-                help="Default 2.05. Darüber → Vintage-Fallback. 16:9 ≈ 1.78.",
+                help="Default 2.05. Darüber → Paper-Edge-Fallback. 16:9 ≈ 1.78.",
             )
 
         draft = CutPlanOptions(
-            schema_version="1.7",
+            schema_version="1.9",
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
             unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
             keyword_flow_allow_onset_overflow=bool(
