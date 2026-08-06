@@ -1654,15 +1654,20 @@ INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
 - Never use asset_fit \"acceptable\" or \"weak\". If the best local asset is only
   acceptable/weak, set local_asset_id to null, asset_fit \"none\", and create a
   coverage_gap (inline gap fields + search_concepts).
-- Opening: Python will hold the first slot for {preroll:.1f}s BEFORE Intro VO
-  starts. Set voiceover_preroll_sec to {preroll:.1f}.
-- Closing: Python will hold the last slot for {post_min:.1f}–{post_max:.1f}s
-  AFTER Intro VO ends. Set voiceover_postroll_sec between {post_min:.1f} and
-  {post_max:.1f} (prefer ~{post_default:.1f} unless justified).
+- Opening: Python inserts a SEPARATE preroll shot for {preroll:.1f}s BEFORE
+  Intro VO (independent clip — not an extension of slot 1). When VO starts,
+  your first slot begins as a NEW shot. Set voiceover_preroll_sec to
+  {preroll:.1f}.
+- Closing: Python inserts a SEPARATE postroll shot for
+  {post_min:.1f}–{post_max:.1f}s AFTER Intro VO ends (independent clip — not
+  an extension of the last VO slot). Set voiceover_postroll_sec between
+  {post_min:.1f} and {post_max:.1f} (prefer ~{post_default:.1f} unless
+  justified).
 - CRITICAL: preroll/postroll do NOT fill gaps inside the VO. Your boundaries
-  must already cover the full VO carpet (start→end). Python only adds hold
-  before first VO and after last VO — it will NOT extend a last shot that
-  ends early during narration.
+  must already cover the full VO carpet (start→end). Python adds independent
+  envelope shots before first VO and after last VO — it will NOT extend a
+  last shot that ends early during narration (use closing_fallback_asset_id
+  for that reserve closer).
 - Always set closing_fallback_asset_id to a DIFFERENT strong asset from
   BUNDLED INVENTORY than the last slot's local_asset_id. Python inserts it
   only if the last picture still ends early during VO (reserve closer).
@@ -1699,9 +1704,9 @@ KEYWORD / CONTEXT CUTS (CRITICAL — understand the whole Intro first):
   through any remaining VO (outro line, tag, breath) until the true VO end.
   Do NOT place the final boundary at the last keyword — place it at the last
   sentence end.
-- Opening hold is separate: slot 1 may begin {preroll:.1f}s before VO
-  (Python preroll). From VO start onward, keyword-onset sync applies to
-  justified place/list cuts only.
+- Opening envelope is separate: Python's preroll shot covers
+  {preroll:.1f}s before VO; your slot 1 starts at VO start. From VO start
+  onward, keyword-onset sync applies to justified place/list cuts only.
 - Prefer WORD TIMINGS: for justified keyword/list cuts, set alignment
   \"mid_sentence\" and offset_seconds from words[].offset_seconds of the spoken
   keyword (or the first word of a multi-word place name). Fall back to text
