@@ -96,16 +96,16 @@ STILL_PAN_MODE_CHOICES = (
     STILL_PAN_MODE_RTL,
     STILL_PAN_MODE_ALTERNATE,
 )
-# Subtiler Default (~4 % Frame-Breite); 0.12 wirkte zu stark.
-DEFAULT_STILL_PAN_TRAVEL = 0.04
-LEGACY_STILL_PAN_TRAVEL = 0.12
-STILL_PAN_TRAVEL_MIN = 0.02
+# Sehr subtiler Default (~2 % Frame-Breite); 0.12/0.04 wirkten zu stark.
+DEFAULT_STILL_PAN_TRAVEL = 0.02
+LEGACY_STILL_PAN_TRAVELS = (0.12, 0.04)
+STILL_PAN_TRAVEL_MIN = 0.01
 STILL_PAN_TRAVEL_MAX = 0.30
 # Cover+Pan wenn Bild-Seitenverhältnis nahe 16:9 (sonst Paper-Edge/Vintage).
 DEFAULT_STILL_PAN_MIN_ASPECT = 1.50  # ~3:2
 DEFAULT_STILL_PAN_MAX_ASPECT = 2.05  # etwas breiter als 16:9
 STILL_PAN_FALLBACK_ZOOM = 0.8
-CUT_PLAN_OPTIONS_SCHEMA_VERSION = "1.8"
+CUT_PLAN_OPTIONS_SCHEMA_VERSION = "1.9"
 
 
 class CutPlanOptions(BaseModel):
@@ -542,13 +542,14 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
 
 
 def _migrate_cut_plan_options(options: CutPlanOptions) -> CutPlanOptions:
-    """Einmalige Defaults: alter Schwenk 0.12 → subtilerer 0.04."""
+    """Einmalige Defaults: alte Schwenk-Defaults → aktueller subtiler Wert."""
     updates: dict[str, Any] = {}
     legacy_schema = str(options.schema_version or "") != CUT_PLAN_OPTIONS_SCHEMA_VERSION
     if legacy_schema:
         updates["schema_version"] = CUT_PLAN_OPTIONS_SCHEMA_VERSION
-        # Nur den alten Default (0.12) ersetzen — bewusst gesetzte Werte bleiben.
-        if abs(float(options.still_image_pan_travel) - LEGACY_STILL_PAN_TRAVEL) < 1e-9:
+        # Nur frühere Defaults ersetzen — bewusst gesetzte Werte bleiben.
+        travel = float(options.still_image_pan_travel)
+        if any(abs(travel - legacy) < 1e-9 for legacy in LEGACY_STILL_PAN_TRAVELS):
             updates["still_image_pan_travel"] = DEFAULT_STILL_PAN_TRAVEL
     if options.shot_max_sec < options.shot_min_sec:
         updates["shot_max_sec"] = options.shot_min_sec
