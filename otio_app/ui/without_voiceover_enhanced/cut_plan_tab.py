@@ -959,7 +959,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             ),
         )
         pan_labels = {
-            "off": "Aus (Cover + L→R)",
+            "off": "Aus (Cover + abwechselnd)",
             "ltr": "Links → Rechts",
             "rtl": "Rechts → Links",
             "alternate": "Abwechselnd L→R / R→L",
@@ -978,9 +978,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             key=f"enh_opt_still_pan_{project.id}",
             help=(
                 "Aspect zuerst: Fotos nahe 16:9 füllen den Frame (Cover) und "
-                "bekommen Extra-Zoom für den Schwenk — kein Paper-Edge. "
-                "„Aus“ = Cover mit L→R. Richtung wählbar über L→R / R→L / "
-                "Abwechselnd. Quadratisch/hochkant: Zoom 0.8 + Paper-Edge/"
+                "schwenken nur horizontal (kein Zoom-in). Default: abwechselnd "
+                "L→R / R→L. Quadratisch/hochkant: Zoom 0.8 + Paper-Edge/"
                 "Vintage. Wirkt beim nächsten OTIO-Export."
             ),
         )

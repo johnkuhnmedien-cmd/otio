@@ -207,7 +207,8 @@ class CutPlanOptions(BaseModel):
         le=STILL_DYNAMIC_ZOOM_FACTOR_MAX,
     )
     # Cover-Fill 16:9 + horizontaler Schwenk (kein Letterbox / keine schwarzen Ränder).
-    still_image_pan_mode: str = STILL_PAN_MODE_OFF
+    # Default: abwechselnd L→R / R→L — nur Pan, kein Zoom.
+    still_image_pan_mode: str = STILL_PAN_MODE_ALTERNATE
     still_image_pan_travel: float = Field(
         default=DEFAULT_STILL_PAN_TRAVEL,
         ge=STILL_PAN_TRAVEL_MIN,
@@ -269,6 +270,7 @@ def resolve_still_pan_direction(
     shot_index: int = 0,
 ) -> str | None:
     """Liefert ``ltr``/``rtl`` oder ``None`` wenn Pan aus ist."""
+    del shot_id  # Alternate nutzt Timeline-Index, nicht shot_id-Hash.
     normalized = _normalize_still_pan_mode(mode)
     if normalized == STILL_PAN_MODE_OFF:
         return None
@@ -276,11 +278,8 @@ def resolve_still_pan_direction(
         return STILL_PAN_MODE_LTR
     if normalized == STILL_PAN_MODE_RTL:
         return STILL_PAN_MODE_RTL
-    # alternate: gerade Indizes L→R, ungerade R→L (stabil über shot_id-Hash).
-    if shot_id:
-        parity = sum(ord(ch) for ch in shot_id) % 2
-    else:
-        parity = int(shot_index) % 2
+    # alternate: Timeline-Reihenfolge — gerade L→R, ungerade R→L.
+    parity = int(shot_index) % 2
     return STILL_PAN_MODE_LTR if parity == 0 else STILL_PAN_MODE_RTL
 
 

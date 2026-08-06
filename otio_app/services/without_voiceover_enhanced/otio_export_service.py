@@ -305,7 +305,7 @@ def _export_styled_still_hold(
     """Still → Hold-MP4 (Resolve braucht Video mit Dauer).
 
     Aspect-first:
-    - nahe 16:9 → Cover-Fill + Extra-Zoom für L/R-Schwenk (kein Paper-Edge)
+    - nahe 16:9 → Cover-Fill + horizontaler Schwenk (kein Zoom, kein Paper-Edge)
     - quadratisch/hochkant → Zoom 0.8 + Vintage/Paper-Edge
     """
     from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
@@ -313,7 +313,7 @@ def _export_styled_still_hold(
         STILL_BACKGROUND_PAPER_EDGE,
         STILL_BACKGROUND_VINTAGE,
         STILL_PAN_FALLBACK_ZOOM,
-        STILL_PAN_MODE_LTR,
+        STILL_PAN_MODE_ALTERNATE,
         resolve_still_pan_direction,
     )
     from otio_app.services.without_voiceover_enhanced.media_hold import (
@@ -333,15 +333,18 @@ def _export_styled_still_hold(
     )
 
     if can_cover:
-        # Cover+Pan vom Original — Style/Letterbox würde Ränder einbrennen.
-        # Pan-Mode „off“: trotzdem L→R, damit nahe 16:9 nicht mit Paper-Edge
-        # bei Zoom 1.0 in Resolve landen.
+        # Cover+Pan vom Original — nur Schwenk, kein Ken-Burns-Zoom.
+        # Pan-Mode „off“: abwechselnd L→R / R→L (Timeline-Index).
         use_style = False
         style_zoom = float(options.still_image_zoom)
         bg = str(options.still_image_background_style or STILL_BACKGROUND_NONE)
-        use_dynamic = bool(options.still_image_dynamic_zoom_enabled)
+        use_dynamic = False
         hold_source_is_original = True
-        effective_pan = pan_direction or STILL_PAN_MODE_LTR
+        effective_pan = pan_direction or resolve_still_pan_direction(
+            STILL_PAN_MODE_ALTERNATE,
+            shot_id=str(shot.shot_id or ""),
+            shot_index=shot_index,
+        )
     else:
         # Zu quadratisch/hochkant: 0.8 + Paper/Vintage (+ Dyn-Zoom).
         use_style = True
@@ -389,6 +392,7 @@ def _ensure_shot_media_for_export(
     fps: float,
     catalog: AssetCatalog | None = None,
     media_fill_cache: dict[str, Path] | None = None,
+    shot_index: int = 0,
 ) -> tuple[Path, float, float, float, float]:
     """Validiert Shot-Medien.
 
@@ -429,6 +433,7 @@ def _ensure_shot_media_for_export(
             image_path=original_still,
             fps=fps,
             label=label,
+            shot_index=shot_index,
         )
         timeline_dur = max(
             0.01, float(shot.timeline_end_seconds - shot.timeline_start_seconds)
@@ -710,7 +715,7 @@ def validate_resolved_timeline_for_production(
         fps=fps,
         folder_names=_catalog_folders_for_resolved(resolved) or None,
     )
-    for shot in resolved.shots:
+    for shot_index, shot in enumerate(resolved.shots):
         if bool(getattr(shot, "is_placeholder", False)) or bool(shot.open_gap):
             errors.append(
                 f"{shot.shot_id}: Placeholder/offener Gap "
@@ -725,6 +730,7 @@ def validate_resolved_timeline_for_production(
                     fps=fps,
                     catalog=catalog,
                     media_fill_cache=media_fill_cache,
+                    shot_index=shot_index,
                 )
             )
         except EnhancedOtioExportError as exc:
@@ -1001,7 +1007,8 @@ def export_otio_from_resolved_timeline(
     )
 
     cursor = 0.0
-    for shot in sorted(resolved.shots, key=_resolved_shot_sort_key):
+    sorted_shots = sorted(resolved.shots, key=_resolved_shot_sort_key)
+    for shot_index, shot in enumerate(sorted_shots):
         if shot.timeline_start_seconds > cursor + 1e-6:
             gap = shot.timeline_start_seconds - cursor
             video_track.append(
@@ -1015,6 +1022,7 @@ def export_otio_from_resolved_timeline(
                     fps=fps,
                     catalog=catalog,
                     media_fill_cache=media_fill_cache,
+                    shot_index=shot_index,
                 )
             )
         except EnhancedOtioExportError:
@@ -1235,7 +1243,7 @@ def export_portable_otio_package(
         _resolved_shot_sort_key as _sort_shots,
     )
 
-    for shot in sorted(resolved.shots, key=_sort_shots):
+    for shot_index, shot in enumerate(sorted(resolved.shots, key=_sort_shots)):
         if shot.timeline_start_seconds > cursor + 1e-6:
             gap = shot.timeline_start_seconds - cursor
             video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
@@ -1246,6 +1254,7 @@ def export_portable_otio_package(
                 fps=fps,
                 catalog=catalog,
                 media_fill_cache=media_fill_cache,
+                shot_index=shot_index,
             )
         )
         source_duration = source_end - source_start

@@ -241,27 +241,25 @@ def still_hold_cover_pan_filter(
     pan_travel: float = 0.02,
     end_zoom_factor: float = 1.0,
 ) -> str:
-    """16:9 Cover-Fill + horizontaler Schwenk ohne schwarze Ränder.
+    """16:9 Cover-Fill + horizontaler Schwenk — ohne Zoom-Animation.
 
-    1. Foto füllt den Frame komplett (``increase`` + Crop, kein Letterbox).
-    2. Extra-Zoom ``z = 1/(1-travel)`` schafft Spielraum für den Schwenk.
-    3. ``x`` wandert L→R oder R→L über die Shot-Dauer.
-    Optional leichtes zusätzliches Zoom-in über ``end_zoom_factor`` (>1).
+    1. Foto füllt den Frame (``increase`` + Crop, kein Letterbox).
+    2. Fester Overscan ``z = 1/(1-travel)`` nur als Spielraum für den Schwenk
+       (kein Ken-Burns / kein Zoom-in über die Dauer).
+    3. ``x`` wandert L→R oder R→L; ``z`` bleibt konstant.
+
+    ``end_zoom_factor`` wird ignoriert (API-Kompatibilität).
     """
+    del end_zoom_factor  # Pan-only — kein Zoom-in während des Shots.
     rate = max(1.0, float(fps) or 25.0)
     frames = max(2, int(round(max(0.01, float(duration_seconds)) * rate)))
     denom = max(1, frames - 1)
     tw = max(2, (int(width) // 2) * 2)
     th = max(2, (int(height) // 2) * 2)
     travel = max(0.01, min(0.30, float(pan_travel)))
-    # Sichtbarer Anteil = 1/z → z muss ≥ 1/(1-travel) sein, sonst Ränder.
-    z_start = 1.0 / (1.0 - travel)
-    end_mult = max(1.0, float(end_zoom_factor) or 1.0)
-    z_end = z_start * end_mult
-    if abs(z_end - z_start) < 1e-4:
-        z_expr = f"{z_start:.4f}"
-    else:
-        z_expr = f"{z_start:.4f}+({z_end:.4f}-{z_start:.4f})*on/{denom}"
+    # Fester Overscan: sichtbarer Anteil = 1/z — sonst schwarze Ränder beim Pan.
+    z_fixed = 1.0 / (1.0 - travel)
+    z_expr = f"{z_fixed:.4f}"
     direction_key = (direction or "ltr").strip().lower()
     if direction_key in {"rtl", "right_to_left", "rl"}:
         x_expr = f"(iw-iw/zoom)*(1-on/{denom})"
@@ -310,7 +308,7 @@ def ensure_still_hold_video(
         bool(dynamic_zoom) and float(zoom_factor) > 1.001 and tw > 0 and th > 0
     )
     if use_pan and tw > 0 and th > 0:
-        # Cover+Pan hat Vorrang vor Letterbox/zentriertem Zoom.
+        # Cover+Pan: nur Schwenk, nie Ken-Burns-Zoom (auch wenn dynamic an).
         vf = still_hold_cover_pan_filter(
             duration_seconds=duration_seconds,
             fps=rate,
@@ -318,9 +316,9 @@ def ensure_still_hold_video(
             height=th,
             direction="rtl" if pan_dir in {"rtl", "right_to_left", "rl"} else "ltr",
             pan_travel=float(pan_travel),
-            end_zoom_factor=float(zoom_factor) if use_dynamic else 1.0,
+            end_zoom_factor=1.0,
         )
-        cache_tag = f"still_pan_v1_{pan_dir}_{float(pan_travel):.3f}"
+        cache_tag = f"still_pan_v2_{pan_dir}_{float(pan_travel):.3f}"
     elif use_dynamic:
         vf = still_hold_dynamic_zoom_filter(
             duration_seconds=duration_seconds,
