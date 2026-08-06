@@ -302,12 +302,18 @@ def _export_styled_still_hold(
     label: str,
     shot_index: int = 0,
 ) -> Path:
-    """Still-Style → Hold-MP4 (Resolve braucht Video mit Dauer)."""
+    """Still → Hold-MP4 (Resolve braucht Video mit Dauer).
+
+    Aspect-first:
+    - nahe 16:9 → Cover-Fill + Extra-Zoom für L/R-Schwenk (kein Paper-Edge)
+    - quadratisch/hochkant → Zoom 0.8 + Vintage/Paper-Edge
+    """
     from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
         STILL_BACKGROUND_NONE,
         STILL_BACKGROUND_PAPER_EDGE,
         STILL_BACKGROUND_VINTAGE,
         STILL_PAN_FALLBACK_ZOOM,
+        STILL_PAN_MODE_LTR,
         resolve_still_pan_direction,
     )
     from otio_app.services.without_voiceover_enhanced.media_hold import (
@@ -315,41 +321,37 @@ def _export_styled_still_hold(
     )
 
     options = load_cut_plan_options(project)
+    can_cover = still_aspect_allows_cover_pan(
+        image_path,
+        min_aspect=float(options.still_image_pan_min_aspect),
+        max_aspect=float(options.still_image_pan_max_aspect),
+    )
     pan_direction = resolve_still_pan_direction(
         str(options.still_image_pan_mode),
         shot_id=str(shot.shot_id or ""),
         shot_index=shot_index,
     )
-    pan_eligible = pan_direction is not None and still_aspect_allows_cover_pan(
-        image_path,
-        min_aspect=float(options.still_image_pan_min_aspect),
-        max_aspect=float(options.still_image_pan_max_aspect),
-    )
-    # Nicht nahe 16:9 (z. B. 1:1): kein Cover-Pan — Vintage/Paper + 0.8 + Dyn-Zoom.
-    pan_fallback = pan_direction is not None and not pan_eligible
-    effective_pan = pan_direction if pan_eligible else None
 
-    if pan_fallback:
-        use_style = True
-        style_zoom = float(STILL_PAN_FALLBACK_ZOOM)
-        bg = str(options.still_image_background_style or STILL_BACKGROUND_VINTAGE)
-        if bg not in {STILL_BACKGROUND_VINTAGE, STILL_BACKGROUND_PAPER_EDGE}:
-            bg = STILL_BACKGROUND_VINTAGE
-        use_dynamic = True
-        hold_source_is_original = False
-    elif effective_pan is not None:
-        # Cover+Pan braucht das Originalfoto — Vintage-Letterbox würde Ränder erzeugen.
+    if can_cover:
+        # Cover+Pan vom Original — Style/Letterbox würde Ränder einbrennen.
+        # Pan-Mode „off“: trotzdem L→R, damit nahe 16:9 nicht mit Paper-Edge
+        # bei Zoom 1.0 in Resolve landen.
         use_style = False
         style_zoom = float(options.still_image_zoom)
         bg = str(options.still_image_background_style or STILL_BACKGROUND_NONE)
         use_dynamic = bool(options.still_image_dynamic_zoom_enabled)
         hold_source_is_original = True
+        effective_pan = pan_direction or STILL_PAN_MODE_LTR
     else:
-        use_style = bool(options.still_image_style_enabled)
-        style_zoom = float(options.still_image_zoom)
-        bg = str(options.still_image_background_style or STILL_BACKGROUND_NONE)
-        use_dynamic = bool(options.still_image_dynamic_zoom_enabled)
+        # Zu quadratisch/hochkant: 0.8 + Paper/Vintage (+ Dyn-Zoom).
+        use_style = True
+        style_zoom = float(STILL_PAN_FALLBACK_ZOOM)
+        bg = str(options.still_image_background_style or STILL_BACKGROUND_VINTAGE)
+        if bg not in {STILL_BACKGROUND_VINTAGE, STILL_BACKGROUND_PAPER_EDGE}:
+            bg = STILL_BACKGROUND_PAPER_EDGE
+        use_dynamic = True
         hold_source_is_original = False
+        effective_pan = None
 
     styled = ensure_styled_still_for_export(
         project,
@@ -405,8 +407,8 @@ def _ensure_shot_media_for_export(
         )
     path = _assert_local_file(shot.resolved_media_path, label=label)
 
-    # Still-Style / dynamischer Zoom: Originalbild nutzen — auch wenn Resolve
-    # schon still_hold.mp4 geschrieben hat (sonst greifen Settings nicht).
+    # Still: immer aus Original neu rendern (Cover nahe 16:9 bzw. Paper-Edge),
+    # auch wenn Resolve schon still_hold.mp4 geschrieben hat.
     from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
         resolve_still_pan_direction,
     )
@@ -419,12 +421,7 @@ def _ensure_shot_media_for_export(
     original_still = _original_still_path_for_export(
         project, shot, path=path, catalog=catalog, fps=fps
     )
-    # Pan-Mode (auch Fallback auf Vintage) → immer aus Original neu rendern.
-    restyle = original_still is not None and (
-        bool(options.still_image_style_enabled)
-        or bool(options.still_image_dynamic_zoom_enabled)
-        or pan_direction is not None
-    )
+    restyle = original_still is not None
     if restyle and original_still is not None:
         hold_path = _export_styled_still_hold(
             project,

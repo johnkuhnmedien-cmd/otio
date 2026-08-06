@@ -99,7 +99,7 @@ STILL_PAN_MODE_CHOICES = (
 DEFAULT_STILL_PAN_TRAVEL = 0.12
 STILL_PAN_TRAVEL_MIN = 0.05
 STILL_PAN_TRAVEL_MAX = 0.30
-# Cover+Pan nur wenn Bild-Seitenverhältnis nahe 16:9 (sonst Vintage-Fallback).
+# Cover+Pan wenn Bild-Seitenverhältnis nahe 16:9 (sonst Paper-Edge/Vintage).
 DEFAULT_STILL_PAN_MIN_ASPECT = 1.50  # ~3:2
 DEFAULT_STILL_PAN_MAX_ASPECT = 2.05  # etwas breiter als 16:9
 STILL_PAN_FALLBACK_ZOOM = 0.8
@@ -192,7 +192,7 @@ class CutPlanOptions(BaseModel):
         ge=STILL_PAN_TRAVEL_MIN,
         le=STILL_PAN_TRAVEL_MAX,
     )
-    # Cover+Pan nur in diesem Aspect-Fenster (Breite/Höhe); sonst Fallback.
+    # Cover+Pan in diesem Aspect-Fenster (Breite/Höhe); außerhalb Paper-Edge.
     still_image_pan_min_aspect: float = Field(
         default=DEFAULT_STILL_PAN_MIN_ASPECT, ge=1.0, le=3.0
     )
