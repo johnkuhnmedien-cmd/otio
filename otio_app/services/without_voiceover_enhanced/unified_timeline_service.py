@@ -1174,6 +1174,7 @@ def resolve_unified_timeline(
     preroll_override: float | None = None,
     postroll_override: float | None = None,
     catalog_folders: list[str] | None = None,
+    apply_keyword_flow_rules: bool | None = None,
 ) -> ResolvedTimelineDocument:
     """UnifiedCutPlan → ResolvedTimelineDocument (+ Kompat-Schatten).
 
@@ -1184,6 +1185,9 @@ def resolve_unified_timeline(
     Intro-only Resolve ohne Gesamt-Timeline zu schreiben.
 
     ``catalog_folders``: Asset-Katalog nur für diese Ordner bauen (Kapitel-Timing).
+
+    ``apply_keyword_flow_rules``: ``None`` = aus Cut-Plan-Stil; Intro-Resolve
+    setzt ``False`` — Intro hat eigenen Prompt (kein KF closing_fallback-Fit).
     """
     locked = require_locked_script(project)
     if plan is None:
@@ -1226,7 +1230,10 @@ def resolve_unified_timeline(
             raise UnifiedTimelineError(
                 "Keine Segment-Timings für den gewählten Kapitel-Filter."
             )
-    keyword_flow = is_keyword_flow_unified_style(options)
+    if apply_keyword_flow_rules is None:
+        keyword_flow = is_keyword_flow_unified_style(options)
+    else:
+        keyword_flow = bool(apply_keyword_flow_rules)
     if keyword_flow:
         from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
             KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE,

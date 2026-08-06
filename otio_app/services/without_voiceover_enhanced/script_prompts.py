@@ -1654,6 +1654,11 @@ INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
   must already cover the full VO carpet (start→end). Python only adds hold
   before first VO and after last VO — it will NOT extend a last shot that
   ends early during narration.
+- Always set closing_fallback_asset_id to a DIFFERENT strong asset from
+  BUNDLED INVENTORY than the last slot's local_asset_id. Python inserts it
+  only if the last picture still ends early during VO (reserve closer).
+  Prefer establishing / landscape / wide. Do NOT emit
+  closing_fallback_asset_fit / _reason / _visual_intent (Intro-only id).
 - Opening and closing slots must use different local_asset_id values when both
   have strong assets.
 - Prefix every cut_id, slot_id and coverage_gap_id with \"{slug}_\".
@@ -1762,6 +1767,7 @@ OUTPUT SCHEMA:
 {{
   "voiceover_preroll_sec": 4.0,
   "voiceover_postroll_sec": 6.5,
+  "closing_fallback_asset_id": "different_strong_asset_than_last_slot",
   "pause_directives": [],
   "boundaries": [
     {{
@@ -1821,6 +1827,8 @@ FINAL VALIDATION:
 - First boundary: first Intro sentence, position start (offset 0/null)
 - Last boundary: last Intro sentence, position end (not a keyword mid_sentence)
 - Last slot covers through remaining VO after the last justified keyword cut
+- closing_fallback_asset_id set, exists in BUNDLED INVENTORY, differs from
+  last slot local_asset_id
 - Every motion local_asset_id has planning_usable
   (duration_seconds - usable_in_s - 1.0s) >= intended slot span
   (first/last: include Vorlauf/Nachlauf)
