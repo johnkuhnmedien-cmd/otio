@@ -119,13 +119,19 @@ def _reuse_violation_reason(
     last_index: Mapping[str, int],
     max_usage: int,
     min_gap: int,
+    reuse_key: str | None = None,
 ) -> str | None:
-    if int(usage.get(asset_id, 0)) >= max_usage:
+    from otio_app.services.without_voiceover_enhanced.enhanced_supplement_dedupe import (
+        reuse_identity_key,
+    )
+
+    key = reuse_key or reuse_identity_key(asset_id)
+    if int(usage.get(key, 0)) >= max_usage:
         return (
             f"Asset {asset_id} überschreitet max_asset_usage={max_usage} "
             "— Coverage-Gap statt Overuse."
         )
-    prev = last_index.get(asset_id)
+    prev = last_index.get(key)
     if prev is None:
         return None
     gap_shots = shot_index - int(prev) - 1
@@ -146,6 +152,7 @@ def enforce_asset_reuse_as_coverage_gaps(
     prior_editorial_asset_ids: list[str] | None = None,
     intro_asset_ids: set[str] | None = None,
     prefer_closing_fallback: bool = True,
+    reuse_key_index: Mapping[str, str] | None = None,
 ) -> tuple[UnifiedCutPlanDocument, list[str]]:
     """Früh-Reuse / Max-Usage → Coverage-Gap statt stiller Regelverletzung.
 
@@ -162,11 +169,18 @@ def enforce_asset_reuse_as_coverage_gaps(
     intro_ids = {str(a).strip() for a in (intro_asset_ids or set()) if str(a).strip()}
     closing_fallback = str(plan.closing_fallback_asset_id or "").strip()
 
-    usage: dict[str, int] = {
-        str(k): int(v)
-        for k, v in dict(prior_usage_counts or {}).items()
-        if str(k).strip() and int(v) > 0
-    }
+    from otio_app.services.without_voiceover_enhanced.enhanced_supplement_dedupe import (
+        reuse_identity_key,
+    )
+
+    def _key(raw: str) -> str:
+        return reuse_identity_key(raw, index=reuse_key_index)
+
+    usage: dict[str, int] = {}
+    for raw_id, count in dict(prior_usage_counts or {}).items():
+        key = _key(str(raw_id))
+        if key and int(count) > 0:
+            usage[key] = usage.get(key, 0) + int(count)
     last_index: dict[str, int] = {}
     shot_index = 0
     notes: list[str] = []
@@ -177,7 +191,7 @@ def enforce_asset_reuse_as_coverage_gaps(
         if not key or key in intro_ids:
             shot_index += 1
             continue
-        last_index[key] = shot_index
+        last_index[_key(key)] = shot_index
         shot_index += 1
 
     updated: list[CutSlot] = []
@@ -199,6 +213,7 @@ def enforce_asset_reuse_as_coverage_gaps(
             shot_index += 1
             continue
 
+        asset_key = _key(asset_id)
         reason = _reuse_violation_reason(
             asset_id,
             shot_index=shot_index,
@@ -206,6 +221,7 @@ def enforce_asset_reuse_as_coverage_gaps(
             last_index=last_index,
             max_usage=max_usage,
             min_gap=min_gap,
+            reuse_key=asset_key,
         )
         chosen = slot
         if (
@@ -216,6 +232,7 @@ def enforce_asset_reuse_as_coverage_gaps(
             and closing_fallback != asset_id
             and closing_fallback not in intro_ids
         ):
+            fb_key = _key(closing_fallback)
             fb_reason = _reuse_violation_reason(
                 closing_fallback,
                 shot_index=shot_index,
@@ -223,6 +240,7 @@ def enforce_asset_reuse_as_coverage_gaps(
                 last_index=last_index,
                 max_usage=max_usage,
                 min_gap=min_gap,
+                reuse_key=fb_key,
             )
             if fb_reason is None:
                 fb_fit = str(plan.closing_fallback_asset_fit or "acceptable").strip()
@@ -246,6 +264,7 @@ def enforce_asset_reuse_as_coverage_gaps(
                 )
                 reason = None
                 asset_id = closing_fallback
+                asset_key = fb_key
 
         if reason:
             demoted = _demote_slot_to_coverage_gap(slot, reason=reason)
@@ -254,8 +273,8 @@ def enforce_asset_reuse_as_coverage_gaps(
             shot_index += 1
             continue
 
-        usage[asset_id] = usage.get(asset_id, 0) + 1
-        last_index[asset_id] = shot_index
+        usage[asset_key] = usage.get(asset_key, 0) + 1
+        last_index[asset_key] = shot_index
         updated.append(chosen)
         shot_index += 1
 

@@ -2361,6 +2361,64 @@ def _render_section_funnel(project) -> None:
             else:
                 _start_funnel_job(valid_selected)
 
+    st.markdown("**Supplement-Duplikate (Enhanced Inventar)**")
+    st.caption(
+        "Mehrere Funnel-/Cut-Plan-Läufe können dasselbe Stock-Asset unter "
+        "verschiedenen IDs speichern — dann greifen max usage / Abstand nicht. "
+        "Aufräumen klappt Inventar-Zeilen mit gleicher Provider-ID zusammen "
+        "(z. B. `pexels_video_123` und `supplement_pexels_123`). "
+        "Danach Keyword-Flow-Cut neu erzeugen."
+    )
+    from otio_app.services.without_voiceover_enhanced.enhanced_supplement_dedupe import (
+        cleanup_enhanced_inventory_duplicates,
+        scan_enhanced_inventory_duplicates,
+    )
+
+    enh_dup_groups = scan_enhanced_inventory_duplicates(project)
+    enh_dup_count = sum(len(g.remove_asset_ids) for g in enh_dup_groups)
+    st.caption(
+        f"Gefunden: **{enh_dup_count}** Doppel-ID(s) in "
+        f"**{len(enh_dup_groups)}** Gruppe(n)."
+        if enh_dup_groups
+        else "Keine Provider-ID-Duplikate im Enhanced-Inventar."
+    )
+    dedupe_col1, dedupe_col2 = st.columns(2)
+    with dedupe_col1:
+        if st.button(
+            "Duplikate prüfen",
+            key=f"enh_inv_dedupe_preview_{project.id}",
+            disabled=not enh_dup_groups,
+        ):
+            with st.expander("Duplikat-Vorschau", expanded=True):
+                for group in enh_dup_groups:
+                    st.markdown(
+                        f"**{group.folder_name}** · `{group.identity.key}` — "
+                        f"behalten `{group.keep_asset_id}`"
+                    )
+                    for rid in group.remove_asset_ids:
+                        st.caption(f"entfernen Inventar-ID: `{rid}`")
+    with dedupe_col2:
+        if st.button(
+            "Inventar-Duplikate aufräumen",
+            key=f"enh_inv_dedupe_apply_{project.id}",
+            type="primary",
+            disabled=not enh_dup_groups or funnel_running,
+            help=(
+                "Entfernt doppelte Inventar-Zeilen derselben Provider-Asset-ID. "
+                "Optional danach Cut neu erzeugen."
+            ),
+        ):
+            report = cleanup_enhanced_inventory_duplicates(
+                project, dry_run=False, delete_orphan_files=False
+            )
+            st.success(
+                f"{report.inventory_pruned} Inventar-Zeile(n) entfernt "
+                f"({report.group_count} Gruppen). "
+                f"Accepted umgeschrieben: {report.accepted_rewritten}. "
+                "Bitte Keyword-Flow-Cut neu erzeugen."
+            )
+            st.rerun()
+
     st.markdown("**Generischer Ordner-Fallback**")
     st.caption(
         "Wenn Stock/Funnel für einen Gap scheitert, versucht der Funnel "

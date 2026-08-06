@@ -279,8 +279,28 @@ def _import_into_inventory(
     validation_status: str,
     validation_score: float,
 ) -> str:
-    """Schreibt PASS-Asset ins Enhanced-Inventar (projektlokal wiederverwendbar)."""
-    asset_id = candidate.candidate_id
+    """Schreibt PASS-Asset ins Enhanced-Inventar (projektlokal wiederverwendbar).
+
+    Gleiche Provider-Asset-ID ersetzt ältere Inventar-Zeilen (keine Doppel-IDs
+    für dasselbe Stock-Asset — sonst greifen max_usage / Reuse-Abstand nicht).
+    """
+    from otio_app.services.without_voiceover_enhanced.enhanced_supplement_dedupe import (
+        preferred_inventory_asset_id,
+        provider_identity_for_candidate,
+        provider_identity_for_inventory_asset,
+    )
+
+    identity = provider_identity_for_candidate(candidate)
+    asset_id = preferred_inventory_asset_id(
+        project, candidate, folder_name=folder_name
+    )
+    license_meta = {
+        "license": candidate.license or "",
+        "attribution": candidate.attribution or candidate.creator or "",
+    }
+    if identity is not None:
+        license_meta["provider"] = identity.provider
+        license_meta["provider_asset_id"] = identity.provider_asset_id
     asset = AssetMediaAnalysis(
         path=str(media_path),
         description=description or candidate.title or asset_id,
@@ -294,10 +314,7 @@ def _import_into_inventory(
         supplement_validation_score=float(validation_score),
         approved_for_cut_plan=True,
         analysis_status="complete",
-        license_metadata={
-            "license": candidate.license or "",
-            "attribution": candidate.attribution or candidate.creator or "",
-        },
+        license_metadata=license_meta,
     )
     existing = load_folder_inventory(project, folder_name)
     if existing is None:
@@ -309,7 +326,15 @@ def _import_into_inventory(
             assets=[asset],
         )
     else:
-        assets = [a for a in existing.assets if a.asset_id != asset_id and a.path != str(media_path)]
+        assets: list[AssetMediaAnalysis] = []
+        for prior in existing.assets:
+            if prior.asset_id == asset_id or prior.path == str(media_path):
+                continue
+            if identity is not None:
+                prior_ident = provider_identity_for_inventory_asset(prior)
+                if prior_ident is not None and prior_ident.key == identity.key:
+                    continue
+            assets.append(prior)
         assets.append(asset)
         media_files = list(existing.media_files)
         if str(media_path) not in media_files:
