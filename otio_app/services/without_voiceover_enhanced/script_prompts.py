@@ -1485,6 +1485,11 @@ ASSET FIT (KEYWORD FLOW — BINDING):
 - strong / acceptable: asset may be used; coverage_gap_id null.
 - weak / none: local_asset_id MUST be null; coverage_gap_id + gap fields REQUIRED.
 - Never keep a weak asset just to fill a slot.
+- REUSE DISTANCE / MAX USAGE: never place the same non-intro asset on
+  consecutive shots; leave the configured reuse gap between reuses; never
+  exceed max_asset_usage. When the inventory is too thin for a beat under
+  those rules, prefer an honest coverage gap (asset_fit none + gap fields)
+  over early reuse. Python will demote illegal early reuses to coverage gaps.
 - Gap search_concepts: 2–4 English phrases, 2–5 words each, concrete to the missing motif.
 {VIDEO_OVER_PHOTO_ASSET_RULES}
 CLOSING:

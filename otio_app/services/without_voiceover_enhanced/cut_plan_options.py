@@ -755,6 +755,10 @@ SHOT / ASSET CONSTRAINTS (PROJECT SETTINGS — BINDING):
 - Do not use the same non-intro asset more than {options.max_asset_usage} times across the whole film.
 - Intro assets do not count toward max asset usage.
 - Asset reuse gap: when reusing a non-intro asset, leave at least {options.min_asset_reuse_distance_shots} other shots in between (default target: 4). Never place the same non-intro asset on two consecutive shots.
+- If no other suitable local asset can satisfy max usage / reuse distance for a
+  beat, emit asset_fit \"none\" with coverage_gap_id + needed_visual +
+  search_concepts — do NOT place an early reuse just to fill the slot. Python
+  demotes illegal early reuses to coverage gaps so you can stock-search.
 - Keep Intro chapter coverage complete — do not drop Intro visuals/audio.
 """
 

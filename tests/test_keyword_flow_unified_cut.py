@@ -142,6 +142,7 @@ def test_keyword_flow_prompt_contract() -> None:
     assert "unified-cut-v1" in prompt
     assert "CUT RHYTHM TARGETS" not in prompt
     assert "local_asset_id MUST be null" in prompt
+    assert "REUSE DISTANCE / MAX USAGE" in prompt
     assert "VIDEO OVER PHOTO" in prompt
     assert "CHAPTER-LOCAL IDENTITY" in prompt
     assert "verlassenes Dorf" in prompt
