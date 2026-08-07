@@ -245,8 +245,8 @@ def test_carry_over_skips_when_gap_became_high_none() -> None:
     assert out.gaps[0].user_confirmed_weak is False
 
 
-def test_timing_merge_keeps_manual_fill_status(tmp_path: Path) -> None:
-    """Merge ohne platzierbaren Kandidaten: Manual bleibt erfüllt in der UI."""
+def test_timing_merge_reopens_when_manual_file_missing(tmp_path: Path) -> None:
+    """Accepted ohne Datei: Gap wieder öffnen (kein Silent-Skip/Placeholder-Deadlock)."""
     project = _project(tmp_path)
     write_json(
         coverage_gaps_path(project),
@@ -340,21 +340,11 @@ def test_timing_merge_keeps_manual_fill_status(tmp_path: Path) -> None:
         persist_report=True,
     )
     assert report.slots
-    assert report.slots[0].status == "skipped"
-    assert "gap_m" not in report.open_none_gap_ids
-
-    funnel = load_model(
-        supplement_funnel_report_path(project), SupplementFunnelReport
-    )
-    assert funnel is not None
-    assert "gap_m" in funnel.filled_gap_ids
+    assert report.slots[0].status == "open_none"
+    assert "gap_m" in report.open_none_gap_ids
 
     persisted = load_model(gap_merge_report_path(project), GapMergeReport)
     assert persisted is not None
     gap_ids = {s.coverage_gap_id for s in persisted.slots}
     assert "gap_achill" in gap_ids
     assert "gap_m" in gap_ids
-
-    summary = summarize_gap_status(project)
-    assert "gap_m" in summary.filled_gap_ids
-    assert "gap_m" not in summary.open_gap_ids
