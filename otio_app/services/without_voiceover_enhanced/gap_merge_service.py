@@ -776,6 +776,130 @@ def _pick_supplement(
     return chosen, bucket, f"gewählt score={score} bucket={bucket}", review
 
 
+def _candidate_media_entry(candidate: StockCandidate) -> dict | None:
+    """Katalog-Eintrag für ein Accepted-/Funnel-Supplement mit lokaler Datei."""
+    media_path = Path(str(candidate.local_media_path or "")).expanduser()
+    if not media_path.is_file():
+        return None
+    media_type = str(candidate.media_type or "").strip().lower()
+    if not media_type:
+        media_type = "photo" if is_image_media(media_path) else "video"
+    kind = "image" if media_type in {"photo", "image"} else "video"
+    duration = candidate.duration_seconds
+    if duration is None and kind == "video":
+        try:
+            duration = probe_duration_seconds(media_path)
+        except Exception:  # noqa: BLE001
+            duration = None
+    return {
+        "path": str(media_path),
+        "canonical_id": str(candidate.candidate_id or ""),
+        "duration_seconds": float(duration) if duration is not None else None,
+        "media_kind": kind,
+        "media_type": media_type or kind,
+        "folder": "",
+        "available_start_seconds": 0.0,
+        "usable_in_s": None,
+    }
+
+
+def _best_placeable_gap_fill(
+    candidates: list[StockCandidate],
+    accepted_ready: list[StockCandidate],
+) -> StockCandidate | None:
+    """Längstes platzierbares Fill (Datei vorhanden), unabhängig von min_duration."""
+    pool: list[StockCandidate] = []
+    seen: set[str] = set()
+    for candidate in list(candidates) + list(accepted_ready):
+        cid = str(candidate.candidate_id or "").strip()
+        if not cid or cid in seen:
+            continue
+        if _candidate_media_entry(candidate) is None:
+            continue
+        seen.add(cid)
+        pool.append(candidate)
+    if not pool:
+        return None
+
+    def _dur(item: StockCandidate) -> float:
+        entry = _candidate_media_entry(item) or {}
+        raw = entry.get("duration_seconds")
+        if raw is None:
+            # Stills / unbekannte Dauer: hinter Videos, aber platzierbar.
+            return 0.0 if str(entry.get("media_kind") or "") == "video" else 1e9
+        return float(raw)
+
+    return max(pool, key=_dur)
+
+
+def _place_short_gap_fill_with_shortfall(
+    project: Project,
+    shot: ResolvedShot,
+    candidate: StockCandidate,
+    *,
+    gap_id: str,
+    fps: float,
+    head_trim: float,
+    short_tolerance: float,
+    repairs: list[str],
+) -> list[ResolvedShot] | None:
+    """Zu kurzes Accepted-/Funnel-Fill: Asset + roter Shortfall-Tail."""
+    entry = _candidate_media_entry(candidate)
+    if entry is None:
+        return None
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        TimedSlot,
+        _short_asset_with_red_placeholder_tail,
+    )
+
+    timed = TimedSlot(
+        slot_id=str(shot.shot_id),
+        start_seconds=float(shot.timeline_start_seconds),
+        end_seconds=float(shot.timeline_end_seconds),
+        start_boundary_id="",
+        end_boundary_id="",
+        cut_alignment=str(shot.cut_alignment or ""),
+        asset_id=str(candidate.candidate_id or ""),
+        asset_fit="acceptable",
+        asset_fit_reason=(
+            f"gap_merge short fill ← {candidate.candidate_id} "
+            "(Rest als roter Shortfall)"
+        ),
+        coverage_gap_id=gap_id,
+        narrative_function=str(shot.editorial_function or ""),
+        source_range_intent="",
+        visual_intent="",
+        needed_visual="",
+    )
+    try:
+        parts = _short_asset_with_red_placeholder_tail(
+            project,
+            timed,
+            entry=entry,
+            asset_id=str(candidate.candidate_id or ""),
+            fps=fps,
+            head_trim=head_trim,
+            short_tolerance=short_tolerance,
+            repairs=repairs,
+        )
+    except Exception:  # noqa: BLE001 — Merge soft
+        return None
+    if not parts:
+        return None
+    for part in parts:
+        part.chapter_id = shot.chapter_id
+        part.folder_name = shot.folder_name or part.folder_name
+        part.cut_alignment = shot.cut_alignment
+        if str(part.shot_id).endswith("__shortfall"):
+            part.open_gap = True
+            part.asset_fit = "weak"
+        else:
+            part.open_gap = False
+            if not str(part.asset_fit or "").strip():
+                part.asset_fit = "acceptable"
+    return parts
+
+
 def merge_export_ready_gaps_into_timeline(
     project: Project,
     *,
@@ -910,28 +1034,39 @@ def merge_export_ready_gaps_into_timeline(
                 if local_fit == "none"
                 else []
             )
-            if local_fit == "none" and accepted_ready:
-                # Accepted-Fill bleibt „erfüllt“ — Timing setzt Funnel nicht zurück.
-                keep = accepted_ready[0]
-                result = GapMergeSlotResult(
-                    shot_id=shot.shot_id,
-                    coverage_gap_id=gap_id,
-                    status="skipped",
-                    previous_asset_id=shot.asset_id or "",
-                    new_asset_id=str(keep.candidate_id or ""),
-                    local_fit=local_fit,
-                    message=(
-                        f"{pick_msg} — Accepted-Fill behalten "
-                        f"({keep.candidate_id})."
-                    ),
-                )
-                report.slots.append(result)
-                repairs.append(
-                    f"{shot.shot_id}: Accepted-Fill für {gap_id} behalten, "
-                    f"Merge übersprungen ({pick_msg})."
-                )
-                updated_shots.append(shot)
-                continue
+            if local_fit == "none":
+                # Zu kurze Accepted/Funnel-Fills trotzdem platzieren:
+                # nutzbares Asset + roter Shortfall-Placeholder für den Rest.
+                short_fill = _best_placeable_gap_fill(candidates, accepted_ready)
+                if short_fill is not None:
+                    short_parts = _place_short_gap_fill_with_shortfall(
+                        project,
+                        shot,
+                        short_fill,
+                        gap_id=gap_id,
+                        fps=fps,
+                        head_trim=head_trim,
+                        short_tolerance=short_tolerance,
+                        repairs=repairs,
+                    )
+                    if short_parts:
+                        result = GapMergeSlotResult(
+                            shot_id=shot.shot_id,
+                            coverage_gap_id=gap_id,
+                            status="merged",
+                            previous_asset_id=shot.asset_id or "",
+                            new_asset_id=str(short_fill.candidate_id or ""),
+                            local_fit=local_fit,
+                            supplement_fit_bucket="manual",
+                            message=(
+                                f"{pick_msg} — zu kurz platziert: "
+                                f"{short_fill.candidate_id} + roter Shortfall"
+                            ),
+                        )
+                        report.slots.append(result)
+                        report.merged_shot_ids.append(shot.shot_id)
+                        updated_shots.extend(short_parts)
+                        continue
 
             result = GapMergeSlotResult(
                 shot_id=shot.shot_id,
@@ -1009,6 +1144,36 @@ def merge_export_ready_gaps_into_timeline(
                 repairs=repairs,
             )
         except TimelineResolveError as exc:
+            # Dauer knapp unter Bedarf → Asset behalten + roter Shortfall.
+            short_parts = _place_short_gap_fill_with_shortfall(
+                project,
+                shot,
+                chosen,
+                gap_id=gap_id,
+                fps=fps,
+                head_trim=head_trim,
+                short_tolerance=short_tolerance,
+                repairs=repairs,
+            )
+            if short_parts:
+                result = GapMergeSlotResult(
+                    shot_id=shot.shot_id,
+                    coverage_gap_id=gap_id,
+                    status="merged",
+                    previous_asset_id=shot.asset_id or "",
+                    new_asset_id=str(chosen.candidate_id or ""),
+                    local_fit=local_fit,
+                    supplement_fit_bucket=bucket,
+                    review_flag=review,
+                    message=(
+                        f"{pick_msg} — Resolve kurz: "
+                        f"{chosen.candidate_id} + roter Shortfall ({exc})"
+                    ),
+                )
+                report.slots.append(result)
+                report.merged_shot_ids.append(shot.shot_id)
+                updated_shots.extend(short_parts)
+                continue
             result = GapMergeSlotResult(
                 shot_id=shot.shot_id,
                 coverage_gap_id=gap_id,

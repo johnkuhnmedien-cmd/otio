@@ -622,3 +622,146 @@ def test_gap_merge_shortfall_without_export_ready_is_repair_not_error(
         "The_Wave_slot_007",
         "The_Wave_slot_007__shortfall",
     ]
+
+
+def test_gap_merge_places_short_accepted_with_red_shortfall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zu kurzes Manual-Fill landet trotzdem: Asset + roter Shortfall-Tail."""
+    project = _project(tmp_path)
+    media = project.work_dir_path / "short_manual.mp4"
+    media.write_bytes(b"not-a-real-video")
+
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id="run1",
+            gaps=[
+                CoverageGap(
+                    gap_id="Achill_Island_gap_001",
+                    related_shot_ids=["Achill_Island_slot_004"],
+                    needed_visual="bog to beach to cliffs",
+                    target_duration_seconds=8.04,
+                    priority="high",
+                )
+            ],
+        ),
+    )
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="manual_short",
+                    provider="manual",
+                    assign_status="manual",
+                    media_type="video",
+                    gap_id="Achill_Island_gap_001",
+                    local_media_path=str(media),
+                    duration_seconds=7.0,
+                    media_validation_status="export_ready",
+                    funnel_managed=True,
+                    cut_plan_run_id="run1",
+                )
+            ],
+        ),
+    )
+    write_json(
+        supplement_funnel_report_path(project),
+        SupplementFunnelReport(
+            script_version="script-v1",
+            cut_plan_run_id="run1",
+            filled_gap_ids=["Achill_Island_gap_001"],
+            gaps=[
+                SupplementFunnelGapReport(
+                    gap_id="Achill_Island_gap_001",
+                    filled=True,
+                    export_ready_candidate_id="manual_short",
+                )
+            ],
+        ),
+    )
+    timeline = ResolvedTimelineDocument(
+        script_version="script-v1",
+        fps=25.0,
+        total_duration_seconds=8.04,
+        shots=[
+            ResolvedShot(
+                shot_id="Achill_Island_slot_004",
+                asset_id="",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=8.04,
+                source_start_seconds=0.0,
+                source_end_seconds=8.04,
+                asset_fit="none",
+                coverage_gap_id="Achill_Island_gap_001",
+                open_gap=True,
+                is_placeholder=True,
+                hold_mode="placeholder_slate",
+            )
+        ],
+    )
+    write_json(resolved_timeline_path(project), timeline)
+
+    from otio_app.services.without_voiceover_enhanced import gap_merge_service as gms
+    from otio_app.services.without_voiceover_enhanced import (
+        unified_timeline_service as uts,
+    )
+
+    def _fake_resolve(project_arg, **kwargs):
+        return ResolvedShot(
+            shot_id=kwargs["shot_id"],
+            asset_id=kwargs["asset_id"],
+            timeline_start_seconds=kwargs["timeline_start"],
+            timeline_end_seconds=kwargs["timeline_end"],
+            source_start_seconds=0.0,
+            source_end_seconds=kwargs["timeline_end"] - kwargs["timeline_start"],
+            editorial_function=kwargs.get("editorial_function") or "",
+            resolved_media_path=str(media),
+            resolved_media_kind="video",
+            is_placeholder=False,
+            open_gap=False,
+        )
+
+    def _fake_slate(project_arg, **kwargs):
+        out = project.work_dir_path / "placeholders"
+        out.mkdir(parents=True, exist_ok=True)
+        path = out / f"placeholder_{kwargs['shot_id']}_red.mp4"
+        path.write_bytes(b"red-slate")
+        return path
+
+    monkeypatch.setattr(gms, "list_export_ready_supplements", lambda _p: [])
+    monkeypatch.setattr(uts, "_resolve_shot_media", _fake_resolve)
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.media_hold."
+        "ensure_gap_placeholder_slate",
+        _fake_slate,
+    )
+
+    merged, report = merge_export_ready_gaps_into_timeline(
+        project,
+        timeline=timeline,
+        require_closed_none=False,
+        persist=False,
+    )
+
+    assert report.slots
+    assert report.slots[0].status == "merged"
+    assert "shortfall" in (report.slots[0].message or "").lower() or "zu kurz" in (
+        report.slots[0].message or ""
+    )
+    assert "Achill_Island_slot_004" in report.merged_shot_ids
+    assert len(merged.shots) == 2
+    head, tail = merged.shots
+    assert head.asset_id == "manual_short"
+    assert head.open_gap is False
+    assert head.is_placeholder is False
+    # Default head_trim 1s → nutzbar 6s von 7s Source; Rest = roter Shortfall.
+    assert head.timeline_end_seconds == pytest.approx(6.0)
+    assert tail.shot_id.endswith("__shortfall")
+    assert tail.is_placeholder is True
+    assert tail.coverage_gap_id == "Achill_Island_gap_001"
+    assert tail.timeline_start_seconds == pytest.approx(6.0)
+    assert tail.timeline_end_seconds == pytest.approx(8.04)
