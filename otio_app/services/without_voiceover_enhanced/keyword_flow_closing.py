@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from otio_app.services.media_utils import is_image_media
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
     STATUS_EXPORT_READY,
     is_http_url,
@@ -19,6 +20,22 @@ class KeywordFlowClosingError(ValueError):
 
 
 _ALLOWED_FALLBACK_FITS = frozenset({"strong", "acceptable"})
+_STILL_MEDIA_KINDS = frozenset({"image", "photo"})
+
+
+def _is_still_catalog_entry(entry: dict[str, Any]) -> bool:
+    """True für Standbilder — die können den Closing-Slot per Hold tragen."""
+    kind = str(entry.get("media_kind") or "").strip().lower()
+    media_type = str(entry.get("media_type") or "").strip().lower()
+    if kind in _STILL_MEDIA_KINDS or media_type in _STILL_MEDIA_KINDS:
+        return True
+    path_text = str(entry.get("path") or "").strip()
+    if path_text:
+        try:
+            return is_image_media(Path(path_text))
+        except OSError:
+            return False
+    return False
 
 
 def assess_closing_asset_technical(
@@ -50,10 +67,15 @@ def assess_closing_asset_technical(
             entry,
         )
     media_type = str(entry.get("media_type") or entry.get("media_kind") or "video")
+    if _is_still_catalog_entry(entry):
+        # Inventar hat oft leeres media_type — Stills nicht als Video validieren.
+        media_type = "photo"
     status, detail = validate_local_media_path(path_text, media_type=media_type)
     if status != STATUS_EXPORT_READY:
         return False, detail or status, entry
-    # Catalog-Dauer / Hold-Fähigkeit (Source-Range / Nachlauf).
+    # Videos brauchen genug Source-Länge; Stills halten den Slot (Ken Burns / Hold).
+    if _is_still_catalog_entry(entry):
+        return True, "ok (still hold)", entry
     duration = float(entry.get("duration_seconds") or 0.0)
     need = max(0.0, float(min_duration_seconds))
     if need > 0 and duration + 1e-9 < need:
