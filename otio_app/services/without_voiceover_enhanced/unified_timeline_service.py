@@ -1218,7 +1218,12 @@ def resolve_unified_timeline(
 
     sentence_index = sentence_index_by_id(load_segment_alignments(project))
     segment_to_chapter = _segment_to_chapter_map(locked)
-    timing_segments = list(timings.segments)
+    # Nur Segmente aus dem gesperrten Skript — keine verwaisten Alt-Timings
+    # (z. B. frühere Intro_segment_00x), sonst zerfällt Intro.wav in viele Clips.
+    live_segment_ids = {seg.segment_id for seg in locked.segments}
+    timing_segments = [
+        item for item in timings.segments if item.segment_id in live_segment_ids
+    ]
     if include_chapter is not None:
         timing_segments = [
             item
@@ -1389,13 +1394,13 @@ def resolve_unified_timeline(
             llm_value=plan.voiceover_postroll_sec,
         )
 
-    timing_map = {item.segment_id: item for item in timings.segments}
+    timing_map = {item.segment_id: item for item in timing_segments}
     audio_segments = _build_resolved_audio_segments(
         timeline=timeline,
         timing_map=timing_map,
         fps=fps,
     )
-    known_segments = {s.segment_id for s in locked.segments}
+    known_segments = live_segment_ids
     head_trim = max(0.0, float(options.video_head_trim_sec))
     short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
 
