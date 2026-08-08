@@ -133,21 +133,44 @@ def has_successful_asset_cache(
     project: Project,
     folder_name: str,
     media_path: Path,
+    *,
+    model: Optional[str] = None,
 ) -> bool:
-    """True, wenn für dieses Medium eine erfolgreiche Analyse-JSON existiert."""
+    """True, wenn ein *aktueller* v3-Cache vorliegt (Skip bei Analyselauf).
+
+    Legacy-Beschreibungen gelten hier nicht als erfolgreich — sie bleiben über
+    ``is_successfully_analyzed`` / ``is_usable_asset_analysis`` anzeigbar.
+
+    Freshness nutzt denselben effektiven Medienpfad wie die Analyse
+    (Clean-Media falls vorhanden, sonst Original).
+    """
+    from otio_app.services.asset_analysis_signature import is_current_asset_analysis
+    from otio_app.services.gemini_client import resolve_gemini_model
+
+    effective_path = resolve_media_for_analysis(project, folder_name, media_path)
     cached = load_cached_media_for_asset(project, folder_name, media_path)
-    return cached is not None and is_successfully_analyzed(cached)
+    if cached is None:
+        return False
+    return is_current_asset_analysis(
+        cached,
+        effective_path,
+        resolved_model_id=resolve_gemini_model(model),
+    )
 
 
 def list_assets_missing_successful_cache(
     project: Project,
     folder_name: str,
+    *,
+    model: Optional[str] = None,
 ) -> list[Path]:
-    """Medien ohne gültige Analyse-JSON — diese müssen (neu) analysiert werden."""
+    """Medien ohne *aktuellen* Cache — bei explizitem Analyselauf neu analysieren."""
     return [
         media_path
         for media_path in discover_folder_media_paths(project, folder_name)
-        if not has_successful_asset_cache(project, folder_name, media_path)
+        if not has_successful_asset_cache(
+            project, folder_name, media_path, model=model
+        )
     ]
 
 
@@ -266,13 +289,15 @@ def is_completed_analysis(entry: AssetMediaAnalysis) -> bool:
 
 
 def is_successfully_analyzed(entry: AssetMediaAnalysis) -> bool:
-    """True nur bei erfolgreicher Beschreibung (kein reiner Fehler-Eintrag)."""
-    description = entry.description.strip()
-    if not description:
-        return False
-    if description == NO_ANALYZABLE_MEDIA_DESCRIPTION:
-        return False
-    return True
+    """True bei verwendbarer Analyse (Legacy inkl.); nicht gleichbedeutend mit current.
+
+    Explizite Parse-Fehler und dokumentierte Analysefehler gelten nicht als Erfolg.
+    Folder-Grün / Inventar-Materialisierung nutzen diese Semantik — ohne automatisch
+    kostenpflichtige Reanalyse beim bloßen Laden.
+    """
+    from otio_app.services.asset_analysis_signature import is_usable_asset_analysis
+
+    return is_usable_asset_analysis(entry)
 
 
 def _merge_media_path(

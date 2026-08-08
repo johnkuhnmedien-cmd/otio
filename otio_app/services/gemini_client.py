@@ -21,11 +21,43 @@ from otio_app.defaults import (
     MATCH_QUALITY_UNPASSEND,
 )
 
-ASSET_DESCRIPTION_PROMPT_VERSION = "asset_v2_structured"
+ASSET_DESCRIPTION_PROMPT_VERSION = "asset_v3_editorial"
+_CAPTION_MAX_CHARS = 180
 _ALLOWED_MOTION = frozenset(
     {"static", "pan", "tilt", "tracking", "drone", "handheld", "zoom", "unknown"}
 )
+_ALLOWED_MOTION_DIRECTION = frozenset(
+    {
+        "left_to_right",
+        "right_to_left",
+        "forward",
+        "backward",
+        "up",
+        "down",
+        "none",
+        "unknown",
+    }
+)
 _ALLOWED_FRAMING = frozenset({"close", "medium", "wide", "aerial", "pov"})
+_ALLOWED_SHOT_SCALE = frozenset(
+    {"detail", "close", "medium", "wide", "extreme_wide", "unknown"}
+)
+_ALLOWED_COLOR_TEMPERATURE = frozenset(
+    {"warm", "neutral", "cool", "mixed", "unknown"}
+)
+_ALLOWED_DEFECT_TYPE = frozenset(
+    {
+        "watermark",
+        "logo",
+        "blur",
+        "shake",
+        "black_frame",
+        "compression",
+        "exposure",
+        "obstruction",
+        "other",
+    }
+)
 
 
 class GeminiNotConfiguredError(RuntimeError):
@@ -71,16 +103,104 @@ def _extract_json(text: str) -> Any:
 
 @dataclass(frozen=True)
 class MediaFrameAnalysis:
-    """Strukturierte Asset-Frame-Analyse (asset_v2_structured)."""
+    """Strukturierte Asset-Frame-Analyse (asset_v3_editorial)."""
 
-    description: str
+    description: str = ""
+    caption: str = ""
+    content_tags: tuple[str, ...] = ()
     motion: str = "unknown"
     framing: str = "medium"
     people: bool = False
     people_action: Optional[str] = None
     defects: Optional[str] = None
-    parse_ok: bool = True
+    motion_profile: Optional[Any] = None
+    framing_profile: Optional[Any] = None
+    look_profile: Optional[Any] = None
+    quality_profile: Optional[Any] = None
+    defect_items: tuple[Any, ...] = ()
+    confidence: Optional[float] = None
+    parse_ok: bool = False
     raw_response: str = ""
+
+    @classmethod
+    def successful(
+        cls,
+        description: str,
+        *,
+        caption: str | None = None,
+        content_tags: list[str] | tuple[str, ...] | None = None,
+        motion: str = "static",
+        framing: str = "wide",
+        people: bool = False,
+        people_action: Optional[str] = None,
+        defects: Optional[str] = None,
+        confidence: float = 0.85,
+        raw_response: str = "",
+    ) -> "MediaFrameAnalysis":
+        """Test-/Mock-Hilfsfactory für eine gültige v3-Analyse (parse_ok=True).
+
+        Nicht für Produktions-API-Antworten verwenden — dort ausschließlich
+        ``parse_media_frame_analysis`` / ``analyze_media_from_frames``.
+        """
+        from otio_app.analysis_models import (
+            AssetDefect,
+            AssetFramingProfile,
+            AssetLookProfile,
+            AssetMotionProfile,
+            AssetQualityProfile,
+        )
+
+        caption_text = (caption if caption is not None else description)[:_CAPTION_MAX_CHARS]
+        tags = tuple(
+            dict.fromkeys(
+                tag.strip()
+                for tag in (content_tags or ("landscape", "daylight", "exterior"))
+                if str(tag).strip()
+            )
+        )
+        motion_profile = AssetMotionProfile(
+            type=motion,
+            intensity=None,
+            direction="unknown",
+            confidence=None,
+        )
+        framing_profile = AssetFramingProfile(type=framing, shot_scale=framing if framing in _ALLOWED_SHOT_SCALE else "unknown")
+        look_profile = AssetLookProfile(
+            brightness=None,
+            contrast=None,
+            saturation=None,
+            color_temperature="unknown",
+            dominant_colors=[],
+        )
+        quality_profile = AssetQualityProfile(
+            technical_quality=80,
+            composition_quality=80,
+            visual_appeal=80,
+            subject_clarity=80,
+            hero_potential=70,
+            defect_severity=0,
+        )
+        defect_items: tuple[Any, ...] = ()
+        if defects:
+            defect_items = (AssetDefect(type="other", severity=50, note=str(defects)),)
+        return cls(
+            description=description.strip(),
+            caption=caption_text.strip(),
+            content_tags=tags,
+            motion=motion_profile.type,
+            framing=framing_profile.type,
+            people=people,
+            people_action=people_action,
+            defects=defects,
+            motion_profile=motion_profile,
+            framing_profile=framing_profile,
+            look_profile=look_profile,
+            quality_profile=quality_profile,
+            defect_items=defect_items,
+            confidence=confidence,
+            parse_ok=True,
+            raw_response=raw_response,
+        )
 
 
 def build_asset_frame_analysis_prompt(
@@ -92,97 +212,315 @@ def build_asset_frame_analysis_prompt(
         "Antworte NUR mit einem JSON-Objekt in exakt dieser Struktur:\n\n"
         "{\n"
         '  "description": "...",\n'
-        '  "motion": "...",\n'
-        '  "framing": "...",\n'
+        '  "caption": "...",\n'
+        '  "content_tags": ["..."],\n'
+        '  "motion": {\n'
+        '    "type": "unknown",\n'
+        '    "intensity": null,\n'
+        '    "direction": "unknown",\n'
+        '    "confidence": null\n'
+        "  },\n"
+        '  "framing": {\n'
+        '    "type": "wide",\n'
+        '    "shot_scale": "wide"\n'
+        "  },\n"
+        '  "look": {\n'
+        '    "brightness": 50,\n'
+        '    "contrast": 50,\n'
+        '    "saturation": 50,\n'
+        '    "color_temperature": "neutral",\n'
+        '    "dominant_colors": ["stone", "blue"]\n'
+        "  },\n"
         '  "people": false,\n'
         '  "people_action": null,\n'
-        '  "defects": null\n'
+        '  "quality": {\n'
+        '    "technical_quality": 80,\n'
+        '    "composition_quality": 80,\n'
+        '    "visual_appeal": 80,\n'
+        '    "subject_clarity": 80,\n'
+        '    "hero_potential": 70,\n'
+        '    "defect_severity": 0\n'
+        "  },\n"
+        '  "defects": [],\n'
+        '  "confidence": 0.85\n'
         "}\n\n"
         "Feldregeln:\n"
-        "- description: 2 bis 4 Sätze, sachlich. Inhalt: Ort/Motiv, was passiert, "
-        "Licht und Farben, Stimmung. KEINE Angaben zu Kamera, Perspektive oder "
-        "Bewegung — dafür sind die Felder motion und framing da.\n"
-        '- motion: genau einer dieser Werte: "static", "pan", "tilt", "tracking", '
-        '"drone", "handheld", "zoom", "unknown". Aus den Unterschieden zwischen '
-        'den Frames ableiten; wenn nicht eindeutig erkennbar: "unknown".\n'
-        '- framing: genau einer dieser Werte: "close", "medium", "wide", "aerial", "pov".\n'
-        "- people: true, wenn Personen erkennbar sind.\n"
-        "- people_action: falls people true — in maximal einem Halbsatz, was die "
-        "Person(en) tun. Sonst null.\n"
-        "- defects: Wasserzeichen, Logos, starke Unschärfe oder Verwacklung, "
-        "Schwarzbilder — kurz benennen. Sonst null.\n"
-        "- Ortsnamen nur nennen, wenn eindeutig erkennbar oder durch den "
-        "Ordnernamen naheliegend. Nichts erfinden."
+        "- caption: faktisch, maximal 180 Zeichen, keine Werbesprache.\n"
+        "- description: 2 bis 4 sachliche Sätze zu Motiv, Licht, Farben, Stimmung.\n"
+        "- content_tags: 3 bis 10 kurze, sprachlich stabile Begriffe.\n"
+        "- Keine erfundenen Ortsangaben; Ortsnamen nur wenn eindeutig erkennbar "
+        "oder durch den Ordnernamen naheliegend.\n"
+        "- quality: Scores 0–100. Technische Qualität und Schönheit getrennt bewerten; "
+        "Schönheit über composition_quality und visual_appeal. "
+        "hero_potential = Eignung als visuell prägender Shot. "
+        "Semantische Passung zu einem späteren Voice-over nicht bewerten.\n"
+        "- motion.type: static|pan|tilt|tracking|drone|handheld|zoom|unknown. "
+        "Aus wenigen Standframes keine sichere Kamerabewegung behaupten; "
+        "im Zweifel unknown und confidence/intensity null.\n"
+        "- motion.direction: left_to_right|right_to_left|forward|backward|up|down|"
+        "none|unknown.\n"
+        "- framing.type: close|medium|wide|aerial|pov.\n"
+        "- framing.shot_scale: detail|close|medium|wide|extreme_wide|unknown.\n"
+        "- look.color_temperature: warm|neutral|cool|mixed|unknown. "
+        "Look-Werte dürfen null sein, wenn unsicher.\n"
+        "- people: true, wenn Personen erkennbar sind; people_action dann kurz, sonst null.\n"
+        "- defects: Liste von Objekten "
+        '{ "type": "watermark|logo|blur|shake|black_frame|compression|exposure|'
+        'obstruction|other", "severity": 0-100, "note": "..." }. '
+        "Leere Liste wenn keine Defekte.\n"
+        "- confidence: 0.0–1.0 für die Verlässlichkeit der gesamten Frame-Analyse.\n"
+        "- Unbekannte Werte als null beziehungsweise unknown."
     )
+
+
+def _parse_fail(raw: str) -> MediaFrameAnalysis:
+    return MediaFrameAnalysis(parse_ok=False, raw_response=raw)
+
+
+def _as_optional_score_0_100(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("score bool")
+    if isinstance(value, (int, float)):
+        number = int(value)
+    elif isinstance(value, str) and value.strip():
+        number = int(float(value.strip()))
+    else:
+        raise ValueError("score type")
+    if number < 0 or number > 100:
+        raise ValueError("score range")
+    return number
+
+
+def _as_required_score_0_100(value: Any) -> int:
+    number = _as_optional_score_0_100(value)
+    if number is None:
+        raise ValueError("score missing")
+    return number
+
+
+def _as_optional_confidence(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("confidence bool")
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str) and value.strip():
+        number = float(value.strip())
+    else:
+        raise ValueError("confidence type")
+    if number < 0.0 or number > 1.0:
+        raise ValueError("confidence range")
+    return number
+
+
+def _normalize_caption(value: Any) -> str:
+    text = str(value or "").strip()
+    if len(text) <= _CAPTION_MAX_CHARS:
+        return text
+    return text[:_CAPTION_MAX_CHARS].rstrip()
+
+
+def _normalize_tags(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError("tags type")
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        tag = str(item or "").strip()
+        if not tag:
+            continue
+        key = tag.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(tag)
+    return tuple(cleaned)
+
+
+def _legacy_defects_summary(items: list[Any]) -> Optional[str]:
+    if not items:
+        return None
+    parts: list[str] = []
+    for item in items:
+        label = item.type
+        if item.note:
+            parts.append(f"{label}: {item.note}")
+        else:
+            parts.append(f"{label} ({item.severity})")
+    return "; ".join(parts)
 
 
 def parse_media_frame_analysis(text: str) -> MediaFrameAnalysis:
-    """Parst Gemini-Antwort; Fallback: gesamter Text als description."""
+    """Parst Gemini-v3-Antwort strikt; bei Fehler parse_ok=False + raw_response."""
+    from otio_app.analysis_models import (
+        AssetDefect,
+        AssetFramingProfile,
+        AssetLookProfile,
+        AssetMotionProfile,
+        AssetQualityProfile,
+    )
+
     raw = (text or "").strip()
     if not raw:
-        return MediaFrameAnalysis(description="", parse_ok=False, raw_response="")
+        return _parse_fail("")
 
     try:
-        payload = _extract_json(raw)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        # Manchmal kommt JSON mit Leading/Trailing-Text — Objekt extrahieren.
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not match:
-            return MediaFrameAnalysis(
-                description=raw, parse_ok=False, raw_response=raw
-            )
         try:
-            payload = json.loads(match.group(0))
+            payload = _extract_json(raw)
         except (json.JSONDecodeError, TypeError, ValueError):
-            return MediaFrameAnalysis(
-                description=raw, parse_ok=False, raw_response=raw
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if not match:
+                return _parse_fail(raw)
+            payload = json.loads(match.group(0))
+
+        if not isinstance(payload, dict):
+            return _parse_fail(raw)
+
+        description = str(payload.get("description") or "").strip()
+        caption = _normalize_caption(payload.get("caption"))
+        if not description or not caption:
+            return _parse_fail(raw)
+
+        motion_raw = payload.get("motion")
+        framing_raw = payload.get("framing")
+        quality_raw = payload.get("quality")
+        if not isinstance(motion_raw, dict):
+            return _parse_fail(raw)
+        if not isinstance(framing_raw, dict):
+            return _parse_fail(raw)
+        if not isinstance(quality_raw, dict):
+            return _parse_fail(raw)
+
+        if "confidence" not in payload:
+            return _parse_fail(raw)
+        confidence = _as_optional_confidence(payload.get("confidence"))
+        if confidence is None:
+            return _parse_fail(raw)
+
+        motion_type = str(motion_raw.get("type") or "").strip().lower()
+        if motion_type not in _ALLOWED_MOTION:
+            return _parse_fail(raw)
+        motion_direction = str(motion_raw.get("direction") or "unknown").strip().lower()
+        if motion_direction not in _ALLOWED_MOTION_DIRECTION:
+            return _parse_fail(raw)
+        motion_intensity = _as_optional_score_0_100(motion_raw.get("intensity"))
+        motion_confidence = _as_optional_confidence(motion_raw.get("confidence"))
+
+        framing_type = str(framing_raw.get("type") or "").strip().lower()
+        if framing_type not in _ALLOWED_FRAMING:
+            return _parse_fail(raw)
+        shot_scale = str(framing_raw.get("shot_scale") or "unknown").strip().lower()
+        if shot_scale not in _ALLOWED_SHOT_SCALE:
+            return _parse_fail(raw)
+
+        look_raw = payload.get("look")
+        if look_raw is None:
+            look_profile = AssetLookProfile()
+        elif not isinstance(look_raw, dict):
+            return _parse_fail(raw)
+        else:
+            color_temperature = str(
+                look_raw.get("color_temperature") or "unknown"
+            ).strip().lower()
+            if color_temperature not in _ALLOWED_COLOR_TEMPERATURE:
+                return _parse_fail(raw)
+            dominant = look_raw.get("dominant_colors")
+            if dominant is None:
+                colors: list[str] = []
+            elif not isinstance(dominant, list):
+                return _parse_fail(raw)
+            else:
+                colors = [str(item).strip() for item in dominant if str(item).strip()]
+            look_profile = AssetLookProfile(
+                brightness=_as_optional_score_0_100(look_raw.get("brightness")),
+                contrast=_as_optional_score_0_100(look_raw.get("contrast")),
+                saturation=_as_optional_score_0_100(look_raw.get("saturation")),
+                color_temperature=color_temperature,
+                dominant_colors=colors,
             )
 
-    if not isinstance(payload, dict):
-        return MediaFrameAnalysis(description=raw, parse_ok=False, raw_response=raw)
-
-    description = str(payload.get("description") or "").strip()
-    if not description:
-        return MediaFrameAnalysis(description=raw, parse_ok=False, raw_response=raw)
-
-    motion = str(payload.get("motion") or "unknown").strip().lower()
-    if motion not in _ALLOWED_MOTION:
-        motion = "unknown"
-    framing = str(payload.get("framing") or "medium").strip().lower()
-    if framing not in _ALLOWED_FRAMING:
-        framing = "medium"
-
-    people_raw = payload.get("people")
-    if isinstance(people_raw, bool):
-        people = people_raw
-    elif isinstance(people_raw, str):
-        people = people_raw.strip().lower() in {"true", "1", "yes", "ja"}
-    else:
-        people = bool(people_raw)
-
-    people_action_raw = payload.get("people_action")
-    if people:
-        people_action = (
-            str(people_action_raw).strip() if people_action_raw not in (None, "") else None
+        quality_profile = AssetQualityProfile(
+            technical_quality=_as_required_score_0_100(quality_raw.get("technical_quality")),
+            composition_quality=_as_required_score_0_100(
+                quality_raw.get("composition_quality")
+            ),
+            visual_appeal=_as_required_score_0_100(quality_raw.get("visual_appeal")),
+            subject_clarity=_as_required_score_0_100(quality_raw.get("subject_clarity")),
+            hero_potential=_as_required_score_0_100(quality_raw.get("hero_potential")),
+            defect_severity=_as_required_score_0_100(quality_raw.get("defect_severity")),
         )
-    else:
-        people_action = None
 
-    defects_raw = payload.get("defects")
-    defects = (
-        str(defects_raw).strip() if defects_raw not in (None, "") else None
-    ) or None
+        people_raw = payload.get("people", False)
+        if isinstance(people_raw, bool):
+            people = people_raw
+        elif isinstance(people_raw, str):
+            people = people_raw.strip().lower() in {"true", "1", "yes", "ja"}
+        else:
+            people = bool(people_raw)
 
-    return MediaFrameAnalysis(
-        description=description,
-        motion=motion,
-        framing=framing,
-        people=people,
-        people_action=people_action,
-        defects=defects,
-        parse_ok=True,
-        raw_response=raw,
-    )
+        people_action_raw = payload.get("people_action")
+        if people:
+            people_action = (
+                str(people_action_raw).strip()
+                if people_action_raw not in (None, "")
+                else None
+            )
+        else:
+            people_action = None
+
+        defects_raw = payload.get("defects", [])
+        if defects_raw is None:
+            defects_raw = []
+        if not isinstance(defects_raw, list):
+            return _parse_fail(raw)
+        defect_items: list[AssetDefect] = []
+        for item in defects_raw:
+            if not isinstance(item, dict):
+                return _parse_fail(raw)
+            defect_type = str(item.get("type") or "").strip().lower()
+            if defect_type not in _ALLOWED_DEFECT_TYPE:
+                return _parse_fail(raw)
+            severity = _as_required_score_0_100(item.get("severity"))
+            note = str(item.get("note") or "").strip()
+            defect_items.append(
+                AssetDefect(type=defect_type, severity=severity, note=note)
+            )
+
+        content_tags = _normalize_tags(payload.get("content_tags"))
+        motion_profile = AssetMotionProfile(
+            type=motion_type,
+            intensity=motion_intensity,
+            direction=motion_direction,
+            confidence=motion_confidence,
+        )
+        framing_profile = AssetFramingProfile(type=framing_type, shot_scale=shot_scale)
+        legacy_defects = _legacy_defects_summary(defect_items)
+
+        return MediaFrameAnalysis(
+            description=description,
+            caption=caption,
+            content_tags=content_tags,
+            motion=motion_profile.type,
+            framing=framing_profile.type,
+            people=people,
+            people_action=people_action,
+            defects=legacy_defects,
+            motion_profile=motion_profile,
+            framing_profile=framing_profile,
+            look_profile=look_profile,
+            quality_profile=quality_profile,
+            defect_items=tuple(defect_items),
+            confidence=confidence,
+            parse_ok=True,
+            raw_response=raw,
+        )
+    except Exception:  # noqa: BLE001 — Parser darf die App nie abstürzen lassen
+        return _parse_fail(raw)
 
 
 def analyze_media_from_frames(
@@ -193,16 +531,22 @@ def analyze_media_from_frames(
     *,
     model: Optional[str] = None,
 ) -> MediaFrameAnalysis:
-    """Frame-Analyse → strukturierte Felder inkl. Freitext-description."""
+    """Frame-Analyse → strukturierte v3-Felder inkl. Freitext-description.
+
+    ``model`` sollte die bereits aufgelöste Modell-ID sein; ``resolve_gemini_model``
+    ist für gültige IDs idempotent.
+    """
     if not frame_paths:
         return MediaFrameAnalysis(
-            description="Keine Frames verfügbar.",
+            description="",
             parse_ok=False,
+            raw_response="",
         )
 
     client = _get_client()
     from google.genai import types
 
+    resolved_model = resolve_gemini_model(model)
     parts: list[types.Part] = [
         types.Part.from_text(
             text=build_asset_frame_analysis_prompt(media_name, folder_name, language)
@@ -217,7 +561,7 @@ def analyze_media_from_frames(
         )
 
     response = client.models.generate_content(
-        model=resolve_gemini_model(model),
+        model=resolved_model,
         contents=[types.Content(role="user", parts=parts)],
     )
     return parse_media_frame_analysis((response.text or "").strip())

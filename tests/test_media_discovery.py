@@ -96,7 +96,7 @@ def test_placeholder_cache_is_retried_on_reanalysis(
         *,
         model: str | None = None,
     ) -> MediaFrameAnalysis:
-        return MediaFrameAnalysis(description=f"Neu analysiert: {media_name}")
+        return MediaFrameAnalysis.successful(description=f"Neu analysiert: {media_name}")
     monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", fake_extract)
     monkeypatch.setattr(
         "otio_app.services.asset_analyzer.analyze_media_from_frames",

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from otio_app.services.gemini_client import MediaFrameAnalysis
-
 from pathlib import Path
 
 import pytest
@@ -11,10 +9,20 @@ import pytest
 from otio_app.analysis_models import AssetMediaAnalysis
 from otio_app.models import Project
 from otio_app.project_layout import safe_folder_slug
+from otio_app.services.asset_analysis_signature import (
+    ANALYSIS_SCHEMA_VERSION,
+    build_analysis_signature,
+)
 from otio_app.services.asset_analyzer import analyze_asset_folders
+from otio_app.services.gemini_client import (
+    ASSET_DESCRIPTION_PROMPT_VERSION,
+    MediaFrameAnalysis,
+    resolve_gemini_model,
+)
 from otio_app.services.media_inventory_cache import (
     discover_folder_media_paths,
     has_successful_asset_cache,
+    is_successfully_analyzed,
     list_assets_missing_successful_cache,
     media_cache_path,
     save_cached_media,
@@ -32,6 +40,29 @@ def _project(layout: dict[str, Path]) -> Project:
     )
 
 
+def _current_cache_entry(media_path: Path, description: str = "OK") -> AssetMediaAnalysis:
+    resolved = resolve_gemini_model(None)
+    signature = build_analysis_signature(media_path, resolved_model_id=resolved)
+    return AssetMediaAnalysis(
+        path=str(media_path),
+        description=description,
+        caption=description[:180],
+        analysis_parse_ok=True,
+        analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
+        description_prompt_version=ASSET_DESCRIPTION_PROMPT_VERSION,
+        description_model=resolved,
+        description_model_resolved=resolved,
+        analysis_signature=signature,
+    )
+
+
+def _fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    frame = output_dir / "frame_001.jpg"
+    frame.write_bytes(b"jpeg")
+    return [frame]
+
+
 def test_list_assets_missing_successful_cache(temp_project_layout: dict[str, Path]) -> None:
     project = _project(temp_project_layout)
     folder = temp_project_layout["project_root"] / "Grand Canyon"
@@ -41,7 +72,7 @@ def test_list_assets_missing_successful_cache(temp_project_layout: dict[str, Pat
 
     save_cached_media(
         media_cache_path(project, "Grand Canyon", clip1),
-        AssetMediaAnalysis(path=str(clip1), description="OK"),
+        _current_cache_entry(clip1, "OK"),
     )
 
     missing = list_assets_missing_successful_cache(project, "Grand Canyon")
@@ -51,7 +82,22 @@ def test_list_assets_missing_successful_cache(temp_project_layout: dict[str, Pat
     assert not has_successful_asset_cache(project, "Grand Canyon", clip2)
 
 
-def test_partial_folder_analyzes_only_assets_without_json(
+def test_legacy_usable_but_listed_missing_for_explicit_run(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = _project(temp_project_layout)
+    folder = temp_project_layout["project_root"] / "Grand Canyon"
+    clip1 = folder / "clip.mp4"
+    legacy = AssetMediaAnalysis(path=str(clip1), description="Legacy OK")
+    save_cached_media(media_cache_path(project, "Grand Canyon", clip1), legacy)
+
+    assert is_successfully_analyzed(legacy)
+    assert not has_successful_asset_cache(project, "Grand Canyon", clip1)
+    missing = list_assets_missing_successful_cache(project, "Grand Canyon")
+    assert [path.name for path in missing] == ["clip.mp4"]
+
+
+def test_partial_folder_analyzes_only_assets_without_current_json(
     temp_project_layout: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -62,16 +108,10 @@ def test_partial_folder_analyzes_only_assets_without_json(
     clip2.write_bytes(b"video15")
     save_cached_media(
         media_cache_path(project, "Grand Canyon", clip1),
-        AssetMediaAnalysis(path=str(clip1), description="Bereits fertig"),
+        _current_cache_entry(clip1, "Bereits fertig"),
     )
 
     calls: list[str] = []
-
-    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        frame = output_dir / "frame_001.jpg"
-        frame.write_bytes(b"jpeg")
-        return [frame]
 
     def fake_describe(
         media_name: str,
@@ -82,8 +122,9 @@ def test_partial_folder_analyzes_only_assets_without_json(
         model: str | None = None,
     ) -> MediaFrameAnalysis:
         calls.append(media_name)
-        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
-    monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", fake_extract)
+        return MediaFrameAnalysis.successful(description=f"Beschreibung für {media_name}")
+
+    monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", _fake_extract)
     monkeypatch.setattr(
         "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,
@@ -117,11 +158,11 @@ def test_discover_missing_asset_from_cache_number_gap(
 
     save_cached_media(
         media_cache_path(project, folder_name, asset14),
-        AssetMediaAnalysis(path=str(asset14), description="OK 14"),
+        _current_cache_entry(asset14, "OK 14"),
     )
     save_cached_media(
         media_cache_path(project, folder_name, asset16),
-        AssetMediaAnalysis(path=str(asset16), description="OK 16"),
+        _current_cache_entry(asset16, "OK 16"),
     )
 
     missing = list_assets_missing_successful_cache(project, folder_name)
@@ -144,7 +185,7 @@ def test_partial_folder_not_skipped_when_frame_dir_exists_without_json(
     asset15.write_bytes(b"video15")
     save_cached_media(
         media_cache_path(project, "Grand Canyon", clip1),
-        AssetMediaAnalysis(path=str(clip1), description="OK"),
+        _current_cache_entry(clip1, "OK"),
     )
     frames_dir = (
         project.work_dir_path
@@ -157,12 +198,6 @@ def test_partial_folder_not_skipped_when_frame_dir_exists_without_json(
 
     calls: list[str] = []
 
-    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        frame = output_dir / "frame_001.jpg"
-        frame.write_bytes(b"jpeg")
-        return [frame]
-
     def fake_describe(
         media_name: str,
         folder_name: str,
@@ -172,8 +207,9 @@ def test_partial_folder_not_skipped_when_frame_dir_exists_without_json(
         model: str | None = None,
     ) -> MediaFrameAnalysis:
         calls.append(media_name)
-        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
-    monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", fake_extract)
+        return MediaFrameAnalysis.successful(description=f"Beschreibung für {media_name}")
+
+    monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", _fake_extract)
     monkeypatch.setattr(
         "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,

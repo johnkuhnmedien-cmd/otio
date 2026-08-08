@@ -17,11 +17,17 @@ from otio_app.project_layout import safe_folder_slug
 from otio_app.services.analysis_cancel import AnalysisCancelledError
 from otio_app.services.analysis_log import append_analysis_log
 from otio_app.services.analysis_progress import AnalysisRunReport, ProgressCallback, noop_progress
+from otio_app.services.asset_analysis_signature import (
+    ANALYSIS_SCHEMA_VERSION,
+    ANALYSIS_SCOPE_FRAMES,
+    try_build_analysis_signature,
+)
 from otio_app.services.frame_extract import extract_frames, list_existing_frame_jpegs
 from otio_app.services.gemini_client import (
     ASSET_DESCRIPTION_PROMPT_VERSION,
     GeminiNotConfiguredError,
     analyze_media_from_frames,
+    resolve_gemini_model,
 )
 from otio_app.services.inventory_loader import (
     should_skip_folder_analysis,
@@ -45,6 +51,15 @@ from otio_app.services.media_utils import (
 
 
 ShouldCancel = Callable[[], bool]
+_ANALYSIS_RAW_RESPONSE_MAX_CHARS = 4_000
+
+
+def _bounded_analysis_raw_response(raw: str) -> str:
+    """Begrenzt diagnostische Rohantworten; vollständige Traces gehören nicht ins Cache-JSON."""
+    text = (raw or "").strip()
+    if len(text) <= _ANALYSIS_RAW_RESPONSE_MAX_CHARS:
+        return text
+    return text[:_ANALYSIS_RAW_RESPONSE_MAX_CHARS].rstrip() + "\n…[truncated]"
 
 
 def _frames_dir(project: Project, folder_name: str, media_path: Path) -> Path:
@@ -64,10 +79,17 @@ def _folder_summary(assets: list[AssetMediaAnalysis]) -> str:
     return "\n\n".join(parts)
 
 
-def _count_media_to_analyze(project: Project, folder_names: list[str]) -> int:
+def _count_media_to_analyze(
+    project: Project,
+    folder_names: list[str],
+    *,
+    model: Optional[str] = None,
+) -> int:
     total = 0
     for folder_name in folder_names:
-        missing = list_assets_missing_successful_cache(project, folder_name)
+        missing = list_assets_missing_successful_cache(
+            project, folder_name, model=model
+        )
         total += len(missing)
     return total
 
@@ -99,7 +121,12 @@ def _analyze_single_media(
         f"cache={cache_file.name} resolved={resolved_path}",
     )
 
-    if has_successful_asset_cache(project, folder_name, resolved_path):
+    requested_model = (model or "").strip()
+    resolved_model = resolve_gemini_model(model)
+
+    if has_successful_asset_cache(
+        project, folder_name, resolved_path, model=resolved_model
+    ):
         cached = load_cached_media_for_asset(project, folder_name, resolved_path)
         assert cached is not None
         _log(project, f"SKIP (Cache ok) {folder_name}/{resolved_path.name}")
@@ -166,17 +193,67 @@ def _analyze_single_media(
                 folder_name,
                 frames,
                 project.language,
-                model=model,
+                model=resolved_model,
             )
+            entry.description_model_requested = requested_model
+            entry.description_model_resolved = resolved_model
+            entry.description_model = resolved_model
+            entry.description_prompt_version = ASSET_DESCRIPTION_PROMPT_VERSION
+            entry.analysis_schema_version = ANALYSIS_SCHEMA_VERSION
+            entry.analysis_scope = ANALYSIS_SCOPE_FRAMES
+            entry.description_generated_at = datetime.now(timezone.utc)
+
+            if not analysis.parse_ok:
+                entry.analysis_parse_ok = False
+                entry.description = ""
+                entry.caption = ""
+                entry.analysis_raw_response = _bounded_analysis_raw_response(
+                    analysis.raw_response
+                )
+                entry.error = "Asset-Analyse: Gemini-Antwort konnte nicht als v3-JSON geparst werden."
+                entry = _save_cached_media_safe(cache_file, entry)
+                _log(
+                    project,
+                    f"FAIL (Parse) {folder_name}/{resolved_path.name}: parse_ok=False",
+                )
+                return entry, "fehler"
+
+            signature = try_build_analysis_signature(
+                resolved_path,
+                resolved_model_id=resolved_model,
+            )
+            if signature is None:
+                entry.analysis_parse_ok = False
+                entry.description = ""
+                entry.analysis_raw_response = _bounded_analysis_raw_response(
+                    analysis.raw_response
+                )
+                entry.error = "Asset-Analyse: Dateisignatur konnte nicht gelesen werden."
+                entry = _save_cached_media_safe(cache_file, entry)
+                _log(
+                    project,
+                    f"FAIL (Signatur) {folder_name}/{resolved_path.name}",
+                )
+                return entry, "fehler"
+
             entry.description = analysis.description
+            entry.caption = analysis.caption
+            entry.content_tags = list(analysis.content_tags)
             entry.motion = analysis.motion
             entry.framing = analysis.framing
             entry.people = analysis.people
             entry.people_action = analysis.people_action
             entry.defects = analysis.defects
-            entry.description_model = model or ""
-            entry.description_prompt_version = ASSET_DESCRIPTION_PROMPT_VERSION
-            entry.description_generated_at = datetime.now(timezone.utc)
+            entry.motion_profile = analysis.motion_profile
+            entry.framing_profile = analysis.framing_profile
+            entry.look_profile = analysis.look_profile
+            entry.quality_profile = analysis.quality_profile
+            entry.defect_items = list(analysis.defect_items)
+            entry.analysis_confidence = analysis.confidence
+            entry.analysis_parse_ok = True
+            entry.analysis_signature = signature
+            # Erfolgreiche Parses speichern keine Rohantwort (kein JSON-Duplikat im Cache).
+            entry.analysis_raw_response = ""
             entry.error = None
             entry = _save_cached_media_safe(cache_file, entry)
             if entry.error and "Cache konnte nicht geschrieben werden" in entry.error:
@@ -193,6 +270,7 @@ def _analyze_single_media(
         except Exception as exc:  # noqa: BLE001
             entry.error = str(exc)
             entry.description = ""
+            entry.analysis_parse_ok = False
             entry = _save_cached_media_safe(cache_file, entry)
             _log(project, f"FAIL (Gemini) {folder_name}/{resolved_path.name}: {exc}")
             return entry, "fehler"
@@ -235,7 +313,9 @@ def _analyze_folder(
     report: AnalysisRunReport | None = None,
 ) -> AssetFolderAnalysis:
     media_paths = discover_folder_media_paths(project, folder_name)
-    missing_cache = list_assets_missing_successful_cache(project, folder_name)
+    missing_cache = list_assets_missing_successful_cache(
+        project, folder_name, model=model
+    )
 
     _log(
         project,
@@ -412,7 +492,7 @@ def analyze_asset_folders(
     """Analysiert fehlende Assets in Ordnern; Inventar-JSON nur bei vollständigem Ordner."""
     selected = validate_asset_selection(project.asset_subdir_names, folder_names)
     report = AnalysisRunReport()
-    total_media = _count_media_to_analyze(project, selected)
+    total_media = _count_media_to_analyze(project, selected, model=model)
     if total_media == 0:
         total_media = sum(
             len(discover_folder_media_paths(project, folder_name))

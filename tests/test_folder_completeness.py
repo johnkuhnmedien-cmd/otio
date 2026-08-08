@@ -83,7 +83,7 @@ def test_inventory_written_only_when_all_assets_done(
         *,
         model: str | None = None,
     ) -> MediaFrameAnalysis:
-        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
+        return MediaFrameAnalysis.successful(description=f"Beschreibung für {media_name}")
     monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", fake_extract)
     monkeypatch.setattr(
         "otio_app.services.asset_analyzer.analyze_media_from_frames",
