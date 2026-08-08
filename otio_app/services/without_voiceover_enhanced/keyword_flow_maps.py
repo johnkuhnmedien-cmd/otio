@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from otio_app.models import Project
-from otio_app.project_layout import get_folder_inventory_path, safe_folder_slug
+from otio_app.project_layout import language_folder_name, safe_folder_slug
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     KEYWORD_FLOW_MAP_OPENER_SEC,
 )
@@ -19,6 +20,10 @@ from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
     is_intro_folder_name,
 )
 
+# ``EN_Skellig Michael_Map.mp4`` / ``FR_37_Dublin_Map.mp4``
+_LANG_PREFIX_RE = re.compile(r"^([A-Za-z]{2})_(?:(\d+)_)?(.*)$")
+_MAP_SUFFIX_RE = re.compile(r"_?map$", re.IGNORECASE)
+
 
 @dataclass
 class MapOpenerDecision:
@@ -29,6 +34,42 @@ class MapOpenerDecision:
     media_path: str | None = None
     source_duration_seconds: float = 0.0
     opener_seconds: float = KEYWORD_FLOW_MAP_OPENER_SEC
+
+
+def _project_lang_code(project: Project) -> str:
+    """``EN`` / ``FR`` / … aus ``project.language``."""
+    return language_folder_name(str(getattr(project, "language", "") or "en")).upper()
+
+
+def _parse_map_stem(stem: str) -> tuple[str | None, str]:
+    """``(lang_or_None, chapter_slug_part)`` aus Datei-Stem.
+
+    Beispiele:
+    - ``FR_Skellig Michael_Map`` → (``FR``, ``Skellig_Michael``)
+    - ``EN_37_Dublin_Map`` → (``EN``, ``Dublin``)
+    - ``ChapterA`` → (``None``, ``ChapterA``)
+    """
+    text = str(stem or "").strip()
+    if not text:
+        return None, ""
+    # Optionalen ``_Map``-Suffix entfernen, bevor Prefix geparst wird.
+    base = _MAP_SUFFIX_RE.sub("", text).rstrip("_").strip()
+    if not base:
+        base = text
+    match = _LANG_PREFIX_RE.match(base)
+    if match:
+        lang = match.group(1).upper()
+        rest = (match.group(3) or "").strip()
+        return lang, safe_folder_slug(rest)
+    return None, safe_folder_slug(base)
+
+
+def _chapter_slug_matches(map_chapter_slug: str, chapter_slug: str) -> bool:
+    left = (map_chapter_slug or "").strip().lower()
+    right = (chapter_slug or "").strip().lower()
+    if not left or not right:
+        return False
+    return left == right or left.startswith(right + "_") or right.startswith(left + "_")
 
 
 def _maps_folder_candidates(project: Project) -> list[str]:
@@ -51,15 +92,55 @@ def _maps_folder_candidates(project: Project) -> list[str]:
     return out
 
 
+def _iter_map_files(maps_dir: Path, *, lang: str) -> list[Path]:
+    """Dateien aus ``Maps/`` und optional ``Maps/{LANG}/``."""
+    if not maps_dir.is_dir():
+        return []
+    files: list[Path] = []
+    try:
+        children = sorted(maps_dir.iterdir(), key=lambda p: p.name.casefold())
+    except OSError:
+        return []
+    lang_dir = maps_dir / lang
+    lang_dir_alt = maps_dir / lang.lower()
+    for child in children:
+        try:
+            if child.is_file():
+                files.append(child)
+            elif child.is_dir() and child.name.upper() == lang:
+                for nested in sorted(child.iterdir(), key=lambda p: p.name.casefold()):
+                    if nested.is_file():
+                        files.append(nested)
+        except OSError:
+            continue
+    # Falls ``Maps/fr`` statt ``Maps/FR``
+    if lang_dir_alt.is_dir() and lang_dir_alt.resolve() != lang_dir.resolve():
+        try:
+            for nested in sorted(lang_dir_alt.iterdir(), key=lambda p: p.name.casefold()):
+                if nested.is_file() and nested not in files:
+                    files.append(nested)
+        except OSError:
+            pass
+    return files
+
+
 def _list_map_media_for_chapter(
     project: Project,
     chapter_id: str,
 ) -> list[dict[str, Any]]:
-    """Findet Map-Medien per kanonischem Kapitel-Slug im Maps-Inventar/Ordner."""
+    """Findet Map-Medien für das Kapitel, gefiltert auf Projekt-Sprache.
+
+    Bevorzugt ``FR_…_Map.mp4`` / ``EN_…_Map.mp4`` (optional ``FR_37_…``) und
+    ``Maps/{LANG}/…``. Fremdsprachige Prefix-Dateien werden ignoriert.
+    Dateien ohne Sprach-Prefix bleiben als Legacy-Fallback, wenn keine
+    sprachmarkierte Map für dieses Kapitel existiert.
+    """
     chapter_slug = safe_folder_slug(chapter_id)
-    chapter_slug_l = chapter_slug.lower()
-    matches: list[dict[str, Any]] = []
+    lang = _project_lang_code(project)
+    tagged: list[dict[str, Any]] = []
+    legacy: list[dict[str, Any]] = []
     map_folders = _maps_folder_candidates(project)
+
     for folder in map_folders:
         from otio_app.project_layout import get_folder_inventory_path as _g
 
@@ -67,55 +148,96 @@ def _list_map_media_for_chapter(
         doc = load_slim_folder_inventory_file(slim_path)
         assets = list((doc or {}).get("assets") or [])
         if not assets:
-            # Fallback: Dateinamen im Maps-Ordner
             maps_dir = project.project_root_path / folder
-            if maps_dir.is_dir():
-                for path in sorted(maps_dir.iterdir()):
-                    if not path.is_file():
-                        continue
-                    stem = safe_folder_slug(path.stem).lower()
-                    if stem == chapter_slug_l or stem.startswith(chapter_slug_l + "_"):
-                        matches.append(
-                            {
-                                "asset_id": f"map::{folder}::{path.name}",
-                                "path": str(path),
-                                "duration_seconds": 0.0,
-                            }
-                        )
+            for path in _iter_map_files(maps_dir, lang=lang):
+                file_lang, map_chapter = _parse_map_stem(path.stem)
+                # Dateien in ``Maps/FR/`` ohne Prefix → als FR behandeln
+                parent_lang = None
+                if path.parent.name.upper() == lang and path.parent != maps_dir:
+                    parent_lang = lang
+                effective_lang = file_lang or parent_lang
+                if effective_lang and effective_lang != lang:
+                    continue
+                chapter_l = chapter_slug.lower()
+                map_l = (map_chapter or "").lower()
+                stem_l = safe_folder_slug(path.stem).lower()
+                if not (
+                    _chapter_slug_matches(map_chapter, chapter_slug)
+                    or chapter_l == stem_l
+                    or (map_l and (chapter_l in map_l or map_l in chapter_l))
+                ):
+                    continue
+                item = {
+                    "asset_id": f"map::{folder}::{path.name}",
+                    "path": str(path),
+                    "duration_seconds": 0.0,
+                    "lang": effective_lang,
+                }
+                if effective_lang == lang:
+                    tagged.append(item)
+                else:
+                    legacy.append(item)
             continue
+
         for asset in assets:
             if not isinstance(asset, dict):
                 continue
             asset_id = str(asset.get("asset_id") or asset.get("id") or "").strip()
             filename = str(
-                asset.get("filename") or asset.get("file_name") or Path(
-                    str(asset.get("path") or "")
-                ).name
+                asset.get("filename")
+                or asset.get("file_name")
+                or asset.get("file")
+                or Path(str(asset.get("path") or "")).name
             ).strip()
+            if not filename and not asset_id:
+                continue
+            stem = Path(filename).stem if filename else asset_id
+            file_lang, map_chapter = _parse_map_stem(stem)
+            path_text = str(asset.get("path") or "").strip()
+            parent_lang = None
+            if path_text:
+                try:
+                    parent = Path(path_text).parent.name.upper()
+                    if parent == lang:
+                        parent_lang = lang
+                except Exception:  # noqa: BLE001
+                    parent_lang = None
+            effective_lang = file_lang or parent_lang
+            if effective_lang and effective_lang != lang:
+                continue
             tokens = " ".join(
                 [
                     asset_id,
                     filename,
                     str(asset.get("description") or ""),
                     safe_folder_slug(filename),
+                    map_chapter,
                 ]
             ).lower()
-            slug_token = chapter_slug_l
-            if slug_token in tokens.replace(" ", "_") or slug_token in tokens:
-                matches.append(
-                    {
-                        "asset_id": asset_id or filename,
-                        "path": str(asset.get("path") or ""),
-                        "duration_seconds": float(asset.get("duration_seconds") or 0.0),
-                        "width": asset.get("width"),
-                        "height": asset.get("height"),
-                        "export_ready": asset.get("export_ready", True),
-                    }
-                )
-    # Deduplizieren nach path/asset_id
+            slug_l = chapter_slug.lower()
+            matched = _chapter_slug_matches(map_chapter, chapter_slug) or (
+                slug_l in tokens.replace(" ", "_") or slug_l in tokens
+            )
+            if not matched:
+                continue
+            item = {
+                "asset_id": asset_id or filename,
+                "path": path_text,
+                "duration_seconds": float(asset.get("duration_seconds") or 0.0),
+                "width": asset.get("width"),
+                "height": asset.get("height"),
+                "export_ready": asset.get("export_ready", True),
+                "lang": effective_lang,
+            }
+            if effective_lang == lang:
+                tagged.append(item)
+            else:
+                legacy.append(item)
+
+    chosen = tagged if tagged else legacy
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
-    for item in matches:
+    for item in chosen:
         key = str(item.get("path") or item.get("asset_id") or "")
         if not key or key in seen:
             continue
