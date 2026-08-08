@@ -1332,6 +1332,63 @@ def _make_independent_envelope_shot(
     return shot
 
 
+def _make_envelope_shot_from_asset_id(
+    project: Project,
+    *,
+    asset_id: str,
+    catalog: AssetCatalog,
+    shot_id: str,
+    timeline_start: float,
+    timeline_end: float,
+    editorial_function: str,
+    chapter_id: str,
+    fps: float,
+    head_trim: float,
+    short_tolerance: float,
+    repairs: list[str],
+    errors: list[str],
+    label: str,
+) -> ResolvedShot | None:
+    """Vorlauf-/Nachlauf-Shot aus LLM-Asset-ID (Katalog), nie Content-Kopie."""
+    need = max(0.0, float(timeline_end) - float(timeline_start))
+    if need <= 1e-9:
+        return None
+    asset = str(asset_id or "").strip()
+    if not asset:
+        errors.append(f"{label}: Asset-ID fehlt.")
+        return None
+    entry, lookup_err = lookup_catalog_entry(catalog, asset)
+    if entry is None:
+        errors.append(
+            f"{label}: Asset {asset!r} nicht auflösbar ({lookup_err})."
+        )
+        return None
+    try:
+        shot = _resolve_shot_media(
+            project,
+            shot_id=shot_id,
+            asset_id=str(entry.get("canonical_id") or asset),
+            entry=entry,
+            timeline_start=float(timeline_start),
+            timeline_end=float(timeline_end),
+            fps=fps,
+            head_trim=head_trim,
+            short_tolerance=short_tolerance,
+            editorial_function=editorial_function,
+            may_overlap_pause=False,
+            repairs=repairs,
+        )
+    except TimelineResolveError as exc:
+        errors.append(str(exc))
+        return None
+    shot.folder_name = chapter_id
+    shot.chapter_id = chapter_id
+    shot.asset_fit = "strong"
+    shot.asset_fit_reason = f"LLM envelope ({editorial_function})"
+    shot.open_gap = False
+    return shot
+
+
 def _apply_chapter_envelopes(
     project: Project,
     *,
@@ -1354,6 +1411,8 @@ def _apply_chapter_envelopes(
     enable_map_opener: bool = False,
     map_decisions: dict[str, Any] | None = None,
     independent_envelope_shots: bool | None = None,
+    intro_opener_asset_id: str | None = None,
+    intro_closing_asset_id: str | None = None,
 ) -> list[ResolvedChapterEnvelope]:
     """Kapitelhüllen: Vor-/Nachlauf vor/nach dem VO-Carpet.
 
@@ -1364,6 +1423,8 @@ def _apply_chapter_envelopes(
 
     Intro (und optional ``independent_envelope_shots=True``): eigener Vorlauf-
     und Nachlauf-Shot — Content-Shots starten erst mit VO / enden mit VO.
+    Intro-Assets kommen von ``intro_opener_asset_id`` /
+    ``intro_closing_asset_id`` (LLM) — nie Kopie von First/Last-Content.
     Kapitel-Default: Vor-/Nachlauf verlängert Opening/Closing-Content-Shot.
 
     ``include_chapter``: optional nur bestimmte Kapitel (z. B. Intro-only Resolve).
@@ -1744,26 +1805,67 @@ def _apply_chapter_envelopes(
         postroll_hold_id = ""
         slug = safe_folder_slug(chapter_id)
 
+        content_asset_ids = {
+            str(s.asset_id or "").strip()
+            for s in content_shots
+            if str(s.asset_id or "").strip()
+        }
+        opener_asset = str(intro_opener_asset_id or "").strip()
+        closing_hold_asset = str(intro_closing_asset_id or "").strip()
+        is_intro_chapter = _is_intro_folder(chapter_id)
+
         # Map-Opener ersetzt den Settings-Vorlauf — kein zweiter Preroll-Shot.
         if map_shot is not None and chapter_preroll > 1e-9:
             preroll_hold_id = map_shot.shot_id
-        elif (
-            use_independent_envelopes
-            and chapter_preroll > 1e-9
-            and content_first.resolved_media_path
-        ):
-            preroll_shot = _make_independent_envelope_shot(
-                project,
-                content_first,
-                shot_id=f"{slug}_preroll",
-                timeline_start=chapter_video_start,
-                timeline_end=chapter_audio_start,
-                editorial_function="technical_chapter_preroll",
-                fps=fps,
-                repairs=repairs,
-                errors=errors,
-                label=f"Kapitel-{chapter_id}-Vorlauf-Shot",
-            )
+        elif use_independent_envelopes and chapter_preroll > 1e-9:
+            preroll_shot = None
+            if is_intro_chapter:
+                # Intro: LLM-Opener — niemals First-Content-Asset klonen.
+                if not opener_asset:
+                    errors.append(
+                        f"Kapitel {chapter_id}: intro_opener_asset_id fehlt — "
+                        "Vorlauf darf kein Content-Asset kopieren."
+                    )
+                elif opener_asset in content_asset_ids:
+                    errors.append(
+                        f"Kapitel {chapter_id}: intro_opener_asset_id="
+                        f"{opener_asset!r} kollidiert mit einem VO-Content-Asset."
+                    )
+                elif catalog is None:
+                    errors.append(
+                        f"Kapitel {chapter_id}: Asset-Katalog fehlt für "
+                        f"intro_opener_asset_id={opener_asset!r}."
+                    )
+                else:
+                    preroll_shot = _make_envelope_shot_from_asset_id(
+                        project,
+                        asset_id=opener_asset,
+                        catalog=catalog,
+                        shot_id=f"{slug}_preroll",
+                        timeline_start=chapter_video_start,
+                        timeline_end=chapter_audio_start,
+                        editorial_function="technical_chapter_preroll",
+                        chapter_id=chapter_id,
+                        fps=fps,
+                        head_trim=head_trim,
+                        short_tolerance=short_tolerance,
+                        repairs=repairs,
+                        errors=errors,
+                        label=f"Kapitel-{chapter_id}-Vorlauf-Shot",
+                    )
+            elif content_first.resolved_media_path:
+                preroll_shot = _make_independent_envelope_shot(
+                    project,
+                    content_first,
+                    shot_id=f"{slug}_preroll",
+                    timeline_start=chapter_video_start,
+                    timeline_end=chapter_audio_start,
+                    editorial_function="technical_chapter_preroll",
+                    fps=fps,
+                    repairs=repairs,
+                    errors=errors,
+                    label=f"Kapitel-{chapter_id}-Vorlauf-Shot",
+                )
             if preroll_shot is not None:
                 ordered.append(preroll_shot)
                 ch_shots.append(preroll_shot)
@@ -1792,26 +1894,67 @@ def _apply_chapter_envelopes(
         elif chapter_preroll > 1e-9:
             preroll_hold_id = content_first.shot_id
 
-        if (
-            use_independent_envelopes
-            and chapter_postroll > 1e-9
-            and content_last.resolved_media_path
-        ):
+        if use_independent_envelopes and chapter_postroll > 1e-9:
             # Content endet mit VO; eigener Nachlauf-Shot danach.
             if content_last.timeline_end_seconds > chapter_audio_end + 1e-9:
                 content_last.timeline_end_seconds = round(chapter_audio_end, 6)
-            postroll_shot = _make_independent_envelope_shot(
-                project,
-                content_last,
-                shot_id=f"{slug}_postroll",
-                timeline_start=chapter_audio_end,
-                timeline_end=chapter_video_end,
-                editorial_function="technical_chapter_postroll",
-                fps=fps,
-                repairs=repairs,
-                errors=errors,
-                label=f"Kapitel-{chapter_id}-Nachlauf-Shot",
-            )
+            postroll_shot = None
+            if is_intro_chapter:
+                if not closing_hold_asset:
+                    errors.append(
+                        f"Kapitel {chapter_id}: intro_closing_asset_id fehlt — "
+                        "Nachlauf darf kein Content-Asset kopieren."
+                    )
+                elif closing_hold_asset in content_asset_ids:
+                    errors.append(
+                        f"Kapitel {chapter_id}: intro_closing_asset_id="
+                        f"{closing_hold_asset!r} kollidiert mit einem "
+                        "VO-Content-Asset."
+                    )
+                elif (
+                    opener_asset
+                    and closing_hold_asset
+                    and opener_asset == closing_hold_asset
+                ):
+                    errors.append(
+                        f"Kapitel {chapter_id}: intro_opener_asset_id und "
+                        "intro_closing_asset_id müssen verschieden sein."
+                    )
+                elif catalog is None:
+                    errors.append(
+                        f"Kapitel {chapter_id}: Asset-Katalog fehlt für "
+                        f"intro_closing_asset_id={closing_hold_asset!r}."
+                    )
+                else:
+                    postroll_shot = _make_envelope_shot_from_asset_id(
+                        project,
+                        asset_id=closing_hold_asset,
+                        catalog=catalog,
+                        shot_id=f"{slug}_postroll",
+                        timeline_start=chapter_audio_end,
+                        timeline_end=chapter_video_end,
+                        editorial_function="technical_chapter_postroll",
+                        chapter_id=chapter_id,
+                        fps=fps,
+                        head_trim=head_trim,
+                        short_tolerance=short_tolerance,
+                        repairs=repairs,
+                        errors=errors,
+                        label=f"Kapitel-{chapter_id}-Nachlauf-Shot",
+                    )
+            elif content_last.resolved_media_path:
+                postroll_shot = _make_independent_envelope_shot(
+                    project,
+                    content_last,
+                    shot_id=f"{slug}_postroll",
+                    timeline_start=chapter_audio_end,
+                    timeline_end=chapter_video_end,
+                    editorial_function="technical_chapter_postroll",
+                    fps=fps,
+                    repairs=repairs,
+                    errors=errors,
+                    label=f"Kapitel-{chapter_id}-Nachlauf-Shot",
+                )
             if postroll_shot is not None:
                 ordered.append(postroll_shot)
                 ch_shots.append(postroll_shot)

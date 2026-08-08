@@ -372,6 +372,10 @@ class UnifiedCutPlanDocument(BaseModel):
     closing_fallback_visual_intent: str = ""
     # Merged Gesamtplan: Fallback pro Kapitel-/Folder-Name.
     closing_fallback_by_chapter: dict[str, str] = Field(default_factory=dict)
+    # Intro-Hüllen: LLM wählt Opener (vor VO) und Closing-Hold (nach VO).
+    # Python darf First/Last-Content-Assets NICHT kopieren.
+    intro_opener_asset_id: Optional[str] = None
+    intro_closing_asset_id: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate_boundary_slot_chain(self) -> "UnifiedCutPlanDocument":

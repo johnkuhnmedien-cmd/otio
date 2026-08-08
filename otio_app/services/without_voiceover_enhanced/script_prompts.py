@@ -1659,27 +1659,36 @@ INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
 - Never use asset_fit \"acceptable\" or \"weak\". If the best local asset is only
   acceptable/weak, set local_asset_id to null, asset_fit \"none\", and create a
   coverage_gap (inline gap fields + search_concepts).
-- Opening: Python inserts a SEPARATE preroll shot for {preroll:.1f}s BEFORE
-  Intro VO (independent clip — not an extension of slot 1). When VO starts,
-  your first slot begins as a NEW shot. Set voiceover_preroll_sec to
+- Opening envelope: YOU choose intro_opener_asset_id — the semantically best
+  series/tease opener from BUNDLED INVENTORY (establishing / wide / iconic).
+  Python inserts that asset as a SEPARATE preroll shot for {preroll:.1f}s
+  BEFORE Intro VO (independent clip — not an extension of slot 1, and NEVER
+  a copy of slot 1's asset). When VO starts, your first slot begins as a NEW
+  shot with a DIFFERENT local_asset_id. Set voiceover_preroll_sec to
   {preroll:.1f}.
-- Closing: Python inserts a SEPARATE postroll shot for
-  {post_min:.1f}–{post_max:.1f}s AFTER Intro VO ends (independent clip — not
-  an extension of the last VO slot). Set voiceover_postroll_sec between
-  {post_min:.1f} and {post_max:.1f} (prefer ~{post_default:.1f} unless
-  justified).
+- Closing envelope: YOU choose intro_closing_asset_id — the semantically best
+  landing/outro hold from BUNDLED INVENTORY (wide / reflective / closing mood).
+  Python inserts that asset as a SEPARATE postroll shot for {post_min:.1f}–{post_max:.1f}s
+  AFTER Intro VO ends (independent clip — not an extension of the last VO
+  slot, and NEVER a copy of the last slot's asset).
+  Set voiceover_postroll_sec between {post_min:.1f} and {post_max:.1f} (prefer ~{post_default:.1f} unless justified).
 - CRITICAL: preroll/postroll do NOT fill gaps inside the VO. Your boundaries
-  must already cover the full VO carpet (start→end). Python adds independent
-  envelope shots before first VO and after last VO — it will NOT extend a
-  last shot that ends early during narration (use closing_fallback_asset_id
-  for that reserve closer).
+  must already cover the full VO carpet (start→end). Python places the LLM-
+  chosen envelope assets before first VO and after last VO — it will NOT
+  extend a last shot that ends early during narration (use
+  closing_fallback_asset_id for that reserve closer).
+- Asset uniqueness (CRITICAL): intro_opener_asset_id, intro_closing_asset_id,
+  closing_fallback_asset_id, and every VO slot local_asset_id with
+  asset_fit \"strong\" must ALL be pairwise distinct. Never reuse the same
+  asset for opener, VO content, reserve closer, or closing hold.
 - Always set closing_fallback_asset_id to a DIFFERENT strong asset from
-  BUNDLED INVENTORY than the last slot's local_asset_id. Python inserts it
-  only if the last picture still ends early during VO (reserve closer).
-  Prefer establishing / landscape / wide. Do NOT emit
-  closing_fallback_asset_fit / _reason / _visual_intent (Intro-only id).
-- Opening and closing slots must use different local_asset_id values when both
-  have strong assets.
+  BUNDLED INVENTORY than the last slot's local_asset_id AND different from
+  intro_opener_asset_id / intro_closing_asset_id. Python inserts it only if
+  the last picture still ends early during VO (reserve closer). Prefer
+  establishing / landscape / wide. Do NOT emit closing_fallback_asset_fit /
+  _reason / _visual_intent (Intro-only id).
+- Opening and closing VO slots must use different local_asset_id values when
+  both have strong assets.
 - Prefix every cut_id, slot_id and coverage_gap_id with \"{slug}_\".
 - Use only segment_ids / sentence_ids from the Intro inputs.
 - Use only local_asset_id values that exist in BUNDLED INVENTORY.
@@ -1709,9 +1718,10 @@ KEYWORD / CONTEXT CUTS (CRITICAL — understand the whole Intro first):
   through any remaining VO (outro line, tag, breath) until the true VO end.
   Do NOT place the final boundary at the last keyword — place it at the last
   sentence end.
-- Opening envelope is separate: Python's preroll shot covers
-  {preroll:.1f}s before VO; your slot 1 starts at VO start. From VO start
-  onward, keyword-onset sync applies to justified place/list cuts only.
+- Opening envelope is separate: Python places your intro_opener_asset_id for
+  {preroll:.1f}s before VO; your slot 1 starts at VO start with a different
+  asset. From VO start onward, keyword-onset sync applies to justified
+  place/list cuts only.
 - Prefer WORD TIMINGS: for justified keyword/list cuts, set alignment
   \"mid_sentence\" and offset_seconds from words[].offset_seconds of the spoken
   keyword (or the first word of a multi-word place name). Fall back to text
@@ -1786,6 +1796,8 @@ OUTPUT SCHEMA:
 {{
   "voiceover_preroll_sec": {preroll:.1f},
   "voiceover_postroll_sec": {post_default:.1f},
+  "intro_opener_asset_id": "strong_opener_asset_not_used_in_vo_slots",
+  "intro_closing_asset_id": "strong_closing_hold_asset_not_used_in_vo_slots",
   "closing_fallback_asset_id": "different_strong_asset_than_last_slot",
   "pause_directives": [],
   "boundaries": [

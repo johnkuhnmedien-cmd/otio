@@ -1667,6 +1667,8 @@ def resolve_unified_timeline(
         short_tolerance=short_tolerance,
         enable_map_opener=keyword_flow,
         map_decisions=map_decisions if keyword_flow else None,
+        intro_opener_asset_id=plan.intro_opener_asset_id,
+        intro_closing_asset_id=plan.intro_closing_asset_id,
     )
     if keyword_flow and map_decisions:
         repairs.append(
