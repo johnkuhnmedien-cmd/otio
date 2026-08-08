@@ -1247,16 +1247,45 @@ def _render_intro_cut_section(
         try:
             with st.spinner("Intro Python Timing…"):
                 resolved = resolve_intro_timeline(project)
+            intro_plan_now = load_model(
+                intro_unified_cut_plan_path(project), UnifiedCutPlanDocument
+            )
+            opener_id = (
+                str(intro_plan_now.intro_opener_asset_id or "").strip()
+                if intro_plan_now is not None
+                else ""
+            )
+            closing_id = (
+                str(intro_plan_now.intro_closing_asset_id or "").strip()
+                if intro_plan_now is not None
+                else ""
+            )
+            n_vo = len(intro_plan_now.slots) if intro_plan_now is not None else 0
             st.success(
                 f"Intro-Timing: {resolved.total_duration_seconds:.2f}s · "
+                f"{n_vo} VO-Slots (LLM) + Opener/Closing-Hülle "
+                f"(LLM-Assets, von Python nur zeitlich platziert) = "
                 f"{len(resolved.shots)} Shots · "
                 f"{len(resolved.audio_segments)} Audio "
                 "(ohne shot_min · Gesamt-Timeline unverändert)."
             )
-            for shot in resolved.shots[:12]:
+            if opener_id or closing_id:
                 st.caption(
-                    f"Intro-Video {shot.shot_id}: "
+                    f"LLM-Hüllen-Assets: Opener=`{opener_id or '—'}` · "
+                    f"Closing=`{closing_id or '—'}` "
+                    "(nicht First/Last-VO-Kopie)."
+                )
+            for shot in resolved.shots[:14]:
+                role = ""
+                ef = str(shot.editorial_function or "")
+                if ef == "technical_chapter_preroll":
+                    role = " · Vorlauf (LLM opener)"
+                elif ef == "technical_chapter_postroll":
+                    role = " · Nachlauf (LLM closing)"
+                st.caption(
+                    f"Intro-Video {shot.shot_id}{role}: "
                     f"{shot.timeline_start_seconds:.2f}–{shot.timeline_end_seconds:.2f}"
+                    f" · asset=`{shot.asset_id}`"
                 )
             for audio in resolved.audio_segments[:6]:
                 st.caption(
@@ -1304,6 +1333,9 @@ def _render_intro_cut_section(
         plan_current = intro_plan_matches_locked_script(project, intro_plan)
         n_plan = len(intro_plan.slots)
         n_res = len(intro_resolved.shots) if intro_resolved is not None else 0
+        has_opener = bool(str(intro_plan.intro_opener_asset_id or "").strip())
+        has_closing = bool(str(intro_plan.intro_closing_asset_id or "").strip())
+        n_envelope = int(has_opener) + int(has_closing)
         if not plan_current:
             st.warning(
                 f"Intro-Plan gehört zu Skriptversion "
@@ -1312,15 +1344,26 @@ def _render_intro_cut_section(
             )
         else:
             st.caption(
-                f"Intro-Plan: {n_plan} Slots · "
-                f"Resolved: {n_res} Shots"
+                f"Intro-Plan: {n_plan} VO-Slots (LLM)"
+                + (
+                    f" + {n_envelope} Hülle(n) Opener/Closing (LLM-Assets)"
+                    if n_envelope
+                    else ""
+                )
+                + f" · Resolved: {n_res} Shots"
                 + ("" if intro_resolved is not None else " (fehlt)")
             )
+            if has_opener or has_closing:
+                st.caption(
+                    "Hüllen-Assets vom LLM: "
+                    f"opener=`{intro_plan.intro_opener_asset_id or '—'}` · "
+                    f"closing=`{intro_plan.intro_closing_asset_id or '—'}`"
+                )
             if intro_resolved is not None and not intro_resolved_matches_plan(
                 intro_plan, intro_resolved, project=project
             ):
                 st.warning(
-                    f"Plan ({n_plan} Slots) und Resolved ({n_res} Shots) passen nicht — "
+                    f"Plan ({n_plan} VO-Slots) und Resolved-Inhalt passen nicht — "
                     "altes Timing. Bitte **Intro: Python Timing** erneut, sonst "
                     "exportiert OTIO den alten Stand."
                 )
