@@ -59,6 +59,7 @@ from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
     AssetCatalog,
     _is_intro_folder,
     build_asset_catalog,
+    coalesce_same_media_audio_segments,
     lookup_catalog_entry,
 )
 
@@ -970,6 +971,15 @@ def export_otio_from_resolved_timeline(
     if resolved is None:
         raise EnhancedOtioExportError("Aufgelöste Timeline fehlt — kein OTIO-Export.")
 
+    # Eine Kapitel-WAV → ein Narrationsclip (auch bei älterem resolved_timeline).
+    resolved = resolved.model_copy(
+        update={
+            "audio_segments": coalesce_same_media_audio_segments(
+                list(resolved.audio_segments or [])
+            )
+        }
+    )
+
     fps = float(resolved.fps or project.fps or 25.0)
     # Gate + Clip-Bau teilen denselben Fill-Cache (kein Doppel-Transcode).
     media_fill_cache: dict[str, Path] = {}
@@ -1188,6 +1198,14 @@ def export_portable_otio_package(
     resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
     if resolved is None:
         raise EnhancedOtioExportError("Aufgelöste Timeline fehlt — kein OTIO-Export.")
+
+    resolved = resolved.model_copy(
+        update={
+            "audio_segments": coalesce_same_media_audio_segments(
+                list(resolved.audio_segments or [])
+            )
+        }
+    )
 
     fps = float(resolved.fps or project.fps or 25.0)
     media_fill_cache: dict[str, Path] = {}

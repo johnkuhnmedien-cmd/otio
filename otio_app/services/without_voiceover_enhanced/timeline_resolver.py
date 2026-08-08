@@ -880,6 +880,87 @@ def _min_audio_clip_seconds(fps: float = 25.0) -> float:
     return max(MIN_AUDIO_CLIP_SECONDS, 2.0 * frame)
 
 
+def _normalize_audio_media_key(audio_path: str | None) -> str:
+    """Stabiler Schlüssel für dieselbe Kapitel-WAV (Pfad-Varianten → eine Datei)."""
+    raw = str(audio_path or "").strip()
+    if not raw:
+        return ""
+    path = Path(raw)
+    try:
+        return str(path.resolve()).casefold()
+    except OSError:
+        return str(path).replace("\\", "/").casefold()
+
+
+def coalesce_same_media_audio_segments(
+    segments: list[ResolvedAudioSegment],
+    *,
+    epsilon: float = 1e-3,
+) -> list[ResolvedAudioSegment]:
+    """Eine Timeline-Clip-Kette pro Kapitel-WAV (Intro + Körper).
+
+    Keyword Flow / Chapter-TTS liefert **eine** Audiodatei pro Ordner; Script-
+    Segmente und ggf. Intra-Splits erzeugen sonst mehrere OTIO-Clips derselben
+    Datei (in Resolve oft alle als ``Intro.wav`` sichtbar). Abstehende Clips
+    ohne eingefügte Pause und mit kontinuierlichem Source-Range werden zu
+    einem Clip zusammengezogen — analog „eine Datei = ein Narrationsclip“.
+    """
+    if len(segments) <= 1:
+        return list(segments)
+
+    merged: list[ResolvedAudioSegment] = []
+    for segment in segments:
+        if not merged:
+            merged.append(segment.model_copy(deep=True))
+            continue
+        prev = merged[-1]
+        same_media = _normalize_audio_media_key(
+            prev.audio_path
+        ) == _normalize_audio_media_key(segment.audio_path)
+        if not same_media or not prev.audio_path:
+            merged.append(segment.model_copy(deep=True))
+            continue
+
+        prev_pause = max(0.0, float(prev.pause_after_seconds or 0.0))
+        # Eingefügte Timeline-Stille zwischen Stücken → nicht verschlucken
+        # (A/V-Sync). Keyword Flow setzt pause_after=0.
+        if prev_pause > epsilon:
+            merged.append(segment.model_copy(deep=True))
+            continue
+
+        expected_timeline = float(prev.timeline_end_seconds) + prev_pause
+        timeline_ok = abs(float(segment.timeline_start_seconds) - expected_timeline) <= (
+            epsilon
+        )
+        prev_source_end = float(
+            prev.source_end_seconds
+            if prev.source_end_seconds is not None
+            else prev.timeline_end_seconds - prev.timeline_start_seconds
+        )
+        next_source_start = float(segment.source_start_seconds or 0.0)
+        source_ok = abs(next_source_start - prev_source_end) <= epsilon
+        if not (timeline_ok and source_ok):
+            merged.append(segment.model_copy(deep=True))
+            continue
+
+        next_source_end = float(
+            segment.source_end_seconds
+            if segment.source_end_seconds is not None
+            else next_source_start
+            + max(
+                0.0,
+                float(segment.timeline_end_seconds) - float(segment.timeline_start_seconds),
+            )
+        )
+        prev.timeline_end_seconds = round(float(segment.timeline_end_seconds), 6)
+        prev.source_end_seconds = round(max(prev_source_end, next_source_end), 6)
+        prev.pause_after_seconds = round(float(segment.pause_after_seconds or 0.0), 6)
+        prev.split_label = ""
+        if not prev.chapter_id and segment.chapter_id:
+            prev.chapter_id = segment.chapter_id
+    return merged
+
+
 def _build_resolved_audio_segments(
     *,
     timeline: NarrationTimelineDocument,
@@ -890,6 +971,9 @@ def _build_resolved_audio_segments(
 
     E2E-3 Guard: Split verwerfen bzw. an vorige Grenze mergen, wenn der Rest
     nach dem Splitpunkt < 0.5s (oder < 2 Frames) wäre — kein 0.04s-Waisenclip.
+
+    Anschließend: Clips derselben Kapitel-WAV ohne Pause-Gap zu einem Clip
+    zusammenziehen (Intro.wav / Dublin.wav …).
     """
     min_clip = _min_audio_clip_seconds(fps)
     audio_segments: list[ResolvedAudioSegment] = []
@@ -995,7 +1079,7 @@ def _build_resolved_audio_segments(
                 split_label="tail" if source_cursor > 1e-9 else "",
             )
         )
-    return audio_segments
+    return coalesce_same_media_audio_segments(audio_segments)
 
 
 def _seconds_to_frame(seconds: float, fps: float) -> float:
@@ -2147,7 +2231,11 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             "(erlaubt, aber oft weniger abwechslungsreich)."
         )
 
-    timing_map = {item.segment_id: item for item in timings.segments}
+    timing_map = {
+        item.segment_id: item
+        for item in timings.segments
+        if item.segment_id in known_segments
+    }
     sentence_index = sentence_index_by_id(load_segment_alignments(project))
     audio_segments = _build_resolved_audio_segments(
         timeline=timeline,
