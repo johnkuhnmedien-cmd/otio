@@ -48,7 +48,9 @@ def _intro_plan() -> UnifiedCutPlanDocument:
         script_version="script-v1",
         voiceover_preroll_sec=4.0,
         voiceover_postroll_sec=6.5,
-        closing_fallback_asset_id=None,
+        closing_fallback_asset_id="fallback_a",
+        intro_opener_asset_id="opener_a",
+        intro_closing_asset_id="closing_a",
         boundaries=[
             CutBoundary(
                 cut_id="Intro_cut_000",

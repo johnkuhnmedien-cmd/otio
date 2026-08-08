@@ -209,6 +209,50 @@ def _is_intro_pause(directive: PauseDirective, *, slug: str) -> bool:
     return _is_intro_id(segment, slug=slug) or _is_intro_id(sentence, slug=slug)
 
 
+def intro_envelope_asset_errors(plan: UnifiedCutPlanDocument) -> list[str]:
+    """Fail-closed Checks für LLM-Opener/Closing-Hold (keine Content-Kopien)."""
+    errors: list[str] = []
+    opener = str(plan.intro_opener_asset_id or "").strip()
+    closing = str(plan.intro_closing_asset_id or "").strip()
+    fallback = str(plan.closing_fallback_asset_id or "").strip()
+    slot_assets = {
+        str(slot.local_asset_id or "").strip()
+        for slot in plan.slots
+        if str(slot.asset_fit or "").strip().lower() == "strong"
+        and str(slot.local_asset_id or "").strip()
+    }
+    if not opener:
+        errors.append(
+            "Intro: intro_opener_asset_id fehlt — LLM muss den semantisch "
+            "passendsten Opener wählen (nicht First-Slot-Kopie)."
+        )
+    if not closing:
+        errors.append(
+            "Intro: intro_closing_asset_id fehlt — LLM muss den semantisch "
+            "passendsten Closing-Hold wählen (nicht Last-Slot-Kopie)."
+        )
+    if opener and closing and opener == closing:
+        errors.append(
+            "Intro: intro_opener_asset_id und intro_closing_asset_id müssen "
+            f"verschieden sein (beide {opener!r})."
+        )
+    for label, asset_id in (
+        ("intro_opener_asset_id", opener),
+        ("intro_closing_asset_id", closing),
+    ):
+        if asset_id and asset_id in slot_assets:
+            errors.append(
+                f"Intro: {label}={asset_id!r} darf keinem VO-Slot "
+                "(asset_fit=strong) entsprechen."
+            )
+        if asset_id and fallback and asset_id == fallback:
+            errors.append(
+                f"Intro: {label}={asset_id!r} darf nicht gleich "
+                "closing_fallback_asset_id sein."
+            )
+    return errors
+
+
 def enforce_intro_strong_only(
     plan: UnifiedCutPlanDocument,
     *,
@@ -254,11 +298,15 @@ def enforce_intro_strong_only(
     postroll = clamp_intro_closing_hold(
         plan.voiceover_postroll_sec, options=options
     )
+    opener = str(plan.intro_opener_asset_id or "").strip() or None
+    closing = str(plan.intro_closing_asset_id or "").strip() or None
     return plan.model_copy(
         update={
             "slots": updated_slots,
             "voiceover_preroll_sec": preroll,
             "voiceover_postroll_sec": postroll,
+            "intro_opener_asset_id": opener,
+            "intro_closing_asset_id": closing,
         }
     )
 
@@ -301,6 +349,9 @@ def split_intro_from_unified(
             slots=intro_slots,
             voiceover_preroll_sec=plan.voiceover_preroll_sec,
             voiceover_postroll_sec=plan.voiceover_postroll_sec,
+            closing_fallback_asset_id=plan.closing_fallback_asset_id,
+            intro_opener_asset_id=plan.intro_opener_asset_id,
+            intro_closing_asset_id=plan.intro_closing_asset_id,
         )
     if body_slots:
         if len(body_bounds) != len(body_slots) + 1:
@@ -367,6 +418,10 @@ def merge_intro_and_body_plans(
         slots=[*intro.slots, *next_slots],
         voiceover_preroll_sec=intro.voiceover_preroll_sec,
         voiceover_postroll_sec=intro.voiceover_postroll_sec,
+        closing_fallback_asset_id=intro.closing_fallback_asset_id,
+        closing_fallback_by_chapter=dict(body.closing_fallback_by_chapter or {}),
+        intro_opener_asset_id=intro.intro_opener_asset_id,
+        intro_closing_asset_id=intro.intro_closing_asset_id,
     )
 
 
@@ -541,6 +596,9 @@ def generate_intro_unified_cut(
 
     options = load_cut_plan_options(project)
     plan = enforce_intro_strong_only(result.plan, options=options)
+    envelope_errors = intro_envelope_asset_errors(plan)
+    if envelope_errors:
+        raise IntroCutError(" · ".join(envelope_errors))
     persist_intro_unified_plan(project, plan)
     gap_count = sum(1 for s in plan.slots if str(s.asset_fit) == "none")
     return IntroCutGenerateResult(
@@ -595,6 +653,9 @@ def resolve_intro_timeline(
     options = load_cut_plan_options(project)
     preroll, _post_default, _lo, _hi = intro_hold_timings(options)
     plan = enforce_intro_strong_only(plan, options=options)
+    envelope_errors = intro_envelope_asset_errors(plan)
+    if envelope_errors:
+        raise IntroCutError(" · ".join(envelope_errors))
     postroll = clamp_intro_closing_hold(
         plan.voiceover_postroll_sec, options=options
     )

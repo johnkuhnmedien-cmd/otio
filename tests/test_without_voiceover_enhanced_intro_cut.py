@@ -12,6 +12,7 @@ from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
     enforce_intro_strong_only,
     filter_resolved_timeline_to_intro,
     format_bundled_inventory_for_prompt,
+    intro_envelope_asset_errors,
     merge_intro_and_body_plans,
     split_intro_from_unified,
 )
@@ -108,6 +109,10 @@ def test_intro_prompt_rules() -> None:
     assert "5.0 and 8.0" in prompt
     assert "SEPARATE preroll shot" in prompt
     assert "SEPARATE postroll shot" in prompt
+    assert "intro_opener_asset_id" in prompt
+    assert "intro_closing_asset_id" in prompt
+    assert "pairwise distinct" in prompt
+    assert "NEVER a copy of slot 1" in prompt or "NEVER" in prompt
     assert "9.500" in prompt
     assert "shot_min" in prompt
     assert "shot_max" in prompt
@@ -157,9 +162,12 @@ def test_intro_prompt_uses_configured_hold_timings() -> None:
     assert "prefer ~7.0" in prompt
     assert '"voiceover_preroll_sec": 3.0' in prompt
     assert '"voiceover_postroll_sec": 7.0' in prompt
+    assert '"intro_opener_asset_id"' in prompt
+    assert '"intro_closing_asset_id"' in prompt
     assert "SEPARATE postroll shot" in prompt
     assert "not an extension of slot 1" in prompt
-    assert "extension of the last VO slot" in prompt
+    assert "extension of the last VO" in prompt
+    assert "NEVER a copy of the last slot" in prompt
 
 
 def test_enforce_intro_strong_only_rejects_acceptable() -> None:
@@ -185,8 +193,26 @@ def test_enforce_intro_strong_only_rejects_acceptable() -> None:
     assert out.voiceover_postroll_sec == INTRO_CLOSING_HOLD_MAX_SEC  # clamped from 9
 
 
-def test_intro_envelopes_are_independent_shots(tmp_path) -> None:
-    """Vorlauf/Nachlauf = eigene Shots; Content startet erst mit VO."""
+def test_intro_envelope_asset_errors_require_distinct_llm_assets() -> None:
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            _bound("Intro_cut_000", "Intro_segment_001__s001", "start"),
+            _bound("Intro_cut_001", "Intro_segment_001__s001", "end"),
+        ],
+        slots=[_slot("Intro_slot_001", "strong", "doors")],
+        intro_opener_asset_id="doors",
+        intro_closing_asset_id="doors",
+        closing_fallback_asset_id="doors",
+    )
+    errors = intro_envelope_asset_errors(plan)
+    assert any("intro_opener_asset_id" in e for e in errors)
+    assert any("intro_closing_asset_id" in e for e in errors)
+    assert any("verschieden" in e for e in errors)
+
+
+def test_intro_envelopes_use_llm_assets_not_content_copies(tmp_path) -> None:
+    """Vorlauf/Nachlauf = LLM-Assets; niemals First/Last-Content klonen."""
     from unittest.mock import patch
 
     from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
@@ -270,15 +296,55 @@ def test_intro_envelopes_are_independent_shots(tmp_path) -> None:
     repairs: list[str] = []
     errors: list[str] = []
 
-    def _fake_reapply(project, shot, *, fps, repairs, label):
-        del project, fps, repairs, label
-        shot.source_end_seconds = max(
-            0.01, shot.timeline_end_seconds - shot.timeline_start_seconds
+    def _fake_envelope_from_asset(
+        project,
+        *,
+        asset_id,
+        catalog,
+        shot_id,
+        timeline_start,
+        timeline_end,
+        editorial_function,
+        chapter_id,
+        fps,
+        head_trim,
+        short_tolerance,
+        repairs,
+        errors,
+        label,
+    ):
+        del (
+            project,
+            catalog,
+            fps,
+            head_trim,
+            short_tolerance,
+            repairs,
+            errors,
+            label,
+        )
+        return ResolvedShot(
+            shot_id=shot_id,
+            asset_id=str(asset_id),
+            timeline_start_seconds=float(timeline_start),
+            timeline_end_seconds=float(timeline_end),
+            source_start_seconds=0.0,
+            source_end_seconds=max(0.01, float(timeline_end) - float(timeline_start)),
+            editorial_function=editorial_function,
+            folder_name=chapter_id,
+            chapter_id=chapter_id,
+            resolved_media_path=str(media),
+            resolved_media_kind="image",
+            resolved_media_duration_seconds=10.0,
+            hold_mode="freeze_video",
+            asset_fit="strong",
+            asset_fit_reason=f"LLM envelope ({editorial_function})",
         )
 
     with patch(
-        "otio_app.services.without_voiceover_enhanced.timeline_resolver._reapply_hold_for_timeline_span",
-        _fake_reapply,
+        "otio_app.services.without_voiceover_enhanced.timeline_resolver."
+        "_make_envelope_shot_from_asset_id",
+        _fake_envelope_from_asset,
     ):
         envs = _apply_chapter_envelopes(
             project,
@@ -291,6 +357,9 @@ def test_intro_envelopes_are_independent_shots(tmp_path) -> None:
             fps=25.0,
             repairs=repairs,
             errors=errors,
+            catalog=object(),  # type: ignore[arg-type]
+            intro_opener_asset_id="opener_wide",
+            intro_closing_asset_id="closing_hold",
         )
 
     assert not errors
@@ -302,6 +371,10 @@ def test_intro_envelopes_are_independent_shots(tmp_path) -> None:
     preroll = by_id["Intro_preroll"]
     postroll = by_id["Intro_postroll"]
     body = by_id["Intro_slot_001"]
+    assert preroll.asset_id == "opener_wide"
+    assert postroll.asset_id == "closing_hold"
+    assert preroll.asset_id != body.asset_id
+    assert postroll.asset_id != body.asset_id
     assert preroll.editorial_function == "technical_chapter_preroll"
     assert postroll.editorial_function == "technical_chapter_postroll"
     assert preroll.timeline_start_seconds == pytest.approx(0.0, abs=1e-3)
@@ -312,8 +385,105 @@ def test_intro_envelopes_are_independent_shots(tmp_path) -> None:
     assert postroll.timeline_end_seconds == pytest.approx(env.chapter_video_end, abs=1e-3)
     assert env.preroll_hold_shot_id == "Intro_preroll"
     assert env.postroll_hold_shot_id == "Intro_postroll"
-    assert body.timeline_start_seconds > preroll.timeline_start_seconds + 1e-6
-    assert postroll.timeline_start_seconds >= body.timeline_end_seconds - 1e-6
+
+
+def test_intro_envelopes_reject_missing_llm_assets_without_cloning(tmp_path) -> None:
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.without_voiceover_enhanced.models import (
+        EnhancedScriptDocument,
+        FinalCutPlanDocument,
+        FinalShot,
+        NarrationAnchor,
+        ScriptSegment,
+    )
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _apply_chapter_envelopes,
+    )
+
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    media = root / "still.jpg"
+    media.write_bytes(b"fake")
+    project = Project(
+        id="intro-env-missing",
+        name="Irland",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="de",
+        asset_subdir_names=["Dublin"],
+        selected_asset_subdirs=["Dublin"],
+        fps=25.0,
+    )
+    locked = EnhancedScriptDocument(
+        script_version="v1",
+        segments=[
+            ScriptSegment(
+                segment_id="Intro_segment_001",
+                folder_name="Intro",
+                text="hello",
+                sequence_index=1,
+            )
+        ],
+    )
+    final = FinalCutPlanDocument(
+        script_version="v1",
+        shots=[
+            FinalShot(
+                shot_id="Intro_slot_001",
+                asset_id="doors",
+                narration_start_anchor=NarrationAnchor(
+                    segment_id="Intro_segment_001", offset_seconds=0.0
+                ),
+                narration_end_anchor=NarrationAnchor(
+                    segment_id="Intro_segment_001", offset_seconds=6.0
+                ),
+            )
+        ],
+    )
+    content = ResolvedShot(
+        shot_id="Intro_slot_001",
+        asset_id="doors",
+        timeline_start_seconds=0.0,
+        timeline_end_seconds=6.0,
+        source_start_seconds=0.0,
+        source_end_seconds=6.0,
+        folder_name="Intro",
+        chapter_id="Intro",
+        resolved_media_path=str(media),
+        resolved_media_kind="image",
+        resolved_media_duration_seconds=6.0,
+    )
+    ordered = [content]
+    errors: list[str] = []
+    _apply_chapter_envelopes(
+        project,
+        locked=locked,
+        final=final,
+        ordered=ordered,
+        audio_segments=[
+            ResolvedAudioSegment(
+                segment_id="Intro_segment_001",
+                audio_path="/tmp/intro.wav",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=6.0,
+            )
+        ],
+        preroll=4.0,
+        postroll=6.5,
+        fps=25.0,
+        repairs=[],
+        errors=errors,
+        catalog=object(),  # type: ignore[arg-type]
+        intro_opener_asset_id=None,
+        intro_closing_asset_id=None,
+    )
+    assert any("intro_opener_asset_id fehlt" in e for e in errors)
+    assert any("intro_closing_asset_id fehlt" in e for e in errors)
+    assert not any(s.shot_id == "Intro_preroll" for s in ordered)
+    assert not any(s.shot_id == "Intro_postroll" for s in ordered)
 
 
 def test_clamp_intro_closing_hold() -> None:
@@ -463,6 +633,9 @@ def test_resolve_intro_timeline_calls_unified_without_persist(tmp_path) -> None:
         slots=[_slot("Intro_slot_001", "strong", "yo_01")],
         voiceover_preroll_sec=4.0,
         voiceover_postroll_sec=6.5,
+        intro_opener_asset_id="opener_a",
+        intro_closing_asset_id="closing_a",
+        closing_fallback_asset_id="fallback_a",
     )
     write_json(intro_unified_cut_plan_path(project), intro_plan)
 
@@ -583,6 +756,9 @@ def test_resolve_intro_timeline_uses_cut_plan_intro_holds(tmp_path) -> None:
             ],
             slots=[_slot("Intro_slot_001", "strong", "yo_01")],
             voiceover_postroll_sec=7.0,
+            intro_opener_asset_id="opener_a",
+            intro_closing_asset_id="closing_a",
+            closing_fallback_asset_id="fallback_a",
         ),
     )
     fake = ResolvedTimelineDocument(

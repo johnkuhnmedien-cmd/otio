@@ -561,6 +561,16 @@ def parse_unified_cut_response(
             asset = None if _nullish(value) else str(value).strip()
             if chapter and asset:
                 fallback_by_chapter[chapter] = asset
+    raw_opener = payload.get("intro_opener_asset_id")
+    intro_opener = (
+        None if _nullish(raw_opener) else str(raw_opener).strip() or None
+    )
+    raw_intro_closing = payload.get("intro_closing_asset_id")
+    intro_closing = (
+        None
+        if _nullish(raw_intro_closing)
+        else str(raw_intro_closing).strip() or None
+    )
 
     try:
         return UnifiedCutPlanDocument(
@@ -577,6 +587,8 @@ def parse_unified_cut_response(
             closing_fallback_asset_fit_reason=closing_fallback_fit_reason,
             closing_fallback_visual_intent=closing_fallback_visual_intent,
             closing_fallback_by_chapter=fallback_by_chapter,
+            intro_opener_asset_id=intro_opener,
+            intro_closing_asset_id=intro_closing,
         )
     except Exception as exc:  # noqa: BLE001
         raise UnifiedCutPlanError(str(exc)) from exc
