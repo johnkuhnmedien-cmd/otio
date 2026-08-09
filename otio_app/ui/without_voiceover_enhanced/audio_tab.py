@@ -66,7 +66,9 @@ def render_enhanced_audio_page() -> None:
     st.header("⑥ Audio / ElevenLabs (Enhanced)")
     st.caption(
         "Nur gesperrte Skripte. Jedes Kapitel wird in **einem** ElevenLabs-Call "
-        "vertont (Intro zuerst). Pause-Tags stehen im Kapitel-TTS-Text."
+        "vertont (Intro zuerst). Autorenpausen werden als eleven_v3-Tags "
+        "(`[short pause]` / `[pause]` / `[long pause]`) in den Kapitel-TTS-Text "
+        "geschrieben. Der Cut-LLM arbeitet mit den gemessenen Timestamps."
     )
     project = get_enhanced_project()
     if project is None:
@@ -207,7 +209,7 @@ def render_enhanced_audio_page() -> None:
     st.subheader("Kapitel")
     st.caption(
         "Ein TTS-Call und eine Audiodatei pro Kapitel · "
-        "Pausen baust du selbst in die Kapitel-WAV ein."
+        "Pause-Tags steuern ElevenLabs; der Cut nutzt die Timestamps."
     )
 
     for row in chapter_rows:
