@@ -5,7 +5,11 @@ from __future__ import annotations
 import math
 import re
 
-from otio_app.services.without_voiceover_enhanced.models import ScriptSegment
+from otio_app.project_layout import safe_folder_slug
+from otio_app.services.without_voiceover_enhanced.models import (
+    EnhancedScriptDocument,
+    ScriptSegment,
+)
 
 __all__ = [
     "MAX_AUTHOR_PAUSE_SECONDS",
@@ -18,6 +22,8 @@ __all__ = [
     "chapter_display_text",
     "parse_chapter_display_text",
     "migrate_inline_pause_markers_in_segment",
+    "flatten_folder_segments_to_pause_blocks",
+    "canonicalize_script_document_to_pause_blocks",
 ]
 
 MAX_AUTHOR_PAUSE_SECONDS = 8.0
@@ -264,3 +270,166 @@ def migrate_inline_pause_markers_in_segment(
             )
         )
     return migrated or [segment]
+
+
+def _join_pause_block_text(group: list[ScriptSegment]) -> str:
+    """Joins fine-grained segments the same way ``chapter_display_text`` would."""
+    parts: list[str] = []
+    nonempty = [seg for seg in group if (seg.text or "").strip()]
+    for index, segment in enumerate(nonempty):
+        parts.append((segment.text or "").strip())
+        if index < len(nonempty) - 1 and bool(segment.paragraph_break_after):
+            parts.append("")
+    return "\n".join(parts).strip()
+
+
+def flatten_folder_segments_to_pause_blocks(
+    segments: list[ScriptSegment],
+    *,
+    folder_name: str,
+    segment_id_prefix: str,
+) -> tuple[list[ScriptSegment], dict[str, str]]:
+    """Collapse LLM sentence segments into pause-delimited chapter blocks.
+
+    Canonical chapter storage is spoken text + author pauses. Consecutive
+    segments without ``author_pause_after_seconds`` become one block. Cut
+    planning still uses ElevenLabs sentence/word timestamps after chapter TTS.
+    """
+    segs = [seg for seg in segments if (seg.text or "").strip()]
+    if not segs:
+        return [], {}
+
+    # Inline markers (e.g. intro hooks) stay on the eleven_v3 path.
+    if any(AUTHOR_PAUSE_MARKER_RE.search(seg.text or "") for seg in segs):
+        return list(segs), {seg.segment_id: seg.segment_id for seg in segs}
+
+    groups: list[list[ScriptSegment]] = []
+    current: list[ScriptSegment] = []
+    for segment in segs:
+        current.append(segment)
+        if float(segment.author_pause_after_seconds or 0.0) > 0:
+            groups.append(current)
+            current = []
+    if current:
+        groups.append(current)
+
+    order_index = segs[0].folder_order_index
+    default_semantic = segs[0].semantic_function or "narration"
+    flattened: list[ScriptSegment] = []
+    id_map: dict[str, str] = {}
+
+    used_ids: set[str] = set()
+    for index, group in enumerate(groups, start=1):
+        pause = normalize_author_pause_seconds(
+            group[-1].author_pause_after_seconds if group else 0.0
+        )
+        intent_ids: list[str] = []
+        for segment in group:
+            for intent_id in segment.visual_intent_ids:
+                if intent_id not in intent_ids:
+                    intent_ids.append(intent_id)
+        text = _join_pause_block_text(group)
+        # Prefer the first segment id (keeps Intro-/LLM-IDs stable); fall back
+        # to a deterministic prefix only on collision.
+        candidate = (group[0].segment_id or "").strip()
+        if not candidate or candidate in used_ids:
+            candidate = f"{segment_id_prefix}_{index:03d}"
+            suffix = index
+            while candidate in used_ids:
+                suffix += 1
+                candidate = f"{segment_id_prefix}_{suffix:03d}"
+        segment_id = candidate
+        used_ids.add(segment_id)
+
+        if (
+            len(group) == 1
+            and (group[0].text or "").strip() == text
+            and normalize_author_pause_seconds(group[0].author_pause_after_seconds)
+            == pause
+        ):
+            block = group[0].model_copy(
+                update={
+                    "segment_id": segment_id,
+                    "text": text,
+                    "sequence_index": index,
+                    "folder_name": folder_name,
+                    "folder_order_index": order_index,
+                    "visual_intent_ids": intent_ids or list(group[0].visual_intent_ids),
+                    "fact_check_required": bool(group[0].fact_check_required),
+                    "author_pause_after_seconds": pause,
+                    "paragraph_break_after": pause > 0
+                    or bool(group[0].paragraph_break_after),
+                }
+            )
+        else:
+            block = ScriptSegment(
+                segment_id=segment_id,
+                text=text,
+                sequence_index=index,
+                semantic_function=group[0].semantic_function or default_semantic,
+                visual_intent_ids=intent_ids,
+                fact_check_required=any(seg.fact_check_required for seg in group),
+                text_changed=any(seg.text_changed for seg in group),
+                folder_name=folder_name,
+                folder_order_index=order_index,
+                paragraph_break_after=pause > 0,
+                author_pause_after_seconds=pause,
+            )
+        flattened.append(block)
+        for segment in group:
+            id_map[segment.segment_id] = segment_id
+
+    return flattened, id_map
+
+
+def canonicalize_script_document_to_pause_blocks(
+    document: EnhancedScriptDocument,
+) -> dict[str, str]:
+    """Normalize a script to pause-delimited chapter blocks (in place).
+
+    Returns mapping ``old_segment_id -> new_segment_id``.
+    """
+    migrated: list[ScriptSegment] = []
+    for segment in document.segments:
+        migrated.extend(migrate_inline_pause_markers_in_segment(segment))
+
+    folder_order: list[str] = []
+    by_folder: dict[str, list[ScriptSegment]] = {}
+    for segment in migrated:
+        key = segment.folder_name or ""
+        if key not in by_folder:
+            folder_order.append(key)
+            by_folder[key] = []
+        by_folder[key].append(segment)
+
+    new_segments: list[ScriptSegment] = []
+    id_map: dict[str, str] = {}
+    for key in folder_order:
+        folder_segs = by_folder[key]
+        prefix = f"{safe_folder_slug(key)}_segment" if key else "segment"
+        flat, mapping = flatten_folder_segments_to_pause_blocks(
+            folder_segs,
+            folder_name=key,
+            segment_id_prefix=prefix,
+        )
+        new_segments.extend(flat)
+        id_map.update(mapping)
+
+    for index, segment in enumerate(new_segments, start=1):
+        segment.sequence_index = index
+
+    for beat in document.visual_beats:
+        remapped: list[str] = []
+        for segment_id in beat.related_segment_ids:
+            mapped = id_map.get(segment_id, segment_id)
+            if mapped and mapped not in remapped:
+                remapped.append(mapped)
+        beat.related_segment_ids = remapped
+
+    for hint in document.fact_check_hints:
+        if hint.related_segment_id in id_map:
+            hint.related_segment_id = id_map[hint.related_segment_id]
+
+    document.segments = new_segments
+    document.narration_full = join_spoken_segment_texts(document.segments)
+    return id_map

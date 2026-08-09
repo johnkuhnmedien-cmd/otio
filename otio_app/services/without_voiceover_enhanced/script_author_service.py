@@ -65,7 +65,9 @@ from otio_app.services.without_voiceover_enhanced.raw_chapter_style_structure im
 )
 from otio_app.services.without_voiceover_enhanced.script_chapter_text import (
     ChapterDisplayTextError,
+    canonicalize_script_document_to_pause_blocks,
     chapter_display_text,
+    flatten_folder_segments_to_pause_blocks,
     join_spoken_segment_texts,
     normalize_author_pause_seconds,
     parse_chapter_display_text,
@@ -392,7 +394,7 @@ def parse_enhanced_script_response(
                 )
             )
 
-    return EnhancedScriptDocument(
+    document = EnhancedScriptDocument(
         narration_full=narration,
         segments=segments,
         visual_beats=beats,
@@ -402,6 +404,35 @@ def parse_enhanced_script_response(
         forbidden_phrases_found=detect_forbidden_phrases(narration),
         script_status="draft",
     )
+    # Kapitel kanonisch als Text + Autorenpausen speichern (nicht Satz-Segmente).
+    if folder_name:
+        flat, id_map = flatten_folder_segments_to_pause_blocks(
+            document.segments,
+            folder_name=folder_name,
+            segment_id_prefix=f"{safe_folder_slug(folder_name)}_segment",
+        )
+        if flat:
+            for beat in document.visual_beats:
+                remapped: list[str] = []
+                for segment_id in beat.related_segment_ids:
+                    mapped = id_map.get(segment_id, segment_id)
+                    if mapped and mapped not in remapped:
+                        remapped.append(mapped)
+                beat.related_segment_ids = remapped
+            for hint in document.fact_check_hints:
+                if hint.related_segment_id in id_map:
+                    hint.related_segment_id = id_map[hint.related_segment_id]
+            document.segments = flat
+            document.narration_full = join_spoken_segment_texts(document.segments)
+            document.forbidden_phrases_found = detect_forbidden_phrases(
+                document.narration_full
+            )
+    else:
+        canonicalize_script_document_to_pause_blocks(document)
+        document.forbidden_phrases_found = detect_forbidden_phrases(
+            document.narration_full
+        )
+    return document
 
 
 def _invalidate_script_lock(project: Project) -> None:
@@ -504,6 +535,7 @@ def merge_folder_script_into_document(
             or base.source_style_context_hash
         ),
     )
+    canonicalize_script_document_to_pause_blocks(merged)
     return _resequence_document(merged, folder_order)
 
 
