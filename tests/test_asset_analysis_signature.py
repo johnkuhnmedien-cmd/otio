@@ -97,6 +97,44 @@ def test_stale_when_prompt_version_changes(tmp_path: Path) -> None:
     assert "prompt_mismatch" in status.reasons
 
 
+def test_v3_editorial_r1_cache_stale_under_r2_prompt(
+    tmp_path: Path,
+) -> None:
+    """v3-r1-Caches bleiben usable, sind aber bei aktueller r2-Version stale."""
+    media = _write_media(tmp_path / "clip.mp4")
+    assert ASSET_DESCRIPTION_PROMPT_VERSION == "asset_v3_editorial_r2"
+    assert ANALYSIS_SCHEMA_VERSION == "asset-analysis-v3"
+    assert ASSET_SAMPLER_VERSION == "uniform-v1"
+
+    r1_signature = build_analysis_signature(
+        media,
+        resolved_model_id="gemini-test",
+        prompt_version="asset_v3_editorial",
+    )
+    entry = AssetMediaAnalysis(
+        path=str(media),
+        description="R1 Analyse usable",
+        analysis_parse_ok=True,
+        analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
+        description_prompt_version="asset_v3_editorial",
+        analysis_signature=r1_signature,
+    )
+    status = classify_asset_cache_status(
+        entry, media, resolved_model_id="gemini-test"
+    )
+    assert status.status == "stale"
+    assert "prompt_mismatch" in status.reasons
+    assert is_usable_asset_analysis(entry)
+    assert not is_current_asset_analysis(
+        entry, media, resolved_model_id="gemini-test"
+    )
+    # Schema/Sampler der aktuellen Foundation bleiben unverändert.
+    current_sig = build_analysis_signature(media, resolved_model_id="gemini-test")
+    assert current_sig.analysis_schema_version == ANALYSIS_SCHEMA_VERSION
+    assert current_sig.sampler_version == ASSET_SAMPLER_VERSION
+    assert current_sig.prompt_version == ASSET_DESCRIPTION_PROMPT_VERSION
+
+
 def test_stale_when_schema_version_changes(tmp_path: Path) -> None:
     media = _write_media(tmp_path / "clip.mp4")
     signature = build_analysis_signature(media, resolved_model_id="gemini-test")

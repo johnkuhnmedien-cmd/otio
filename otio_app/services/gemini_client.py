@@ -21,7 +21,7 @@ from otio_app.defaults import (
     MATCH_QUALITY_UNPASSEND,
 )
 
-ASSET_DESCRIPTION_PROMPT_VERSION = "asset_v3_editorial"
+ASSET_DESCRIPTION_PROMPT_VERSION = "asset_v3_editorial_r2"
 _CAPTION_MAX_CHARS = 180
 _ALLOWED_MOTION = frozenset(
     {"static", "pan", "tilt", "tracking", "drone", "handheld", "zoom", "unknown"}
@@ -103,7 +103,7 @@ def _extract_json(text: str) -> Any:
 
 @dataclass(frozen=True)
 class MediaFrameAnalysis:
-    """Strukturierte Asset-Frame-Analyse (asset_v3_editorial)."""
+    """Strukturierte Asset-Frame-Analyse (asset_v3_editorial_r2)."""
 
     description: str = ""
     caption: str = ""
@@ -206,69 +206,146 @@ class MediaFrameAnalysis:
 def build_asset_frame_analysis_prompt(
     media_name: str, folder_name: str, language: str
 ) -> str:
+    """Baut den Asset-Frame-Prompt (v3 editorial r2).
+
+    ``media_name`` und ``folder_name`` bleiben aus Kompatibilitätsgründen Parameter,
+    werden aber bewusst nicht in den inhaltlichen Prompt interpoliert — sie sind
+    nur technische Identifikatoren und keine visuelle Evidenz.
+    """
+    del media_name, folder_name
     return (
-        f"Du analysierst die Mediendatei '{media_name}' aus dem Ordner '{folder_name}' "
-        f"anhand der bereitgestellten Frames. Sprache für Freitext: {language}.\n\n"
-        "Antworte NUR mit einem JSON-Objekt in exakt dieser Struktur:\n\n"
+        "Du analysierst ausschließlich die bereitgestellten Frames einer Mediendatei. "
+        f"Sprache für Freitext: {language}.\n\n"
+        "WICHTIG — Keine Metadaten als Inhalt:\n"
+        "- Dateiname, Ordnername, Projektname und Pfad sind keine visuelle Evidenz.\n"
+        "- Niemals Ort, Motiv, Person, Ereignis oder Inhalt aus solchen Identifikatoren "
+        "ableiten.\n"
+        "- Nur beschreiben, was in den Frames sichtbar ist.\n"
+        "- Ortsnamen nur nennen, wenn sie im Bild selbst lesbar sind oder ein visuell "
+        "unverwechselbares Wahrzeichen mit hoher Sicherheit erkannt wird.\n"
+        "- Bei Unsicherheit generisch bleiben (z. B. Berglandschaft, historisches Dorf, "
+        "Sumpflandschaft).\n\n"
+        "Antworte NUR mit einem JSON-Objekt in exakt dieser Struktur.\n"
+        "Die Platzhalter <string>, <int_0_100>, <float_0_1>, <enum_...> und null sind "
+        "Formhinweise — keine Beispielwerte zum Kopieren und keine Score-Anker:\n\n"
         "{\n"
-        '  "description": "...",\n'
-        '  "caption": "...",\n'
-        '  "content_tags": ["..."],\n'
+        '  "description": "<string>",\n'
+        '  "caption": "<string>",\n'
+        '  "content_tags": ["<string>"],\n'
         '  "motion": {\n'
-        '    "type": "unknown",\n'
-        '    "intensity": null,\n'
-        '    "direction": "unknown",\n'
-        '    "confidence": null\n'
+        '    "type": "<enum_motion_type>",\n'
+        '    "intensity": "<int_0_100_or_null>",\n'
+        '    "direction": "<enum_motion_direction>",\n'
+        '    "confidence": "<float_0_1_or_null>"\n'
         "  },\n"
         '  "framing": {\n'
-        '    "type": "wide",\n'
-        '    "shot_scale": "wide"\n'
+        '    "type": "<enum_framing_type>",\n'
+        '    "shot_scale": "<enum_shot_scale>"\n'
         "  },\n"
         '  "look": {\n'
-        '    "brightness": 50,\n'
-        '    "contrast": 50,\n'
-        '    "saturation": 50,\n'
-        '    "color_temperature": "neutral",\n'
-        '    "dominant_colors": ["stone", "blue"]\n'
+        '    "brightness": "<int_0_100_or_null>",\n'
+        '    "contrast": "<int_0_100_or_null>",\n'
+        '    "saturation": "<int_0_100_or_null>",\n'
+        '    "color_temperature": "<enum_color_temperature>",\n'
+        '    "dominant_colors": ["<string>"]\n'
         "  },\n"
         '  "people": false,\n'
         '  "people_action": null,\n'
         '  "quality": {\n'
-        '    "technical_quality": 80,\n'
-        '    "composition_quality": 80,\n'
-        '    "visual_appeal": 80,\n'
-        '    "subject_clarity": 80,\n'
-        '    "hero_potential": 70,\n'
-        '    "defect_severity": 0\n'
+        '    "technical_quality": "<int_0_100>",\n'
+        '    "composition_quality": "<int_0_100>",\n'
+        '    "visual_appeal": "<int_0_100>",\n'
+        '    "subject_clarity": "<int_0_100>",\n'
+        '    "hero_potential": "<int_0_100>",\n'
+        '    "defect_severity": "<int_0_100>"\n'
         "  },\n"
         '  "defects": [],\n'
-        '  "confidence": 0.85\n'
+        '  "confidence": "<float_0_1>"\n'
         "}\n\n"
-        "Feldregeln:\n"
-        "- caption: faktisch, maximal 180 Zeichen, keine Werbesprache.\n"
-        "- description: 2 bis 4 sachliche Sätze zu Motiv, Licht, Farben, Stimmung.\n"
-        "- content_tags: 3 bis 10 kurze, sprachlich stabile Begriffe.\n"
-        "- Keine erfundenen Ortsangaben; Ortsnamen nur wenn eindeutig erkennbar "
-        "oder durch den Ordnernamen naheliegend.\n"
-        "- quality: Scores 0–100. Technische Qualität und Schönheit getrennt bewerten; "
-        "Schönheit über composition_quality und visual_appeal. "
-        "hero_potential = Eignung als visuell prägender Shot. "
-        "Semantische Passung zu einem späteren Voice-over nicht bewerten.\n"
-        "- motion.type: static|pan|tilt|tracking|drone|handheld|zoom|unknown. "
-        "Aus wenigen Standframes keine sichere Kamerabewegung behaupten; "
-        "im Zweifel unknown und confidence/intensity null.\n"
+        "Gemeinsame Score-Skala (0–100) für quality.*:\n"
+        "- 0–19: praktisch unbrauchbar oder massiv beeinträchtigt\n"
+        "- 20–39: deutlich problematisch\n"
+        "- 40–59: durchschnittlich, eingeschränkt oder nur bedingt brauchbar\n"
+        "- 60–74: solide bis gut\n"
+        "- 75–89: sehr gut\n"
+        "- 90–100: außergewöhnlich; selten vergeben und nur bei klarer visueller Evidenz\n"
+        "Score-Regeln:\n"
+        "- Nicht automatisch bei 80 beginnen und keine Beispielzahlen kopieren.\n"
+        "- Jeden Score zuerst qualitativ einordnen, danach die Zahl wählen.\n"
+        "- Werte >=90 nur für außergewöhnliches Material.\n"
+        "- Keine künstlichen Unterschiede erfinden, wenn zwei Assets ähnlich wirken.\n"
+        "- Auflösung, Dateigröße oder vermutete Bitrate sind KEINE sichtbare "
+        "technische Qualität; nur die gelieferten Frames bewerten.\n\n"
+        "quality-Felder getrennt:\n"
+        "- technical_quality: sichtbare Schärfe, Belichtung, Artefakte, Stabilität, "
+        "technische Sauberkeit — nicht Schönheit oder Motivwert.\n"
+        "- composition_quality: Bildaufbau, Balance, Ebenen, Blickführung, "
+        "Motivplatzierung, nutzbarer Raum.\n"
+        "- visual_appeal: ästhetische Wirkung von Licht, Farbe, Atmosphäre und Motiv.\n"
+        "- subject_clarity: wie eindeutig und gut lesbar das zentrale Motiv ist.\n"
+        "- hero_potential: Eignung als visuell prägender Vollbild-Shot, Opener oder "
+        "Höhepunkt — keine semantische Passung zu einem späteren Voice-over.\n"
+        "- defect_severity: 0 wenn kein sichtbarer Defekt; sonst konsistent mit dem "
+        "schwersten defects-Eintrag.\n\n"
+        "Freitextfelder (unterschiedliche Aufgaben):\n"
+        "- description: 2–3 sachliche Sätze zu räumlichem Aufbau, zentralen Motiven, "
+        "Licht, Atmosphäre und sichtbarer Handlung. Keine Taglisten wiederholen, "
+        "keine spekulativen Orte.\n"
+        "- caption: ein kurzer Retrieval-Satz, maximal 180 Zeichen; primäres Motiv + "
+        "Perspektive + wichtigste sichtbare Handlung; keine Werbesprache, keine "
+        "Dateimetadaten.\n"
+        "- content_tags: 3–8 kurze Suchbegriffe; keine vollständigen Sätze; keine "
+        "Ortsnamen ohne sichtbaren Beleg; keine redundanten Singular-/Plural- oder "
+        "Synonymvarianten; keine Qualitätsurteile (schön, hochwertig, cinematisch).\n\n"
+        "framing.type = Perspektive / dominanter Aufnahmetyp "
+        "(close|medium|wide|aerial|pov):\n"
+        "- aerial: eindeutig erhöhte Luft-/Drohnenperspektive\n"
+        "- pov: sichtbare Ich-/Fahrzeug-/Körperperspektive "
+        "(z. B. Kajakbug im Vordergrund)\n"
+        "- close: bodennahe/normale Perspektive mit engem Motiv\n"
+        "- medium: bodennahe/normale Perspektive mit mittlerer Motivdistanz\n"
+        "- wide: bodennahe/normale Perspektive mit weiter Gesamtansicht\n"
+        "Priorität für framing.type:\n"
+        "1) eindeutig aerial → aerial\n"
+        "2) sonst eindeutig subjektive POV → pov\n"
+        "3) sonst close|medium|wide nach Bildausschnitt\n"
+        "framing.shot_scale unabhängig bestimmen "
+        "(detail|close|medium|wide|extreme_wide|unknown).\n"
+        "Beispiele (nur Orientierung, nicht kopieren):\n"
+        "- Drohnenansicht eines Dorfs: type=aerial, shot_scale=wide oder extreme_wide\n"
+        "- Kajakbug aus Fahrersicht: type=pov, shot_scale=wide\n"
+        "- bildfüllende Hausfassade: type=medium oder close, "
+        "shot_scale=medium oder close\n"
+        "- normale Landschaft: type=wide, shot_scale=wide oder extreme_wide\n\n"
+        "motion beschreibt NUR Kamerabewegung, nicht Motivbewegung.\n"
+        "- motion.type: static|pan|tilt|tracking|drone|handheld|zoom|unknown\n"
         "- motion.direction: left_to_right|right_to_left|forward|backward|up|down|"
-        "none|unknown.\n"
-        "- framing.type: close|medium|wide|aerial|pov.\n"
-        "- framing.shot_scale: detail|close|medium|wide|extreme_wide|unknown.\n"
-        "- look.color_temperature: warm|neutral|cool|mixed|unknown. "
-        "Look-Werte dürfen null sein, wenn unsicher.\n"
+        "none|unknown\n"
+        "- Wasserfall, fahrendes Auto oder wehende Bäume sind keine Kamerabewegung.\n"
+        "- drone nur, wenn sowohl Luftperspektive als auch eine Veränderung zwischen "
+        "den Frames eine Drohnenbewegung nahelegt.\n"
+        "- Statische Luftaufnahme: framing.type=aerial und motion.type=static oder "
+        "unknown — nicht automatisch motion.type=drone.\n"
+        "- Bei wenigen Standframes im Zweifel unknown; intensity/confidence dann null.\n\n"
+        "look.color_temperature: warm|neutral|cool|mixed|unknown. "
+        "Look-Zahlenwerte dürfen null sein, wenn unsicher.\n"
         "- people: true, wenn Personen erkennbar sind; people_action dann kurz, sonst null.\n"
         "- defects: Liste von Objekten "
         '{ "type": "watermark|logo|blur|shake|black_frame|compression|exposure|'
         'obstruction|other", "severity": 0-100, "note": "..." }. '
         "Leere Liste wenn keine Defekte.\n"
-        "- confidence: 0.0–1.0 für die Verlässlichkeit der gesamten Frame-Analyse.\n"
+        "- Lensflare ist nicht automatisch ein Defekt; nur als exposure/obstruction "
+        "werten, wenn Bildinformation wirklich störend verdeckt oder technisch "
+        "unbrauchbar wird.\n\n"
+        "confidence (0.0–1.0) für die Verlässlichkeit der gesamten Frame-Analyse:\n"
+        "- 0.90–1.00: nahezu alle wesentlichen Aussagen eindeutig sichtbar; selten\n"
+        "- 0.70–0.89: Motiv sicher, einzelne Eigenschaften oder zeitliche Aussagen unsicher\n"
+        "- 0.50–0.69: mehrdeutige Frames oder wichtige Unsicherheiten\n"
+        "- unter 0.50: Analyse nur eingeschränkt belastbar\n"
+        "- 0.95 nicht als Standard verwenden.\n"
+        "- Unsichere motion-Aussage muss die Gesamt-Confidence nicht zerstören, "
+        "darf aber keine rundum nahezu sichere Analyse vortäuschen.\n"
+        "- Confidence nicht künstlich variieren; sie soll die Beleglage ausdrücken.\n"
         "- Unbekannte Werte als null beziehungsweise unknown."
     )
 
