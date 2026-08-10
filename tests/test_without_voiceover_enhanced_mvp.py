@@ -283,8 +283,13 @@ def test_parse_script_separates_visual_intents_and_marks_unverified() -> None:
     doc = parse_enhanced_script_response(raw)
     assert "Das Bild zeigt" not in doc.narration_full
     assert doc.visual_intents[0].intent_id == "intent_001"
+    # Ohne Autorenpause werden Satz-Segmente zu einem Kapitelblock.
+    assert len(doc.segments) == 1
     assert doc.segments[0].text != doc.visual_intents[0].description
-    assert any(h.related_segment_id == "segment_002" for h in doc.fact_check_hints)
+    assert doc.segments[0].fact_check_required is True
+    assert "intent_001" in doc.segments[0].visual_intent_ids
+    assert any(h.related_segment_id == "segment_001" for h in doc.fact_check_hints)
+    assert doc.visual_beats[0].related_segment_ids == ["segment_001"]
 
 
 def test_script_lock_version_and_text_change_invalidates(tmp_path: Path) -> None:
@@ -592,7 +597,12 @@ def test_final_plan_rejects_unknown_ids_and_resolves_deterministically(tmp_path:
     draft = EnhancedScriptDocument(
         narration_full="Eins. Zwei.",
         segments=[
-            ScriptSegment(segment_id="segment_001", text="Eins.", sequence_index=1),
+            ScriptSegment(
+                segment_id="segment_001",
+                text="Eins.",
+                sequence_index=1,
+                author_pause_after_seconds=2.0,
+            ),
             ScriptSegment(segment_id="segment_002", text="Zwei.", sequence_index=2),
         ],
     )

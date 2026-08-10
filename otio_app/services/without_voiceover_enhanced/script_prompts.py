@@ -220,7 +220,7 @@ style_reference_usage:
 
 AUTHOR PAUSES
 - When the Raw Chapter Reference uses explicit timed pauses, record that rhythm with
-  author_pause_after_seconds on segments (editorial metadata only).
+  author_pause_after_seconds on segments (for ElevenLabs TTS pause tags).
 - Use 0 when no pause follows.
 - Use the reference's observed duration range.
 - Shorter pauses connect closely related facts.
@@ -228,8 +228,10 @@ AUTHOR PAUSES
   strong visual reveal, or completed subject block.
 - Do not use the same duration mechanically after every segment.
 - Do not write [pause X seconds] inside segment.text or narration_full.
-- The application does NOT inject pauses into TTS or timeline audio; the editor
-  inserts pauses into the single chapter audio file.
+- The application maps author_pause_after_seconds to [pause N seconds] markers
+  in the chapter TTS call (same form as in the Folder Voice-over editor).
+- Cut planning uses measured ElevenLabs timestamps from the chapter audio —
+  not these pause fields as cut instructions.
 - Every positive author pause should normally also set paragraph_break_after=true.
 """
 

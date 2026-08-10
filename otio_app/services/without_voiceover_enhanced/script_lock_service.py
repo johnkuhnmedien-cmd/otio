@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from otio_app.models import Project
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
@@ -19,9 +20,9 @@ from otio_app.services.without_voiceover_enhanced.paths import (
 from otio_app.services.without_voiceover_enhanced.script_chapter_text import (
     AUTHOR_PAUSE_MARKER_RE,
     ChapterDisplayTextError,
+    canonicalize_script_document_to_pause_blocks,
     chapter_display_text,
     join_spoken_segment_texts,
-    migrate_inline_pause_markers_in_segment,
     normalize_author_pause_seconds,
     parse_chapter_display_text,
     strip_author_pause_markers_from_text,
@@ -34,16 +35,13 @@ class ScriptLockError(RuntimeError):
 
 
 def _normalize_document_pause_markers(document: EnhancedScriptDocument) -> None:
-    """Zeilenweise Pausemarker → author_pause_after_seconds; narration bereinigen.
+    """Pause-Blöcke kanonisieren; narration bereinigen.
 
-    Verbleibende Inline-Marker (z. B. mitten im Intro-Fließtext) bleiben in
-    segment.text und werden beim TTS für eleven_v3 in Bracket-Tags umgewandelt.
+    Feingranulare LLM-Segmente ohne Autorenpause werden zu Kapitelblöcken
+    zusammengeführt. Verbleibende Inline-Marker (z. B. Intro-Fließtext) bleiben
+    in segment.text und gehen beim TTS an eleven_v3.
     """
-    migrated: list[ScriptSegment] = []
-    for segment in document.segments:
-        migrated.extend(migrate_inline_pause_markers_in_segment(segment))
-    document.segments = migrated
-    document.narration_full = join_spoken_segment_texts(document.segments)
+    canonicalize_script_document_to_pause_blocks(document)
 
 
 def _validate_author_pauses_for_lock(document: EnhancedScriptDocument) -> None:
