@@ -228,8 +228,8 @@ AUTHOR PAUSES
   strong visual reveal, or completed subject block.
 - Do not use the same duration mechanically after every segment.
 - Do not write [pause X seconds] inside segment.text or narration_full.
-- The application maps author_pause_after_seconds to eleven_v3 tags
-  ([short pause] / [pause] / [long pause]) in the chapter TTS call.
+- The application maps author_pause_after_seconds to [pause N seconds] markers
+  in the chapter TTS call (same form as in the Folder Voice-over editor).
 - Cut planning uses measured ElevenLabs timestamps from the chapter audio —
   not these pause fields as cut instructions.
 - Every positive author pause should normally also set paragraph_break_after=true.

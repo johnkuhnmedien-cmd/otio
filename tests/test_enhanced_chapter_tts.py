@@ -142,7 +142,7 @@ def test_folder_tts_uses_single_elevenlabs_call(
 
     doc = synthesize_folder_script_audio(project, "Dublin")
     assert len(calls) == 1
-    assert calls[0] == "One. [pause] Two. [short pause] Three."
+    assert calls[0] == "One. [pause 3 seconds] Two. [pause 2 seconds] Three."
     assert len(doc.segments) == 3
     assert all(item.audio_status == "valid" for item in doc.segments)
     chapter_file = chapter_audio_path(project, "Dublin", ".wav")

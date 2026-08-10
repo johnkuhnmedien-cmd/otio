@@ -1,11 +1,10 @@
-"""ElevenLabs-TTS-Text für Enhanced: Autorenpausen → eleven_v3-Tags.
+"""ElevenLabs-TTS-Text für Enhanced.
 
-Wie im klassischen Folder-Voice-over (tts_text_builder): Nur `eleven_v3`
-versteht Bracket-Pause-Tags. Exakte Sekundenzahlen wie
-`[pause 3 seconds]` sind über die API nicht steuerbar — sie werden auf
-`[short pause]` / `[pause]` / `[long pause]` abgebildet.
+Autorenpausen aus dem Folder-Voice-over gehen als ``[pause N seconds]``
+unverändert in den Kapitel-TTS-Call (kein Mapping auf short/long).
 
-Für andere Modelle werden Marker entfernt (sonst würden sie vorgelesen).
+Nur ``eleven_v3`` bekommt Bracket-Pause-Tags. Für andere Modelle werden
+Marker entfernt (sonst würden sie vorgelesen).
 
 Der Cut-LLM bekommt die gemessenen ElevenLabs-Timestamps der fertigen
 Kapitel-WAV und braucht die Pause-Tags nicht als Schnittvorgabe.
@@ -24,6 +23,7 @@ from otio_app.defaults import (
 )
 from otio_app.services.without_voiceover_enhanced.script_chapter_text import (
     AUTHOR_PAUSE_MARKER_RE,
+    format_author_pause_marker,
     normalize_author_pause_seconds,
 )
 
@@ -37,7 +37,11 @@ __all__ = [
 
 
 def map_author_pause_seconds_to_v3_tag(seconds: float) -> str:
-    """Mappt gewünschte Sekunden auf den nächsten eleven_v3-Pause-Tag."""
+    """Legacy-Hilfsfunktion: qualitative v3-Tags (short/medium/long).
+
+    Der Enhanced-Kapitel-TTS-Flow nutzt stattdessen
+    ``format_author_pause_marker`` / ``[pause N seconds]``.
+    """
     value = normalize_author_pause_seconds(seconds)
     if value <= 0:
         return ""
@@ -55,7 +59,11 @@ def strip_author_pause_markers(text: str) -> str:
 
 
 def replace_timed_pause_markers_for_tts(text: str, *, model_id: str) -> str:
-    """Ersetzt/entfernt numerische Pausemarker je nach ElevenLabs-Modell."""
+    """Normalisiert/entfernt numerische Pausemarker je nach ElevenLabs-Modell.
+
+    Bei ``eleven_v3`` bleiben ``[pause N seconds]`` erhalten (kanonische Form).
+    Andere Modelle: Marker entfernen.
+    """
 
     def _sub(match: re.Match[str]) -> str:
         raw = match.group("seconds").replace(",", ".")
@@ -65,12 +73,10 @@ def replace_timed_pause_markers_for_tts(text: str, *, model_id: str) -> str:
             return " "
         if model_id != ELEVENLABS_MODEL_ID_V3:
             return " "
-        tag = map_author_pause_seconds_to_v3_tag(seconds)
+        tag = format_author_pause_marker(seconds)
         return f" {tag} " if tag else " "
 
     replaced = AUTHOR_PAUSE_MARKER_RE.sub(_sub, text or "")
-    # Zeilenumbrüche um Marker herum zu Leerzeichen verdichten, Inhalt sonst
-    # möglichst belassen (Absätze bleiben für TTS unkritisch).
     collapsed = re.sub(r"[ \t]*\n[ \t]*", "\n", replaced)
     collapsed = re.sub(r"[ \t]{2,}", " ", collapsed)
     return collapsed.strip()
@@ -89,11 +95,13 @@ def build_segment_tts_text(
     pause = normalize_author_pause_seconds(author_pause_after_seconds)
     if pause <= 0:
         return body
-    tag = map_author_pause_seconds_to_v3_tag(pause)
+    tag = format_author_pause_marker(pause)
     if not tag:
         return body
-    # Bereits am Ende vorhanden (z. B. Inline-Marker am Segmentende) → nicht doppelt.
-    if body.rstrip().endswith(tag):
+    stripped = body.rstrip()
+    # Bereits am Ende vorhanden (gleiche oder andere Schreibweise) → nicht doppelt.
+    matches = list(AUTHOR_PAUSE_MARKER_RE.finditer(stripped))
+    if matches and matches[-1].end() == len(stripped):
         return body
     if not body:
         return tag
@@ -108,8 +116,9 @@ def build_chapter_tts_text(
     """Baut den Kapitel-TTS-Text für **einen** ElevenLabs-Call.
 
     Returns:
-        full_tts_text: gesamter an ElevenLabs gesendeter Text inkl. v3-Pause-Tags
-        align_parts: ``(segment_id, spoken_body)`` ohne trailing Pause-Tag —
+        full_tts_text: gesamter an ElevenLabs gesendeter Text inkl.
+            ``[pause N seconds]`` (bei eleven_v3)
+        align_parts: ``(segment_id, spoken_body)`` ohne trailing Pause-Marker —
             für Character-Timestamp-Alignment gegen ``full_tts_text``
     """
     pieces: list[str] = []
@@ -131,6 +140,8 @@ def build_chapter_tts_text(
         if not full_piece.strip():
             continue
         pieces.append(full_piece.strip())
+        # Body ohne trailing author_pause_after — Inline-Marker bleiben enthalten,
+        # damit Character-Timestamps gegen full_tts_text matchen.
         align_parts.append((segment_id, body.strip()))
     if not pieces:
         return "", []

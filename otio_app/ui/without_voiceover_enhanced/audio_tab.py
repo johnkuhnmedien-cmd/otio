@@ -66,9 +66,9 @@ def render_enhanced_audio_page() -> None:
     st.header("⑥ Audio / ElevenLabs (Enhanced)")
     st.caption(
         "Nur gesperrte Skripte. Jedes Kapitel wird in **einem** ElevenLabs-Call "
-        "vertont (Intro zuerst). Autorenpausen werden als eleven_v3-Tags "
-        "(`[short pause]` / `[pause]` / `[long pause]`) in den Kapitel-TTS-Text "
-        "geschrieben. Der Cut-LLM arbeitet mit den gemessenen Timestamps."
+        "vertont (Intro zuerst). Autorenpausen gehen als "
+        "`[pause N seconds]` unverändert in den Kapitel-TTS-Text "
+        "(wie im Folder-Voice-over). Der Cut-LLM arbeitet mit den gemessenen Timestamps."
     )
     project = get_enhanced_project()
     if project is None:

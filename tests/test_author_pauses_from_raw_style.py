@@ -92,7 +92,7 @@ def test_prompt_requires_author_pause_field_in_raw_mode() -> None:
     assert "author_pause_after_seconds" in prompt
     assert "AUTHOR PAUSES" in prompt
     assert "Do not write [pause X seconds] inside segment.text" in prompt
-    assert "eleven_v3 tags" in prompt
+    assert "[pause N seconds]" in prompt
     assert "measured ElevenLabs timestamps" in prompt
 
 
@@ -194,7 +194,7 @@ def test_style_guard_flags_missing_author_pauses() -> None:
     )
 
 
-def test_chapter_tts_text_injects_v3_pause_tags() -> None:
+def test_chapter_tts_text_keeps_numeric_pause_markers() -> None:
     segments = [
         ScriptSegment(
             segment_id="a_001",
@@ -219,12 +219,17 @@ def test_chapter_tts_text_injects_v3_pause_tags() -> None:
         ),
     ]
     full, parts = build_chapter_tts_text(segments, model_id="eleven_v3")
-    assert full == "Fact one. [pause] Fact two. [short pause] Fact three."
+    assert full == (
+        "Fact one. [pause 3 seconds] Fact two. [pause 2 seconds] Fact three."
+    )
+    assert "[short pause]" not in full
+    assert "[long pause]" not in full
     assert [sid for sid, _ in parts] == ["a_001", "a_002", "a_003"]
     assert [body for _, body in parts] == ["Fact one.", "Fact two.", "Fact three."]
 
 
-def test_tts_text_maps_pause_markers_to_v3_tags() -> None:
+def test_tts_text_keeps_numeric_pause_markers() -> None:
+    # Legacy qualitative mapper remains available, but chapter TTS does not use it.
     assert map_author_pause_seconds_to_v3_tag(2.0) == "[short pause]"
     assert map_author_pause_seconds_to_v3_tag(3.0) == "[pause]"
     assert map_author_pause_seconds_to_v3_tag(4.0) == "[long pause]"
@@ -234,15 +239,15 @@ def test_tts_text_maps_pause_markers_to_v3_tags() -> None:
         author_pause_after_seconds=3.0,
         model_id="eleven_v3",
     )
-    assert with_field == "Achill Island lies west. [pause]"
+    assert with_field == "Achill Island lies west. [pause 3 seconds]"
 
     with_inline = build_segment_tts_text(
         text="Fact one.\n\n[pause 3 seconds]\n\nFact two.",
         author_pause_after_seconds=0.0,
         model_id="eleven_v3",
     )
-    assert "[pause]" in with_inline
-    assert "[pause 3 seconds]" not in with_inline
+    assert "[pause 3 seconds]" in with_inline
+    assert "[short pause]" not in with_inline
     assert "Fact one." in with_inline and "Fact two." in with_inline
 
     non_v3 = build_segment_tts_text(
