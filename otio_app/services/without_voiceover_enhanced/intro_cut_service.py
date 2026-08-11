@@ -133,6 +133,27 @@ def build_bundled_inventory_for_intro(
 
 
 _INTRO_DESC_MAX_CHARS = 280
+_INTRO_TAG_LIMIT = 3
+_INTRO_COLOR_LIMIT = 2
+
+
+def _intro_limited_strings(values: Any, *, limit: int) -> list[str]:
+    if not isinstance(values, (list, tuple)):
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in values:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _slim_intro_asset_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -151,10 +172,40 @@ def _slim_intro_asset_row(row: dict[str, Any]) -> dict[str, Any]:
         desc = desc[: _INTRO_DESC_MAX_CHARS - 3].rstrip() + "..."
     if desc:
         out["description"] = desc
-    for key in ("motion", "framing", "people"):
+    tags = _intro_limited_strings(row.get("tags"), limit=_INTRO_TAG_LIMIT)
+    if tags:
+        out["tags"] = tags
+    for key in ("motion", "framing", "shot_scale", "people"):
         value = row.get(key)
         if value not in (None, "", [], {}):
             out[key] = value
+    # Intro: nur kompakte Quality-/Look-Teilmenge (kein composition/clarity/…).
+    quality_src = row.get("quality")
+    if isinstance(quality_src, dict):
+        quality: dict[str, Any] = {}
+        for key in ("technical", "appeal", "hero", "defect"):
+            value = quality_src.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                quality[key] = int(value)
+            except (TypeError, ValueError):
+                continue
+        if quality:
+            out["quality"] = quality
+    look_src = row.get("look")
+    if isinstance(look_src, dict):
+        look: dict[str, Any] = {}
+        temperature = str(look_src.get("temperature") or "").strip()
+        if temperature and temperature != "unknown":
+            look["temperature"] = temperature
+        colors = _intro_limited_strings(
+            look_src.get("colors"), limit=_INTRO_COLOR_LIMIT
+        )
+        if colors:
+            look["colors"] = colors
+        if look:
+            out["look"] = look
     return out
 
 

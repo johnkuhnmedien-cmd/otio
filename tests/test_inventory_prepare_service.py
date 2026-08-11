@@ -124,7 +124,7 @@ def test_prepare_writes_duration_and_slim(tmp_path: Path, monkeypatch) -> None:
     by_id = {a["id"]: a for a in slim["assets"]}
     assert by_id["asset_canyon_clip"]["duration_s"] == 14.25
     assert by_id["asset_canyon_clip"]["usable_in_s"] == 0.08
-    assert by_id["asset_canyon_still"]["duration_s"] is None
+    assert "duration_s" not in by_id["asset_canyon_still"]
 
     # Zweiter Lauf ohne force: nichts neu messen.
     report2 = prepare_inventories_for_cut_plan(project)

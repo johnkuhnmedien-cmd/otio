@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
     INTRO_CLOSING_HOLD_DEFAULT_SEC,
     INTRO_CLOSING_HOLD_MAX_SEC,
     INTRO_OPENING_HOLD_SEC,
+    _slim_intro_asset_row,
     clamp_intro_closing_hold,
     enforce_intro_strong_only,
     filter_resolved_timeline_to_intro,
@@ -27,6 +30,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     UnifiedCutPlanDocument,
 )
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
+    CUT_ASSET_SELECTION_PROMPT_VERSION,
     build_intro_unified_cut_prompt,
 )
 
@@ -88,6 +92,128 @@ def test_format_bundled_inventory_for_prompt_drops_duplicate_and_trims() -> None
     assert text.count("yo_01") == 1
 
 
+def test_slim_intro_asset_row_keeps_compact_v2_subset() -> None:
+    row = {
+        "local_asset_id": "asset_a",
+        "asset_id": "asset_a",
+        "folder": "Albarracín",
+        "file": "a.mov",
+        "media_type": "video",
+        "duration_seconds": 24.8,
+        "description": "Luftaufnahme einer historischen Bergstadt.",
+        "tags": ["a", "b", "c", "d", "e"],
+        "motion": "drone",
+        "motion_intensity": 35,
+        "motion_direction": "forward",
+        "framing": "aerial",
+        "shot_scale": "wide",
+        "quality": {
+            "technical": 82,
+            "composition": 85,
+            "appeal": 86,
+            "clarity": 88,
+            "hero": 85,
+            "defect": 0,
+        },
+        "look": {
+            "brightness": 65,
+            "contrast": 70,
+            "saturation": 60,
+            "temperature": "warm",
+            "colors": ["Ziegelrot", "Beige", "Rotbraun"],
+        },
+        "people": False,
+        "analysis_confidence": 0.95,
+    }
+    out = _slim_intro_asset_row(row)
+    assert out["local_asset_id"] == "asset_a"
+    assert out["tags"] == ["a", "b", "c"]
+    assert out["shot_scale"] == "wide"
+    assert out["quality"] == {
+        "technical": 82,
+        "appeal": 86,
+        "hero": 85,
+        "defect": 0,
+    }
+    assert out["look"] == {"temperature": "warm", "colors": ["Ziegelrot", "Beige"]}
+    assert "composition" not in out["quality"]
+    assert "clarity" not in out["quality"]
+    assert "brightness" not in out["look"]
+    assert "contrast" not in out["look"]
+    assert "saturation" not in out["look"]
+    assert "motion_intensity" not in out
+    assert "analysis_confidence" not in out
+    assert "confidence" not in out
+
+
+def test_intro_bundled_prompt_stays_compact_for_many_chapters() -> None:
+    chapters: dict[str, list[dict]] = {}
+    all_assets: list[dict] = []
+    for i in range(12):
+        folder = f"Chapter_{i:02d}"
+        rows = []
+        for j in range(8):
+            body_row = {
+                "local_asset_id": f"{folder}_asset_{j}",
+                "asset_id": f"{folder}_asset_{j}",
+                "folder": folder,
+                "file": f"{folder}_{j}.mov",
+                "media_type": "video",
+                "duration_seconds": 10.0 + j,
+                "description": f"Scenic view of {folder} landmark {j}.",
+                "tags": [f"tag{k}" for k in range(6)],
+                "motion": "pan",
+                "motion_intensity": 20,
+                "motion_direction": "left",
+                "framing": "wide",
+                "shot_scale": "wide",
+                "quality": {
+                    "technical": 70,
+                    "composition": 71,
+                    "appeal": 72,
+                    "clarity": 73,
+                    "hero": 74,
+                    "defect": 0,
+                },
+                "look": {
+                    "brightness": 50,
+                    "contrast": 50,
+                    "saturation": 50,
+                    "temperature": "neutral",
+                    "colors": ["Grün", "Blau", "Braun"],
+                },
+                "people": False,
+            }
+            rows.append(body_row)
+            all_assets.append(body_row)
+        chapters[folder] = rows
+    bundled = {
+        "schema_version": "enhanced-intro-bundled-inventory-v1",
+        "chapter_count": len(chapters),
+        "asset_count": len(all_assets),
+        "chapters": chapters,
+        "all_assets": all_assets,
+    }
+    text = format_bundled_inventory_for_prompt(bundled)
+    payload = json.loads(text)
+    assert "all_assets" not in payload
+    assert payload["asset_count"] == 96
+    sample = payload["chapters"]["Chapter_00"][0]
+    assert len(sample["tags"]) == 3
+    assert set(sample["quality"]) <= {"technical", "appeal", "hero", "defect"}
+    assert "composition" not in sample["quality"]
+    assert "clarity" not in sample["quality"]
+    assert set(sample["look"]) <= {"temperature", "colors"}
+    assert len(sample["look"]["colors"]) == 2
+    # Keine großen redundanten Strukturen: Prompt ohne Duplikat, kompakter als
+    # chapters+all_assets Body-Dump.
+    naive = json.dumps(bundled, ensure_ascii=False)
+    assert len(text) < len(naive) * 0.65
+    assert text.count("composition") == 0
+    assert text.count("clarity") == 0
+    assert text.count("brightness") == 0
+
+
 def test_intro_prompt_rules() -> None:
     prompt = build_intro_unified_cut_prompt(
         locked_script_json="{}",
@@ -141,6 +267,11 @@ def test_intro_prompt_rules() -> None:
     assert "ENUMERATION PACING" in prompt
     assert "Pulled pause_directives are DISABLED" in prompt
     assert "Antelope" in prompt
+    assert CUT_ASSET_SELECTION_PROMPT_VERSION == "cut-asset-selection-v2"
+    assert "ASSET SELECTION FROM SLIM INVENTORY" in prompt
+    assert "hero and appeal help opener/closing" in prompt.lower() or (
+        "Intro / closing note" in prompt
+    )
 
 
 def test_intro_prompt_uses_configured_hold_timings() -> None:

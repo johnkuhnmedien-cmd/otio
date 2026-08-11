@@ -43,6 +43,7 @@ from otio_app.services.without_voiceover_enhanced.pause_resolver import (
     safe_pause_window_timeline,
 )
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
+    CUT_ASSET_SELECTION_PROMPT_VERSION,
     build_intro_unified_cut_prompt,
     build_keyword_flow_unified_cut_prompt,
     build_keyword_sync_unified_cut_prompt,
@@ -148,6 +149,13 @@ def test_keyword_flow_prompt_contract() -> None:
     assert "verlassenes Dorf" in prompt
     assert "Prefer chapter-local VIDEO over PHOTO" in prompt or "Prefer local VIDEO" in prompt
     assert "PAUSE DIRECTIVES (KEYWORD FLOW ONLY — ENABLED)" not in prompt
+    assert CUT_ASSET_SELECTION_PROMPT_VERSION == "cut-asset-selection-v2"
+    assert "ASSET SELECTION FROM SLIM INVENTORY" in prompt
+    assert "Content/exact identity ALWAYS outranks beauty and scores" in prompt
+    assert "NEVER pick an asset only because it has the highest" in prompt
+    assert "Missing scores on Slim-v1" in prompt
+    assert "Sequence harmony" in prompt
+    assert "hero:" in prompt and "clarity:" in prompt and "defect:" in prompt
 
 
 def test_rhythm_and_keyword_sync_prompts_unchanged_markers() -> None:

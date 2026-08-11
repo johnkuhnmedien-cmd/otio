@@ -290,6 +290,50 @@ def _defects_prompt_summary(defects: Any) -> str | None:
     return summary or None
 
 
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _quality_for_cut_row(raw: Any) -> dict[str, int] | None:
+    if not isinstance(raw, dict):
+        return None
+    payload: dict[str, int] = {}
+    for key in (
+        "technical",
+        "composition",
+        "appeal",
+        "clarity",
+        "hero",
+        "defect",
+    ):
+        number = _optional_int(raw.get(key))
+        if number is not None:
+            payload[key] = number
+    return payload or None
+
+
+def _look_for_cut_row(raw: Any, *, color_limit: int = _COLOR_LIMIT) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    payload: dict[str, Any] = {}
+    for key in ("brightness", "contrast", "saturation"):
+        number = _optional_int(raw.get(key))
+        if number is not None:
+            payload[key] = number
+    temperature = str(raw.get("temperature") or "").strip()
+    if temperature and temperature != "unknown":
+        payload["temperature"] = temperature
+    colors = _dedupe_limit(raw.get("colors"), limit=color_limit)
+    if colors:
+        payload["colors"] = colors
+    return payload or None
+
+
 def slim_assets_from_slim_document(
     slim: dict[str, Any],
     *,
@@ -298,7 +342,7 @@ def slim_assets_from_slim_document(
     """Slim-Disk-Dokument → Cut-Plan-Prompt-Rows (EN-Keys).
 
     Videos stehen vor Fotos, damit der Cut-LLM Motion-Kandidaten zuerst sieht.
-    Phase 2A: Quality/Look/Tags/Scale noch nicht im Prompt-Row.
+    Slim v2 reicht entscheidungsrelevante Felder durch; Slim v1 bleibt schlank.
     """
     kind = _slim_document_kind(slim)
     if kind is None:
@@ -316,26 +360,45 @@ def slim_assets_from_slim_document(
         media_type = "image" if media == "photo" else (media or "video")
 
         if kind == "v2":
-            duration = item.get("duration_s")
+            duration = _round_seconds(item.get("duration_s"))
             description = str(item.get("caption") or "").strip()
             motion_raw = item.get("motion")
             framing_raw = item.get("framing")
-            motion = (
-                str(motion_raw.get("type") or "").strip()
-                if isinstance(motion_raw, dict)
-                else ""
-            )
-            framing = (
-                str(framing_raw.get("type") or "").strip()
-                if isinstance(framing_raw, dict)
-                else ""
-            )
+            motion = ""
+            motion_intensity: int | None = None
+            motion_direction = ""
+            if isinstance(motion_raw, dict):
+                motion = str(motion_raw.get("type") or "").strip()
+                if motion == "unknown":
+                    motion = ""
+                motion_intensity = _optional_int(motion_raw.get("intensity"))
+                motion_direction = str(motion_raw.get("direction") or "").strip()
+                if motion_direction == "unknown":
+                    motion_direction = ""
+            framing = ""
+            shot_scale = ""
+            if isinstance(framing_raw, dict):
+                framing = str(framing_raw.get("type") or "").strip()
+                shot_scale = str(framing_raw.get("scale") or "").strip()
+                if shot_scale == "unknown":
+                    shot_scale = ""
+            tags = _dedupe_limit(item.get("tags"), limit=_TAG_LIMIT)
+            quality = _quality_for_cut_row(item.get("quality"))
+            look = _look_for_cut_row(item.get("look"), color_limit=_COLOR_LIMIT)
             defects = _defects_prompt_summary(item.get("defects"))
         else:
-            duration = item.get("dauer_s")
+            duration = _round_seconds(item.get("dauer_s"))
             description = str(item.get("beschreibung") or "").strip()
             motion = str(item.get("motion") or "").strip()
+            if motion == "unknown":
+                motion = ""
             framing = str(item.get("framing") or "").strip()
+            motion_intensity = None
+            motion_direction = ""
+            shot_scale = ""
+            tags = []
+            quality = None
+            look = None
             defects = _defects_prompt_summary(item.get("defects"))
 
         row: dict[str, Any] = {
@@ -343,21 +406,38 @@ def slim_assets_from_slim_document(
             "asset_id": asset_id,
             "folder": folder_name,
             "file": file_name,
-            "duration_seconds": duration,
             "media_type": media_type,
-            "description": description,
         }
-        if "usable_in_s" in item:
-            row["usable_in_s"] = item["usable_in_s"]
+        if duration is not None:
+            row["duration_seconds"] = duration
+        if description:
+            row["description"] = description
+        if tags:
+            row["tags"] = tags
         if motion:
             row["motion"] = motion
+        if motion_intensity is not None:
+            row["motion_intensity"] = motion_intensity
+        if motion_direction:
+            row["motion_direction"] = motion_direction
         if framing:
             row["framing"] = framing
-        if "people" in item:
+        if shot_scale:
+            row["shot_scale"] = shot_scale
+        if quality is not None:
+            row["quality"] = quality
+        if look is not None:
+            row["look"] = look
+        if "usable_in_s" in item and item.get("usable_in_s") is not None:
+            try:
+                row["usable_in_s"] = round(float(item["usable_in_s"]), 3)
+            except (TypeError, ValueError):
+                pass
+        if "people" in item and item.get("people") is not None:
             row["people"] = bool(item.get("people"))
         people_action = item.get("people_action")
         if people_action:
-            row["people_action"] = str(people_action)
+            row["people_action"] = str(people_action).strip()
         if defects:
             row["defects"] = defects
         out.append(row)
@@ -463,9 +543,11 @@ def _build_slim_asset_entry(
         "id": asset_id,
         "file": Path(path).name,
         "type": type_label,
-        "duration_s": duration_s,
         "caption": caption,
     }
+    # Fotos: kein duration_s: null — Feld weglassen statt erfundener Werte.
+    if duration_s is not None:
+        entry["duration_s"] = duration_s
 
     tags = _dedupe_limit(getattr(asset, "content_tags", None) or [], limit=_TAG_LIMIT)
     if tags:

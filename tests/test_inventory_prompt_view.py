@@ -373,7 +373,7 @@ def test_unknown_slim_schema_version_rejected(tmp_path: Path) -> None:
     assert load_slim_folder_inventory_file(path) is None
 
 
-def test_slim_v2_prompt_row_keeps_phase2a_contract(monkeypatch) -> None:
+def test_slim_v2_prompt_row_exposes_decision_fields(monkeypatch) -> None:
     monkeypatch.setattr(
         "otio_app.services.inventory_prompt_view.probe_duration_seconds",
         lambda path: (_ for _ in ()).throw(AssertionError("no probe")),
@@ -389,15 +389,42 @@ def test_slim_v2_prompt_row_keeps_phase2a_contract(monkeypatch) -> None:
     assert row["duration_seconds"] == 24.833
     assert row["media_type"] == "video"
     assert row["description"] == "Luftaufnahme einer historischen Bergstadt mit Wehrmauer."
+    assert row["tags"] == [
+        "Bergstadt",
+        "Wehrmauer",
+        "Kirchturm",
+        "Luftaufnahme",
+        "Festung",
+        "Tal",
+    ]
     assert row["motion"] == "drone"
+    assert row["motion_intensity"] == 35
+    assert row["motion_direction"] == "forward"
     assert row["framing"] == "aerial"
+    assert row["shot_scale"] == "wide"
+    assert row["quality"] == {
+        "technical": 82,
+        "composition": 85,
+        "appeal": 86,
+        "clarity": 88,
+        "hero": 85,
+        "defect": 0,
+    }
+    assert row["look"] == {
+        "brightness": 65,
+        "contrast": 70,
+        "saturation": 60,
+        "temperature": "warm",
+        "colors": ["Ziegelrot", "Beige", "Rotbraun"],
+    }
     assert row["people"] is False
     assert row["usable_in_s"] == 0.12
-    assert "tags" not in row
-    assert "quality" not in row
-    assert "look" not in row
     assert "scale" not in row
     assert "path" not in row
+    assert "analysis_confidence" not in row
+    assert "analysis_raw_response" not in row
+    assert "description_model" not in row
+    assert "confidence" not in row
 
 
 def test_slim_v2_prompt_row_summarizes_structured_defects() -> None:
@@ -465,7 +492,7 @@ def test_build_slim_filters_and_dedupes_legacy(monkeypatch) -> None:
     assert slim["assets"][0]["framing"] == {"type": "wide"}
     assert slim["assets"][0]["people"] is False
     assert slim["assets"][1]["type"] == "photo"
-    assert slim["assets"][1]["duration_s"] is None
+    assert "duration_s" not in slim["assets"][1]
 
 
 def test_empty_canonical_asset_id_gets_stable_derived_id() -> None:
@@ -598,10 +625,12 @@ def test_slim_cut_plan_prefers_existing_v2_slim_file(
     assert rows[0]["local_asset_id"] == "asset_disk_v2"
     assert rows[0]["description"] == "Caption von Disk."
     assert rows[0]["motion"] == "drone"
+    assert rows[0]["motion_intensity"] == 20
     assert rows[0]["framing"] == "aerial"
-    assert "tags" not in rows[0]
-    assert "quality" not in rows[0]
-    assert "look" not in rows[0]
+    assert rows[0]["shot_scale"] == "extreme_wide"
+    assert rows[0]["tags"] == ["Mauer", "Dorf"]
+    assert rows[0]["quality"] == {"hero": 90}
+    assert rows[0]["look"] == {"temperature": "warm"}
 
 
 def test_canonical_inventory_not_mutated_by_slim_build() -> None:
@@ -649,3 +678,80 @@ def test_roundtrip_write_load_v2(tmp_path: Path) -> None:
     rows = slim_assets_from_slim_document(loaded, folder_name="Albarracín")
     assert rows[0]["asset_id"] == "asset_adobestock_544058849"
     assert rows[0]["description"].startswith("Luftaufnahme")
+    assert rows[0]["tags"]
+    assert rows[0]["quality"]["hero"] == 85
+
+
+def test_slim_v2_cut_row_omits_empty_null_and_limits() -> None:
+    slim = {
+        "schema_version": "asset-slim-v2",
+        "chapter": "X",
+        "assets": [
+            {
+                "id": "photo_a",
+                "file": "a.jpg",
+                "type": "photo",
+                "caption": "Still of a cliff.",
+                "tags": ["a", "b", "c", "d", "e", "f", "g", ""],
+                "motion": {"type": "unknown", "intensity": None, "direction": ""},
+                "framing": {"type": "wide", "scale": "unknown"},
+                "quality": {"hero": None, "appeal": "", "technical": 70},
+                "look": {
+                    "brightness": None,
+                    "temperature": "unknown",
+                    "colors": ["Rot", "Blau", "Grün", "Gelb", "rot"],
+                },
+                "people": False,
+                "people_action": "",
+                "defects": [],
+            }
+        ],
+    }
+    rows = slim_assets_from_slim_document(slim, folder_name="X")
+    row = rows[0]
+    assert "duration_seconds" not in row
+    assert row["tags"] == ["a", "b", "c", "d", "e", "f"]
+    assert "motion" not in row
+    assert "motion_intensity" not in row
+    assert "motion_direction" not in row
+    assert row["framing"] == "wide"
+    assert "shot_scale" not in row
+    assert row["quality"] == {"technical": 70}
+    assert row["look"]["colors"] == ["Rot", "Blau", "Grün"]
+    assert "brightness" not in row["look"]
+    assert "temperature" not in row["look"]
+    assert "people_action" not in row
+    assert "defects" not in row
+    assert "analysis_confidence" not in row
+    assert "path" not in row
+
+
+def test_slim_v1_cut_row_has_no_artificial_v2_defaults() -> None:
+    slim = {
+        "kapitel": "Legacy",
+        "assets": [
+            {
+                "id": "legacy_v",
+                "file": "legacy.mp4",
+                "type": "video",
+                "dauer_s": 8.0,
+                "beschreibung": "Legacy clip",
+                "motion": "pan",
+                "framing": "wide",
+                "people": True,
+            }
+        ],
+    }
+    row = slim_assets_from_slim_document(slim, folder_name="Legacy")[0]
+    assert row["description"] == "Legacy clip"
+    assert row["motion"] == "pan"
+    assert row["framing"] == "wide"
+    for key in (
+        "tags",
+        "motion_intensity",
+        "motion_direction",
+        "shot_scale",
+        "quality",
+        "look",
+    ):
+        assert key not in row
