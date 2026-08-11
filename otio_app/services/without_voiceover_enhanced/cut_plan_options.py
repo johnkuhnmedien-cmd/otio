@@ -51,16 +51,20 @@ CUT_PLAN_MODE_UNIFIED = "unified"
 CutPlanMode = Literal["legacy", "unified"]
 CUT_PLAN_MODE_CHOICES: tuple[str, ...] = (CUT_PLAN_MODE_LEGACY, CUT_PLAN_MODE_UNIFIED)
 
-# Unified-Stil: Rhythmus vs Keyword-Sync vs Keyword-Flow.
+# Unified-Stil: Rhythmus vs Keyword-Sync vs Keyword-Flow vs Keyword-Flow-Free.
 # Alle Modi erhalten Word-Timestamps + Cut-Settings (inkl. shot_min/max).
 UNIFIED_CUT_STYLE_RHYTHM = "rhythm"
 UNIFIED_CUT_STYLE_KEYWORD_SYNC = "keyword_sync"
 UNIFIED_CUT_STYLE_KEYWORD_FLOW = "keyword_flow"
-UnifiedCutStyle = Literal["rhythm", "keyword_sync", "keyword_flow"]
+UNIFIED_CUT_STYLE_KEYWORD_FLOW_FREE = "keyword_flow_free"
+UnifiedCutStyle = Literal[
+    "rhythm", "keyword_sync", "keyword_flow", "keyword_flow_free"
+]
 UNIFIED_CUT_STYLE_CHOICES: tuple[str, ...] = (
     UNIFIED_CUT_STYLE_RHYTHM,
     UNIFIED_CUT_STYLE_KEYWORD_SYNC,
     UNIFIED_CUT_STYLE_KEYWORD_FLOW,
+    UNIFIED_CUT_STYLE_KEYWORD_FLOW_FREE,
 )
 # Keyword-Onset-Toleranz (nur keyword_flow, Python-seitig).
 KEYWORD_FLOW_ONSET_TOLERANCE_SEC = 1.5
@@ -297,6 +301,10 @@ def _normalize_unified_cut_style(value: Any, *, default: str) -> str:
         "keywordflow": UNIFIED_CUT_STYLE_KEYWORD_FLOW,
         "semantic_keyword_flow": UNIFIED_CUT_STYLE_KEYWORD_FLOW,
         "semantickeywordflow": UNIFIED_CUT_STYLE_KEYWORD_FLOW,
+        "keywordflowfree": UNIFIED_CUT_STYLE_KEYWORD_FLOW_FREE,
+        "keyword_flow_free": UNIFIED_CUT_STYLE_KEYWORD_FLOW_FREE,
+        "free_keyword_flow": UNIFIED_CUT_STYLE_KEYWORD_FLOW_FREE,
+        "freekeywordflow": UNIFIED_CUT_STYLE_KEYWORD_FLOW_FREE,
     }
     text = aliases.get(text, text)
     return text if text in UNIFIED_CUT_STYLE_CHOICES else default
@@ -319,6 +327,27 @@ def is_keyword_flow_unified_style(options: CutPlanOptions | None) -> bool:
     return (
         str(options.unified_cut_style or "").strip().lower()
         == UNIFIED_CUT_STYLE_KEYWORD_FLOW
+    )
+
+
+def is_keyword_flow_free_unified_style(options: CutPlanOptions | None) -> bool:
+    """True wenn Unified Keyword-Flow-Free aktiv (kontinuierlicher Wortfluss)."""
+    if options is None:
+        return False
+    return (
+        str(options.unified_cut_style or "").strip().lower()
+        == UNIFIED_CUT_STYLE_KEYWORD_FLOW_FREE
+    )
+
+
+def uses_keyword_onset_timing_rules(options: CutPlanOptions | None) -> bool:
+    """True für Keyword Flow und Keyword Flow Free (gemeinsame Onset-Pipeline).
+
+    Additive helper: bestehendes ``is_keyword_flow_unified_style`` bleibt unverändert
+    und trifft nur ``keyword_flow``.
+    """
+    return is_keyword_flow_unified_style(options) or is_keyword_flow_free_unified_style(
+        options
     )
 
 

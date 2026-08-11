@@ -13,9 +13,9 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     CutPlanOptions,
-    is_keyword_flow_unified_style,
     load_cut_plan_options,
     resolve_timing_seconds,
+    uses_keyword_onset_timing_rules,
 )
 from otio_app.services.without_voiceover_enhanced.cut_rhythm_validator import (
     assess_cut_rhythm,
@@ -1236,7 +1236,9 @@ def resolve_unified_timeline(
                 "Keine Segment-Timings für den gewählten Kapitel-Filter."
             )
     if apply_keyword_flow_rules is None:
-        keyword_flow = is_keyword_flow_unified_style(options)
+        # Keyword Flow Free shares the existing onset/timing pipeline additively.
+        # is_keyword_flow_unified_style remains exact for style==keyword_flow.
+        keyword_flow = uses_keyword_onset_timing_rules(options)
     else:
         keyword_flow = bool(apply_keyword_flow_rules)
     if keyword_flow:

@@ -1896,16 +1896,39 @@ def generate_unified_cut_for_folder(
         )
         segment_ids = [seg.segment_id for seg in context.script_slice.segments]
         from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+            is_keyword_flow_free_unified_style,
             is_keyword_flow_unified_style,
             is_keyword_sync_unified_style,
         )
 
         use_keyword_flow = (not is_intro) and is_keyword_flow_unified_style(options)
+        use_keyword_flow_free = (not is_intro) and is_keyword_flow_free_unified_style(
+            options
+        )
         sentence_timings_json = build_sentence_timings_json_for_segments(
             project,
             segment_ids=segment_ids,
-            keyword_flow_clean=use_keyword_flow,
+            keyword_flow_clean=use_keyword_flow or use_keyword_flow_free,
         )
+        continuous_word_flow_json = ""
+        if use_keyword_flow_free:
+            from otio_app.services.without_voiceover_enhanced.keyword_flow_free_input import (
+                build_continuous_word_flow_json_for_segments,
+                chapter_has_usable_keyword_flow_free_words,
+                load_cleaned_sentence_rows_for_segments,
+            )
+
+            rows = load_cleaned_sentence_rows_for_segments(
+                project, segment_ids=segment_ids
+            )
+            if not chapter_has_usable_keyword_flow_free_words(rows):
+                raise CutPlanError(
+                    "Keyword Flow Free benötigt echte ElevenLabs-Wort-Timestamps "
+                    "für dieses Kapitel."
+                )
+            continuous_word_flow_json = build_continuous_word_flow_json_for_segments(
+                project, segment_ids=segment_ids
+            )
         if use_keyword_flow:
             from otio_app.services.without_voiceover_enhanced.sentence_timing_prompt import (
                 chapter_has_usable_keyword_flow_words,
@@ -1958,7 +1981,35 @@ def generate_unified_cut_for_folder(
                 intro_postroll_max_sec=intro_post_max,
             )
         else:
-            if use_keyword_flow:
+            if use_keyword_flow_free:
+                from otio_app.services.without_voiceover_enhanced.keyword_flow_free_prompt import (
+                    build_keyword_flow_free_prompt,
+                )
+
+                prompt = build_keyword_flow_free_prompt(
+                    locked_script_json=context.script_slice.model_dump_json(
+                        indent=2
+                    ),
+                    segment_timings_json=context.timings_slice.model_dump_json(
+                        indent=2
+                    ),
+                    local_assets_json=json.dumps(
+                        local_assets, ensure_ascii=False, indent=2
+                    ),
+                    style_profile_text=_style_text(project),
+                    dramaturgy_text=dramaturgy_text,
+                    folder_name=folder_name,
+                    folder_slug=context.folder_slug,
+                    previous_folder_name=context.previous_folder_name,
+                    next_folder_name=context.next_folder_name,
+                    include_middle_frames=include_frames,
+                    shot_constraints_text=format_shot_constraints_for_prompt(
+                        options
+                    ),
+                    continuous_word_flow_json=continuous_word_flow_json,
+                    used_in_ledger_text=used_in_ledger_text,
+                )
+            elif use_keyword_flow:
                 from otio_app.services.without_voiceover_enhanced.script_prompts import (
                     build_keyword_flow_unified_cut_prompt,
                 )
@@ -2085,8 +2136,10 @@ def generate_unified_cut_for_folder(
                     locked.script_version,
                     folder_slug=context.folder_slug,
                     allow_pause_directives=False,
-                    reject_nonempty_pause_directives=use_keyword_flow,
-                    nullify_weak_assets=use_keyword_flow,
+                    reject_nonempty_pause_directives=(
+                        use_keyword_flow or use_keyword_flow_free
+                    ),
+                    nullify_weak_assets=use_keyword_flow or use_keyword_flow_free,
                 )
                 if not plan.slots:
                     raise CutPlanError("LLM-Antwort enthielt keine Slots.")
@@ -2104,7 +2157,7 @@ def generate_unified_cut_for_folder(
             )
 
             plan = enforce_intro_strong_only(plan, options=options)
-        elif use_keyword_flow:
+        elif use_keyword_flow or use_keyword_flow_free:
             from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
                 enforce_asset_reuse_as_coverage_gaps,
             )
