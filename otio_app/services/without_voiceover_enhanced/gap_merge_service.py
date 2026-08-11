@@ -6,6 +6,7 @@ Timing bleibt unverändert — nur Asset-/Medienfelder werden getauscht.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Mapping
 
 from otio_app.models import Project
 from otio_app.services.media_utils import is_image_media, probe_duration_seconds
@@ -832,6 +833,134 @@ def _best_placeable_gap_fill(
     return max(pool, key=_dur)
 
 
+def _gap_fill_reuse_violation(
+    asset_id: str,
+    *,
+    provisional_shots: list[ResolvedShot],
+    gap_shot_id: str,
+    max_asset_usage: int,
+    min_asset_reuse_distance_shots: int,
+    reuse_key_index: Mapping[str, str] | None = None,
+) -> str | None:
+    """Cut-Plan-Reuse beim Gap-Fill: Nachbar, Abstand, max_usage.
+
+    ``provisional_shots`` ist die redaktionelle Sequenz inkl. des Gap-Shots
+    (noch offen/leer). Intro-Ordner sind ausgenommen — wie im Timeline-Resolver.
+    """
+    from otio_app.services.without_voiceover_enhanced.enhanced_supplement_dedupe import (
+        reuse_identity_key,
+    )
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _is_intro_folder,
+    )
+
+    aid = str(asset_id or "").strip()
+    if not aid:
+        return None
+    key = reuse_identity_key(aid, index=reuse_key_index)
+    if not key:
+        return None
+
+    min_gap = max(1, int(min_asset_reuse_distance_shots or 0))
+    max_usage = max(1, int(max_asset_usage or 1))
+
+    gap_index = next(
+        (
+            index
+            for index, shot in enumerate(provisional_shots)
+            if str(shot.shot_id) == gap_shot_id
+        ),
+        None,
+    )
+    if gap_index is None:
+        return None
+
+    usage = 0
+    last_before: int | None = None
+    next_after: int | None = None
+    for index, shot in enumerate(provisional_shots):
+        if index == gap_index:
+            continue
+        other_id = str(shot.asset_id or "").strip()
+        if shot.open_gap or not other_id:
+            continue
+        folder = str(shot.folder_name or "")
+        if _is_intro_folder(folder):
+            continue
+        other_key = reuse_identity_key(other_id, index=reuse_key_index)
+        if other_key != key:
+            continue
+        usage += 1
+        if index < gap_index:
+            last_before = index
+        elif next_after is None:
+            next_after = index
+
+    if usage + 1 > max_usage:
+        return (
+            f"Asset {aid} überschreitet max_asset_usage={max_usage} "
+            "(Gap-Merge übersprungen)."
+        )
+
+    if last_before is not None:
+        gap_shots = gap_index - int(last_before) - 1
+        if gap_shots < min_gap:
+            if gap_shots == 0:
+                return (
+                    f"Benachbartes Asset {aid} bereits in "
+                    f"{provisional_shots[last_before].shot_id} "
+                    "(Gap-Merge übersprungen)."
+                )
+            return (
+                f"Asset {aid} erneut nach {gap_shots} Shots "
+                f"(min Abstand {min_gap}) — Gap-Merge übersprungen."
+            )
+
+    if next_after is not None:
+        gap_shots = int(next_after) - gap_index - 1
+        if gap_shots < min_gap:
+            if gap_shots == 0:
+                return (
+                    f"Benachbartes Asset {aid} bereits in "
+                    f"{provisional_shots[next_after].shot_id} "
+                    "(Gap-Merge übersprungen)."
+                )
+            return (
+                f"Asset {aid} vor Wiederverwendung in "
+                f"{provisional_shots[next_after].shot_id} nur {gap_shots} Shots "
+                f"Abstand (min {min_gap}) — Gap-Merge übersprungen."
+            )
+    return None
+
+
+def _filter_candidates_by_cut_plan_reuse(
+    candidates: list[StockCandidate],
+    *,
+    provisional_shots: list[ResolvedShot],
+    gap_shot_id: str,
+    max_asset_usage: int,
+    min_asset_reuse_distance_shots: int,
+    reuse_key_index: Mapping[str, str] | None = None,
+) -> tuple[list[StockCandidate], list[str]]:
+    """Entfernt Kandidaten, die Nachbar-/Reuse-Regeln verletzen."""
+    kept: list[StockCandidate] = []
+    rejected: list[str] = []
+    for candidate in candidates:
+        reason = _gap_fill_reuse_violation(
+            str(candidate.candidate_id or ""),
+            provisional_shots=provisional_shots,
+            gap_shot_id=gap_shot_id,
+            max_asset_usage=max_asset_usage,
+            min_asset_reuse_distance_shots=min_asset_reuse_distance_shots,
+            reuse_key_index=reuse_key_index,
+        )
+        if reason:
+            rejected.append(reason)
+            continue
+        kept.append(candidate)
+    return kept, rejected
+
+
 def _place_short_gap_fill_with_shortfall(
     project: Project,
     shot: ResolvedShot,
@@ -933,6 +1062,13 @@ def merge_export_ready_gaps_into_timeline(
     ready = list_export_ready_supplements(project)
     records_by_gap = _funnel_records_by_gap(funnel)
     catalog = build_asset_catalog(project, fps=float(timeline.fps or project.fps))
+    from otio_app.services.without_voiceover_enhanced.enhanced_supplement_dedupe import (
+        build_asset_reuse_key_index,
+    )
+
+    reuse_key_index = build_asset_reuse_key_index(project)
+    max_asset_usage = int(options.max_asset_usage)
+    min_asset_reuse_distance_shots = int(options.min_asset_reuse_distance_shots)
 
     cut_plan_run_id = str(getattr(coverage, "cut_plan_run_id", "") or "").strip()
     if not cut_plan_run_id and unified is not None:
@@ -957,7 +1093,7 @@ def merge_export_ready_gaps_into_timeline(
     ]
 
     updated_shots: list[ResolvedShot] = []
-    for shot in working.shots:
+    for shot_pos, shot in enumerate(working.shots):
         gap_id = (shot.coverage_gap_id or "").strip()
         if not gap_id and not shot.open_gap:
             updated_shots.append(shot)
@@ -976,6 +1112,8 @@ def merge_export_ready_gaps_into_timeline(
             updated_shots.append(shot)
             continue
 
+        provisional_shots = updated_shots + list(working.shots[shot_pos:])
+
         local_fit = _local_fit_for_shot(shot, unified=unified, coverage=coverage)
         target = _target_duration_for_shot(shot, coverage=coverage)
         min_duration = required_candidate_duration_seconds(
@@ -984,12 +1122,26 @@ def merge_export_ready_gaps_into_timeline(
             short_tolerance=short_tolerance,
         )
         candidates = _candidates_for_gap(ready, gap_id)
+        candidates, reuse_rejects = _filter_candidates_by_cut_plan_reuse(
+            candidates,
+            provisional_shots=provisional_shots,
+            gap_shot_id=shot.shot_id,
+            max_asset_usage=max_asset_usage,
+            min_asset_reuse_distance_shots=min_asset_reuse_distance_shots,
+            reuse_key_index=reuse_key_index,
+        )
         chosen, bucket, pick_msg, review = _pick_supplement(
             candidates,
             records=records_by_gap.get(gap_id, []),
             local_fit=local_fit,
             min_duration=min_duration,
         )
+        if chosen is None and reuse_rejects:
+            pick_msg = (
+                f"{pick_msg} Reuse-Filter: {reuse_rejects[0]}"
+                if pick_msg
+                else f"Reuse-Filter: {reuse_rejects[0]}"
+            )
 
         if chosen is None:
             gap_confirmed_weak = False
@@ -1035,6 +1187,17 @@ def merge_export_ready_gaps_into_timeline(
                 else []
             )
             if local_fit == "none":
+                accepted_ready, accepted_reuse_rejects = (
+                    _filter_candidates_by_cut_plan_reuse(
+                        accepted_ready,
+                        provisional_shots=provisional_shots,
+                        gap_shot_id=shot.shot_id,
+                        max_asset_usage=max_asset_usage,
+                        min_asset_reuse_distance_shots=min_asset_reuse_distance_shots,
+                        reuse_key_index=reuse_key_index,
+                    )
+                )
+                reuse_rejects = list(reuse_rejects) + list(accepted_reuse_rejects)
                 # Zu kurze Accepted/Funnel-Fills trotzdem platzieren:
                 # nutzbares Asset + roter Shortfall-Placeholder für den Rest.
                 short_fill = _best_placeable_gap_fill(candidates, accepted_ready)
@@ -1068,6 +1231,12 @@ def merge_export_ready_gaps_into_timeline(
                         updated_shots.extend(short_parts)
                         continue
 
+            if reuse_rejects and local_fit == "none":
+                pick_msg = (
+                    f"{pick_msg} Reuse-Filter: {reuse_rejects[0]}"
+                    if pick_msg and "Reuse-Filter:" not in pick_msg
+                    else (pick_msg or f"Reuse-Filter: {reuse_rejects[0]}")
+                )
             result = GapMergeSlotResult(
                 shot_id=shot.shot_id,
                 coverage_gap_id=gap_id,

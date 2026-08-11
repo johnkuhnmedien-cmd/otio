@@ -119,10 +119,12 @@ def test_prepare_writes_duration_and_slim(tmp_path: Path, monkeypatch) -> None:
         get_folder_inventory_path(project.work_dir_path, "Canyon")
     )
     slim = json.loads(slim_path.read_text(encoding="utf-8"))
+    assert slim["schema_version"] == "asset-slim-v2"
+    assert slim["chapter"] == "Canyon"
     by_id = {a["id"]: a for a in slim["assets"]}
-    assert by_id["asset_canyon_clip"]["dauer_s"] == 14.25
+    assert by_id["asset_canyon_clip"]["duration_s"] == 14.25
     assert by_id["asset_canyon_clip"]["usable_in_s"] == 0.08
-    assert by_id["asset_canyon_still"]["dauer_s"] is None
+    assert "duration_s" not in by_id["asset_canyon_still"]
 
     # Zweiter Lauf ohne force: nichts neu messen.
     report2 = prepare_inventories_for_cut_plan(project)
@@ -153,4 +155,6 @@ def test_slim_prefers_stored_duration_without_probe(monkeypatch) -> None:
         ],
     )
     slim = build_slim_folder_inventory(folder, probe_duration=True)
-    assert slim["assets"][0]["dauer_s"] == 9.5
+    assert slim["schema_version"] == "asset-slim-v2"
+    assert slim["assets"][0]["duration_s"] == 9.5
+    assert slim["assets"][0]["caption"] == "Walls"

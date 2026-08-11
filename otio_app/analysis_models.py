@@ -65,6 +65,53 @@ class CleanMediaManifest(BaseModel):
     entries: List[CleanMediaEntry] = Field(default_factory=list)
 
 
+class AssetAnalysisSignature(BaseModel):
+    """Datei- und Analyse-Identität für Cache-Aktualität (Asset Analysis v3)."""
+
+    analysis_schema_version: str = ""
+    prompt_version: str = ""
+    sampler_version: str = ""
+    resolved_model_id: str = ""
+    file_size: Optional[int] = None
+    file_mtime_ns: Optional[int] = None
+    content_fingerprint: str = ""
+
+
+class AssetMotionProfile(BaseModel):
+    type: str = "unknown"
+    intensity: Optional[int] = None
+    direction: str = "unknown"
+    confidence: Optional[float] = None
+
+
+class AssetFramingProfile(BaseModel):
+    type: str = "medium"
+    shot_scale: str = "unknown"
+
+
+class AssetLookProfile(BaseModel):
+    brightness: Optional[int] = None
+    contrast: Optional[int] = None
+    saturation: Optional[int] = None
+    color_temperature: str = "unknown"
+    dominant_colors: List[str] = Field(default_factory=list)
+
+
+class AssetQualityProfile(BaseModel):
+    technical_quality: Optional[int] = None
+    composition_quality: Optional[int] = None
+    visual_appeal: Optional[int] = None
+    subject_clarity: Optional[int] = None
+    hero_potential: Optional[int] = None
+    defect_severity: Optional[int] = None
+
+
+class AssetDefect(BaseModel):
+    type: str = "other"
+    severity: int = 0
+    note: str = ""
+
+
 class AssetMediaAnalysis(BaseModel):
     path: str
     description: str = ""
@@ -83,7 +130,7 @@ class AssetMediaAnalysis(BaseModel):
     # Schwarz-/Lead-In am Asset-Anfang (ffmpeg blackdetect); nutzbare Länge =
     # duration_seconds - usable_in_s.
     usable_in_s: Optional[float] = None
-    # Strukturierte Frame-Analyse (asset_v2_structured); optional für Altbestände.
+    # Strukturierte Frame-Analyse; flache Felder bleiben für Altbestände/Kompatibilität.
     motion: str = ""
     framing: str = ""
     people: Optional[bool] = None
@@ -99,9 +146,31 @@ class AssetMediaAnalysis(BaseModel):
     search_query: str = ""
     license_metadata: dict[str, str] = Field(default_factory=dict)
     analysis_status: str = ""
+    # Kompatibilität: ab v3 = tatsächlich genutzte/aufgelöste Modell-ID (wie
+    # description_model_resolved). Ältere Caches können hier den UI-/Request-Wert
+    # enthalten.
     description_model: str = ""
     description_prompt_version: str = ""
     description_generated_at: Optional[datetime] = None
+    # Asset Analysis v3 (additiv; fehlende Felder in Alt-JSONs bleiben gültig).
+    analysis_schema_version: str = ""
+    analysis_scope: str = ""
+    analysis_signature: Optional[AssetAnalysisSignature] = None
+    analysis_parse_ok: Optional[bool] = None
+    analysis_confidence: Optional[float] = None
+    caption: str = ""
+    content_tags: List[str] = Field(default_factory=list)
+    motion_profile: Optional[AssetMotionProfile] = None
+    framing_profile: Optional[AssetFramingProfile] = None
+    look_profile: Optional[AssetLookProfile] = None
+    quality_profile: Optional[AssetQualityProfile] = None
+    defect_items: List[AssetDefect] = Field(default_factory=list)
+    # UI-/Request-Wert vor resolve_gemini_model (kann leer sein).
+    description_model_requested: str = ""
+    # Tatsächlich an Gemini übergebene Modell-ID nach resolve_gemini_model.
+    description_model_resolved: str = ""
+    # Nur bei parse_ok=False diagnostisch (begrenzt); bei Erfolg leer.
+    analysis_raw_response: str = ""
 
 
 class AssetFolderAnalysis(BaseModel):

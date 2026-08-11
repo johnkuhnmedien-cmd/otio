@@ -9,11 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from otio_app.analysis_models import AssetMediaAnalysis
 from otio_app.services.asset_analyzer import analyze_asset_folders
 from otio_app.services.frame_extract import extract_frames
 from otio_app.services.media_inventory_cache import media_cache_path, save_cached_media
-from tests.test_partial_asset_analysis import _project
+from tests.test_partial_asset_analysis import _current_cache_entry, _project
 
 
 def test_extract_frames_survives_binary_ffmpeg_stderr(
@@ -51,7 +50,7 @@ def test_analyze_asset15_with_binary_ffmpeg_stderr(
     clip2.write_bytes(b"video15")
     save_cached_media(
         media_cache_path(project, "Grand Canyon", clip1),
-        AssetMediaAnalysis(path=str(clip1), description="OK"),
+        _current_cache_entry(clip1, "OK"),
     )
 
     def fake_run(cmd, **kwargs):
@@ -77,7 +76,7 @@ def test_analyze_asset15_with_binary_ffmpeg_stderr(
         *,
         model: str | None = None,
     ) -> MediaFrameAnalysis:
-        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
+        return MediaFrameAnalysis.successful(description=f"Beschreibung für {media_name}")
     monkeypatch.setattr(
         "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,

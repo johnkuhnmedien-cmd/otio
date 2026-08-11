@@ -50,7 +50,7 @@ def test_analyze_asset_folders_can_be_cancelled(
     ) -> MediaFrameAnalysis:
         calls.append(media_name)
         cancel_after["count"] += 1
-        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
+        return MediaFrameAnalysis.successful(description=f"Beschreibung für {media_name}")
     def should_cancel() -> bool:
         return cancel_after["count"] >= 1
 
@@ -111,7 +111,7 @@ def test_asset_analysis_job_manager_cancel(
         describe_calls["count"] += 1
         if describe_calls["count"] >= 1:
             get_asset_analysis_job_manager().request_cancel("test-project")
-        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
+        return MediaFrameAnalysis.successful(description=f"Beschreibung für {media_name}")
     monkeypatch.setattr(
         "otio_app.services.asset_analyzer.extract_frames",
         fake_extract,

@@ -50,6 +50,56 @@ VIDEO OVER PHOTO (BINDING — OUTRANKS NAME-TAGGED STILLS):
   closing video remains.
 """
 
+# Shared decision hierarchy for all cut planners that consume local inventories.
+CUT_ASSET_SELECTION_PROMPT_VERSION = "cut-asset-selection-v2"
+CUT_ASSET_SELECTION_GUIDANCE = """\
+ASSET SELECTION FROM SLIM INVENTORY (BINDING — cut-asset-selection-v2):
+
+Decision priority (highest first):
+1. Content match to the spoken meaning of the current passage
+2. Exact entity / person / place / object when the text requires identity
+3. Usable length and timing (duration_seconds, usable_in_s, shot span)
+4. Technical usability and visible defects (quality.technical, quality.defect, defects)
+5. Dramaturgical / editorial function of the slot
+6. Composition, appeal, clarity, and hero potential
+7. Harmony with neighboring shots (motion, framing/shot_scale, look)
+
+Hard rules:
+- Content/exact identity ALWAYS outranks beauty and scores. A high hero, appeal,
+  or composition score must NEVER make a content-wrong asset a good match.
+- NEVER pick an asset only because it has the highest overall or hero score.
+- If no content-fitting local asset exists for a required statement, use the
+  existing gap / supplement path. Do NOT substitute a pretty but wrong picture.
+- description and tags help semantic search; tags are hints, not proof of exact
+  identity or exact place.
+- Scores are decision aids, not objective truth. Missing scores on Slim-v1 /
+  legacy rows are NEUTRAL — do not downgrade a legacy asset only for lacking
+  quality/look/tags/shot_scale fields.
+- Keep existing rules: video-over-photo, asset reuse / max usage, exact IDs only,
+  and never invent asset IDs or hallucinate media.
+
+Quality fields (when present):
+- technical: technical usability of the visible material
+- composition: framing order / visual structure
+- appeal: immediate visual attractiveness
+- clarity: how clearly the main subject is recognizable
+- hero: suitability for strong openers, reveals, chapter peaks, or closings —
+  do NOT prefer hero for every slot; use it for visually important moments
+- defect: severity of visible problems (higher = worse)
+
+Sequence harmony (after content + timing):
+- Avoid long runs of identical framing + identical shot_scale unless deliberate.
+- Shot-scale changes can create rhythm and visual progression.
+- Use motion type / direction / intensity for continuity or intentional contrast.
+- Use look (brightness, temperature, dominant colors) for visual continuity;
+  avoid abrupt look jumps unless dramaturgically intended.
+- Content fit and timing still outrank visual harmony. No fixed score formulas
+  or rigid numeric thresholds.
+
+Intro / closing note: hero and appeal help opener/closing choices, but teaser
+function, content fit, and mood still outrank raw scores.
+"""
+
 
 _SHARED_SCRIPT_CORE_RULES = """\
 GOAL
@@ -637,6 +687,7 @@ ASSET RULES:
 - Photos/stills: do not plan long static holds as if they were motion clips;
   keep still spans short unless a deliberate still is justified.
 
+{CUT_ASSET_SELECTION_GUIDANCE}
 PAUSE RULES (DISABLED):
 
 - Always return \"pause_directives\": [].
@@ -763,7 +814,7 @@ LOCKED SCRIPT:
 SEGMENT TIMINGS:
 {segment_timings_json}
 {sentence_block}
-LOCAL ASSETS:
+LOCAL ASSETS (slim; description/tags + duration/usable_in_s + motion/framing/shot_scale + quality/look when present):
 {local_assets_json}
 
 STYLE PROFILE:
@@ -914,6 +965,7 @@ SLOT / ASSET RULES:
   immediate neighbor; max usage + reuse distance apply with no exemption.
 - narrative_function for first/last may be chapter_open / chapter_close.
 
+{CUT_ASSET_SELECTION_GUIDANCE}
 PAUSE RULES (DISABLED):
 
 - Always return \"pause_directives\": [].
@@ -1000,7 +1052,7 @@ LOCKED SCRIPT:
 SEGMENT TIMINGS:
 {segment_timings_json}
 {sentence_block}
-LOCAL ASSETS (slim; use duration_seconds / usable_in_s / motion / framing / people):
+LOCAL ASSETS (slim; description/tags + duration/usable_in_s + motion/framing/shot_scale + quality/look when present):
 {local_assets_json}
 
 STYLE PROFILE:
@@ -1203,6 +1255,7 @@ SLOT / ASSET RULES:
 - The last slot must span from its start boundary through the full remaining
   VO to the last boundary (VO end).
 
+{CUT_ASSET_SELECTION_GUIDANCE}
 PAUSE RULES (DISABLED):
 
 - Always return \"pause_directives\": [].
@@ -1308,7 +1361,7 @@ LOCKED SCRIPT:
 SEGMENT TIMINGS:
 {segment_timings_json}
 {sentence_block}
-LOCAL ASSETS (slim; use description / duration_seconds / usable_in_s / motion / framing / people):
+LOCAL ASSETS (slim; description/tags + duration/usable_in_s + motion/framing/shot_scale + quality/look when present):
 {local_assets_json}
 
 STYLE PROFILE:
@@ -1494,6 +1547,7 @@ ASSET FIT (KEYWORD FLOW — BINDING):
   over early reuse. Python will demote illegal early reuses to coverage gaps.
 - Gap search_concepts: 2–4 English phrases, 2–5 words each, concrete to the missing motif.
 {VIDEO_OVER_PHOTO_ASSET_RULES}
+{CUT_ASSET_SELECTION_GUIDANCE}
 CLOSING:
 
 - The last slot is the primary Closing Shot (strong/acceptable), able to carry
@@ -1599,7 +1653,7 @@ LOCKED SCRIPT:
 SEGMENT TIMINGS:
 {segment_timings_json}
 {sentence_block}
-LOCAL ASSETS (slim; chapter-local only):
+LOCAL ASSETS (slim; description/tags + duration/usable_in_s + motion/framing/shot_scale + quality/look when present):
 {local_assets_json}
 
 STYLE PROFILE:
@@ -1791,6 +1845,7 @@ SLOT / ASSET RULES:
 - The last slot is the closing picture: it must span from its start boundary
   through the full remaining VO to the last boundary (VO end).
 
+{CUT_ASSET_SELECTION_GUIDANCE}
 RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
 
 OUTPUT SCHEMA:
@@ -1881,7 +1936,7 @@ LOCKED SCRIPT (Intro only):
 SEGMENT TIMINGS:
 {segment_timings_json}
 {sentence_block}
-BUNDLED INVENTORY (all chapters, one JSON):
+BUNDLED INVENTORY (compact rows; description/tags + motion/framing/shot_scale + subset quality/look):
 {bundled_inventory_json}
 
 STYLE PROFILE:
@@ -1978,6 +2033,7 @@ EDITORIAL GUIDANCE: Prefer a varied shot structure. One sentence may map to \
 one asset when that is the best cut — but do not default to a rigid \
 one-sentence-one-asset grid for the whole film.
 
+{CUT_ASSET_SELECTION_GUIDANCE}
 RETURN STRICT JSON ONLY.
 Do not use Markdown.
 Do not add explanations before or after the JSON.
@@ -2051,7 +2107,7 @@ PAUSE DIRECTIVES (DISABLED — expect empty / ignore):
 ROUGH CUT:
 {rough_cut_json}
 
-LOCAL ASSETS:
+LOCAL ASSETS (slim; description/tags + duration/usable_in_s + motion/framing/shot_scale + quality/look when present):
 {local_assets_json}
 
 ACCEPTED SUPPLEMENTS ONLY:
