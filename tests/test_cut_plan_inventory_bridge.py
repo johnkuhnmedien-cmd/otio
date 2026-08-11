@@ -248,7 +248,7 @@ def test_analyze_missing_supplements_from_disk(tmp_path: Path) -> None:
         ),
         patch(
             "otio_app.services.gemini_client.analyze_media_from_frames",
-            return_value=MediaFrameAnalysis(description="Orphan canyon shot at golden hour"),
+            return_value=MediaFrameAnalysis.successful(description="Orphan canyon shot at golden hour"),
         ),
         patch(
             "otio_app.services.gemini_client.is_gemini_configured",
