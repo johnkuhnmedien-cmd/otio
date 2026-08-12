@@ -555,3 +555,207 @@ def test_build_continuous_word_flow_from_sentence_rows_alias() -> None:
     assert build_continuous_word_flow_from_sentence_rows(rows) == build_continuous_word_flow(
         rows
     )
+
+
+def test_keyword_flow_free_shot_duration_uses_settings_not_legacy_10_17() -> None:
+    """Free: no 10–17s band; diagnostics use project shot_min/max only."""
+    from otio_app.services.without_voiceover_enhanced.cut_rhythm_validator import (
+        assess_cut_rhythm,
+        assess_unified_cut_quality,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import (
+        FinalCutPlanDocument,
+        FinalShot,
+        NarrationAnchor,
+        ResolvedShot,
+        ResolvedTimelineDocument,
+    )
+
+    options = CutPlanOptions(
+        unified_cut_style=UNIFIED_CUT_STYLE_KEYWORD_FLOW_FREE,
+        shot_min_sec=3.0,
+        shot_max_sec=9.0,
+    )
+    # Shots inside 3–9s but outside legacy 10–17s.
+    lengths = [4.0, 6.8, 8.5, 5.2, 7.0, 6.0]
+    finals = [
+        FinalShot(
+            shot_id=f"s{i}",
+            narration_start_anchor=NarrationAnchor(segment_id="a", offset_seconds=0),
+            narration_end_anchor=NarrationAnchor(segment_id="a", offset_seconds=1),
+            asset_id=f"a{i}",
+            start_cut_alignment="mid_sentence",
+        )
+        for i in range(len(lengths))
+    ]
+    resolved_shots = []
+    cursor = 0.0
+    for i, length in enumerate(lengths):
+        resolved_shots.append(
+            ResolvedShot(
+                shot_id=f"s{i}",
+                asset_id=f"a{i}",
+                timeline_start_seconds=cursor,
+                timeline_end_seconds=cursor + length,
+                source_start_seconds=0.0,
+                source_end_seconds=length,
+                folder_name="ChapterA",
+            )
+        )
+        cursor += length
+
+    legacy_notes = assess_cut_rhythm(
+        FinalCutPlanDocument(script_version="v1", shots=finals),
+        resolved_shots,
+    )
+    assert any("10–17s" in n or "10-17s" in n or "Zielband ~13.5s" in n for n in legacy_notes)
+
+    free_notes = assess_cut_rhythm(
+        FinalCutPlanDocument(script_version="v1", shots=finals),
+        resolved_shots,
+        include_legacy_shot_length_band=False,
+    )
+    assert not any("10–17s" in n or "Zielband ~13.5s" in n for n in free_notes)
+    assert not any("außerhalb 10" in n for n in free_notes)
+
+    boundaries = [
+        CutBoundary(
+            cut_id=f"b{i}",
+            sentence_id="chapter_s001",
+            position="start" if i == 0 else ("end" if i == len(lengths) else "middle"),
+            alignment="mid_sentence" if 0 < i < len(lengths) else "sentence_boundary",
+            offset_seconds=0.0 if i == 0 else (None if i == len(lengths) else 1.0 + i),
+        )
+        for i in range(len(lengths) + 1)
+    ]
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=boundaries,
+        slots=[
+            CutSlot(slot_id=f"slot{i}", local_asset_id=f"a{i}", asset_fit="strong")
+            for i in range(len(lengths))
+        ],
+    )
+    resolved_doc = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=cursor,
+        shots=resolved_shots,
+    )
+    assessment = assess_unified_cut_quality(
+        plan=plan,
+        resolved=resolved_doc,
+        options=options,
+        include_legacy_shot_length_band=False,
+    )
+    notes = assessment.all_notes()
+    assert not any("Zielband ~13.5s" in n or "10–17s" in n for n in notes)
+    # All lengths inside 3–9 → no settings violation.
+    assert not any("Settings shot_min/max" in n for n in notes)
+
+    # One shot below shot_min and one above shot_max → settings note only.
+    short_long = list(resolved_shots)
+    short_long[0] = short_long[0].model_copy(
+        update={"timeline_end_seconds": short_long[0].timeline_start_seconds + 2.4}
+    )
+    short_long[-1] = short_long[-1].model_copy(
+        update={"timeline_end_seconds": short_long[-1].timeline_start_seconds + 10.2}
+    )
+    assessment2 = assess_unified_cut_quality(
+        plan=plan,
+        resolved=resolved_doc.model_copy(update={"shots": short_long}),
+        options=options,
+        include_legacy_shot_length_band=False,
+    )
+    settings_notes = [
+        n for n in assessment2.all_notes() if "Settings shot_min/max (3.0–9.0s)" in n
+    ]
+    assert settings_notes
+    assert not any("Zielband ~13.5s" in n for n in assessment2.all_notes())
+
+
+def test_other_flows_keep_legacy_10_17_shot_band_by_default() -> None:
+    from otio_app.services.without_voiceover_enhanced.cut_rhythm_validator import (
+        assess_cut_rhythm,
+        assess_unified_cut_quality,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import (
+        FinalCutPlanDocument,
+        FinalShot,
+        NarrationAnchor,
+        ResolvedShot,
+        ResolvedTimelineDocument,
+    )
+
+    shots = [
+        FinalShot(
+            shot_id=f"s{i}",
+            narration_start_anchor=NarrationAnchor(segment_id="a", offset_seconds=0),
+            narration_end_anchor=NarrationAnchor(segment_id="a", offset_seconds=1),
+            asset_id="x",
+            start_cut_alignment="sentence_boundary",
+        )
+        for i in range(6)
+    ]
+    resolved = [
+        ResolvedShot(
+            shot_id=f"s{i}",
+            asset_id="x",
+            timeline_start_seconds=float(i * 5),
+            timeline_end_seconds=float(i * 5 + 5),
+            source_start_seconds=0.0,
+            source_end_seconds=5.0,
+            folder_name="ChapterA",
+        )
+        for i in range(6)
+    ]
+    # Default path (rhythm / sync / KF): still reports 10–17s.
+    notes = assess_cut_rhythm(
+        FinalCutPlanDocument(script_version="v1", shots=shots), resolved
+    )
+    assert any("Zielband ~13.5s" in n for n in notes)
+
+    for style in (
+        UNIFIED_CUT_STYLE_RHYTHM,
+        UNIFIED_CUT_STYLE_KEYWORD_SYNC,
+        UNIFIED_CUT_STYLE_KEYWORD_FLOW,
+    ):
+        plan = UnifiedCutPlanDocument(
+            script_version="v1",
+            boundaries=[
+                CutBoundary(
+                    cut_id=f"b{i}",
+                    sentence_id="s",
+                    position="start" if i == 0 else "end",
+                    alignment="sentence_boundary",
+                )
+                for i in range(7)
+            ],
+            slots=[
+                CutSlot(slot_id=f"slot{i}", local_asset_id="x", asset_fit="strong")
+                for i in range(6)
+            ],
+        )
+        assessment = assess_unified_cut_quality(
+            plan=plan,
+            resolved=ResolvedTimelineDocument(
+                script_version="v1",
+                fps=25.0,
+                total_duration_seconds=30.0,
+                shots=resolved,
+            ),
+            options=CutPlanOptions(
+                unified_cut_style=style,  # type: ignore[arg-type]
+                shot_min_sec=3.0,
+                shot_max_sec=9.0,
+            ),
+        )
+        assert any("Zielband ~13.5s" in n for n in assessment.all_notes())
+
+
+def test_timeline_dispatch_disables_legacy_band_only_for_free() -> None:
+    source = Path(
+        "otio_app/services/without_voiceover_enhanced/unified_timeline_service.py"
+    ).read_text(encoding="utf-8")
+    assert "include_legacy_shot_length_band = not is_keyword_flow_free_unified_style" in source
+    assert "include_legacy_shot_length_band=include_legacy_shot_length_band" in source

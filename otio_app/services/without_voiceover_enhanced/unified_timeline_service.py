@@ -13,6 +13,7 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     CutPlanOptions,
+    is_keyword_flow_free_unified_style,
     load_cut_plan_options,
     resolve_timing_seconds,
     uses_keyword_onset_timing_rules,
@@ -1807,7 +1808,16 @@ def resolve_unified_timeline(
                     repairs.append(message)
         last_index[key] = index
 
-    repairs.extend(assess_cut_rhythm(final_shadow, ordered))
+    # Keyword Flow Free: Settings shot_min/max are the only shot-length band.
+    # Keep legacy 10–17s soft band for all other unified styles (unchanged).
+    include_legacy_shot_length_band = not is_keyword_flow_free_unified_style(options)
+    repairs.extend(
+        assess_cut_rhythm(
+            final_shadow,
+            ordered,
+            include_legacy_shot_length_band=include_legacy_shot_length_band,
+        )
+    )
 
     chapter_count = max(1, len(chapter_envelopes))
     total = timeline.total_duration_seconds + (preroll + postroll) * chapter_count
@@ -1834,7 +1844,10 @@ def resolve_unified_timeline(
         errors=errors,
     )
     quality = assess_unified_cut_quality(
-        plan=plan, resolved=document, options=options
+        plan=plan,
+        resolved=document,
+        options=options,
+        include_legacy_shot_length_band=include_legacy_shot_length_band,
     )
     for note in quality.all_notes():
         if note not in document.repairs:
