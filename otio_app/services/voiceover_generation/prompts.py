@@ -1202,15 +1202,21 @@ def build_intro_hook_prompt(
     settings: IntroHookSettings,
     inventory_by_folder: dict[str, list[dict]] | None = None,
     style_context_text: str | None = None,
+    candidate_count: int | None = None,
 ) -> str:
-    """Baut den Prompt für genau 5 Intro-Inhaltsvarianten.
+    """Baut den Prompt für genau N Intro-Inhaltsvarianten (Default: INTRO_HOOK_CANDIDATE_COUNT).
 
-    Eine gemeinsame STRUCTURE (aus Raw-Intro-Referenz / Style) — fünf
+    Eine gemeinsame STRUCTURE (aus Raw-Intro-Referenz / Style) — N
     unterschiedliche Inhaltswahlen. Quelle: nur kurze Kapitel-Signale aus der
     Dramaturgie (Name, Rolle, Reason, Scores) — **kein** Fließtext, keine
     Folder-VO-Sätze, kein Inventory.
     """
+    from otio_app.defaults import INTRO_HOOK_CANDIDATE_COUNT
+
     del inventory_by_folder
+    count = int(candidate_count or INTRO_HOOK_CANDIDATE_COUNT)
+    if count < 1:
+        count = INTRO_HOOK_CANDIDATE_COUNT
     entries_by_folder = {
         entry.folder_name: entry for entry in dramaturgy_plan.recommended_folder_order
     }
@@ -1290,23 +1296,26 @@ catalog. Separate sentences still need to sound like spoken prose.
 {chapter_blocks}
 
 ## Task
-ONE shared Intro STRUCTURE. FIVE different CONTENT variants.
+ONE shared Intro STRUCTURE. {count} different CONTENT variants.
 
 1. Infer the structural template from the Intro structural / style reference \
 above (beat order, vignette rhythm, pauses/pacing, naming beat, tension/history \
 beat, open questions, host/promise close). If no structural reference is \
 available, use a clean documentary Intro with the same beat roles.
-2. Keep that SAME structure for every candidate.
-3. Vary only the CONTENT across the 5 candidates: different place selections, \
+2. Keep that SAME structure for every candidate — including every timed pause \
+marker line such as [pause 2 seconds] / [pause 1.5 seconds] in the same \
+positions between beats.
+3. Vary only the CONTENT across the {count} candidates: different place selections, \
 facts, contrasts, and question angles drawn from the chapter signals.
-4. Do NOT produce 5 different hook strategies (mystery vs contrast vs question, \
+4. Do NOT produce {count} different hook strategies (mystery vs contrast vs question, \
 etc.). Strategy/structure is fixed; content changes.
 
-Produce EXACTLY 5 intro candidates (exactly 5, no more, no fewer). Each must \
+Produce EXACTLY {count} intro candidates (exactly {count}, no more, no fewer). Each must \
 read like real documentary prose — never like a list of assets or a plot \
 summary. Preserve structural markers from the reference when present \
-(e.g. [cinematic], [pause …], [serious], [intense]) adapted to this project's \
-language and content — do not invent a different macro-structure.
+(e.g. [cinematic], [pause N seconds], [serious], [intense]) adapted to this project's \
+language and content — do not invent a different macro-structure. Never write bare \
+[pause] without a duration.
 
 For each candidate, also provide visual_beats: a beat breakdown of the intro \
 text. Set source_folder_name to a ready chapter name from above when relevant. \
@@ -1346,6 +1355,47 @@ this shape:
     }}
   ]
 }}
+"""
+
+
+DEFAULT_INTRO_HOOK_REVISION_INSTRUCTIONS = (
+    "change the text so it sounds more human. "
+    "Keep the structure and the pause tags in brackets. "
+    "It must not be detected by AI Detectors."
+)
+
+
+def build_intro_hook_revision_prompt(
+    *,
+    editor_instructions: str,
+    current_hook_text: str,
+    hook_id: str,
+    language: str = "en",
+) -> str:
+    """Minimaler Revisions-Prompt für ein fertiges Intro inkl. Pause-Markern."""
+    instructions = (editor_instructions or "").strip()
+    script = (current_hook_text or "").strip()
+    return f"""\
+Revise ONE documentary opening intro.
+
+LANGUAGE: {language}
+HOOK ID: {hook_id}
+
+EDITOR INSTRUCTIONS (follow these; they override wording where they conflict):
+{instructions or "(no instructions provided)"}
+
+CURRENT INTRO (includes timed pause markers on their own lines):
+{script or "(empty)"}
+
+PAUSE MARKERS — copy 1:1:
+- Keep every [pause N seconds] / [pause N.N seconds] marker exactly as written
+  (same numbers, same positions between beats).
+- Do NOT write bare [pause] without a duration.
+- Do NOT invent new pause markers unless the editor instructions explicitly ask.
+- Only rewrite the spoken prose between those markers.
+
+Return ONLY the revised intro as plain text, including the preserved pause lines.
+No JSON, no markdown code fences, no commentary.
 """
 
 def build_youtube_publish_prompt(

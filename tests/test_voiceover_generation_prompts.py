@@ -1171,7 +1171,9 @@ def test_intro_hook_prompt_enumeration_sentence_break_guidance() -> None:
     assert "separate short sentences" in prompt
 
 
-def test_intro_hook_prompt_requests_exactly_5_candidates() -> None:
+def test_intro_hook_prompt_requests_exactly_n_candidates() -> None:
+    from otio_app.defaults import INTRO_HOOK_CANDIDATE_COUNT
+
     prompt = build_intro_hook_prompt(
         project_brief=_sample_brief(),
         style_profile=None,
@@ -1179,11 +1181,15 @@ def test_intro_hook_prompt_requests_exactly_5_candidates() -> None:
         confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
         settings=_sample_intro_settings(),
     )
-    assert "EXACTLY 5" in prompt
+    assert f"EXACTLY {INTRO_HOOK_CANDIDATE_COUNT}" in prompt
     assert "ONE shared Intro STRUCTURE" in prompt
-    assert "FIVE different CONTENT variants" in prompt
+    assert f"{INTRO_HOOK_CANDIDATE_COUNT} different CONTENT variants" in prompt
     assert "distinct strategic approach" not in prompt
-    assert "Do NOT produce 5 different hook strategies" in prompt
+    assert (
+        f"Do NOT produce {INTRO_HOOK_CANDIDATE_COUNT} different hook strategies"
+        in prompt
+    )
+    assert "[pause N seconds]" in prompt
 
 
 def test_intro_hook_prompt_contains_do_not_merely_summarize() -> None:
