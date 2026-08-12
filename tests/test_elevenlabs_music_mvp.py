@@ -538,6 +538,7 @@ def test_i_raw_bytes_not_accepted_as_wav(tmp_path: Path) -> None:
 
 
 def test_k_invalid_audio_keeps_previous_wav(tmp_path: Path) -> None:
+    """R1: failed regen must preserve completed music_result + OTIO usability."""
     project = _project(tmp_path)
     _write_locked(project)
     folder = "Yosemite"
@@ -572,6 +573,7 @@ def test_k_invalid_audio_keeps_previous_wav(tmp_path: Path) -> None:
             "message": "completed",
         },
     )
+    result_before = music_result_path(project, scope="chapter", folder_name=folder).read_bytes()
 
     def _bad_compose(**_kwargs):
         return ElevenLabsMusicResult(audio_bytes=b"totally-not-audio")
@@ -595,9 +597,180 @@ def test_k_invalid_audio_keeps_previous_wav(tmp_path: Path) -> None:
         result = generate_music_for_chapter(
             project, folder, compose_callable=_bad_compose
         )
+        usable = usable_music_path_for_otio(
+            project, scope="chapter", folder_name=folder
+        )
     assert result.status == "failed"
     assert wav.is_file()
     assert wav.read_bytes() == old_bytes
+    assert (
+        music_result_path(project, scope="chapter", folder_name=folder).read_bytes()
+        == result_before
+    )
+    assert json.loads(result_before.decode("utf-8"))["status"] == "completed"
+    assert usable == wav.resolve() or usable == wav
+    assert usable is not None and Path(usable).is_file()
+    # OTIO Music track still buildable
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        _time_range,
+    )
+
+    track = build_optional_music_track(
+        project,
+        _resolved_chapter(folder, duration=3.0),
+        fps=25.0,
+        time_range_fn=_time_range,
+    )
+    assert track is not None
+    assert track.name == "Music"
+
+
+def test_r1_stale_music_survives_failed_regen(tmp_path: Path) -> None:
+    """Stale completed Music stays stale after failed regenerate — not current."""
+    project = _project(tmp_path)
+    _write_locked(project)
+    folder = "Yosemite"
+    write_json(chapter_unified_cut_plan_path(project, folder), _plan(folder))
+    # Current timing is 9s; stored music fingerprints are for 3s → stale
+    write_json(
+        chapter_resolved_timeline_path(project, folder),
+        _resolved_chapter(folder, duration=9.0),
+    )
+    wav = music_wav_path(project, scope="chapter", folder_name=folder)
+    _make_wav(wav, 3.0)
+    old_bytes = wav.read_bytes()
+    script_fp = fingerprint_text(
+        "Yosemite granite walls rise above the valley floor."
+    )
+    old_timing_fp = resolved_timing_fingerprint(
+        script_version="v1", target_duration_seconds=3.0
+    )
+    save_music_result(
+        project,
+        {
+            "scope": "chapter",
+            "chapter_id": folder,
+            "status": "completed",
+            "music_path": str(wav),
+            "actual_duration_seconds": 3.0,
+            "sample_rate": 48000,
+            "channels": 2,
+            "codec": "pcm_s16le",
+            "model_id": MUSIC_MODEL_ID,
+            "resolved_timing_fingerprint": old_timing_fp,
+            "script_fingerprint": script_fp,
+            "message": "completed",
+        },
+    )
+    result_before = music_result_path(project, scope="chapter", folder_name=folder).read_bytes()
+
+    def _bad_compose(**_kwargs):
+        return ElevenLabsMusicResult(audio_bytes=b"not-audio")
+
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.is_elevenlabs_music_configured",
+            return_value=True,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.list_body_chapter_names",
+            return_value=["Yosemite", "Caddo", "Zion", "Bryce"],
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.list_chapter_cut_statuses",
+            return_value=[
+                SimpleNamespace(folder_name=folder, has_resolved=True, matches=True)
+            ],
+        ),
+    ):
+        gen = generate_music_for_chapter(
+            project, folder, compose_callable=_bad_compose
+        )
+        usable = usable_music_path_for_otio(
+            project, scope="chapter", folder_name=folder
+        )
+        ui = music_status_for_scope(
+            project,
+            scope="chapter",
+            folder_name=folder,
+            script_fingerprint=script_fp,
+            resolved_timing_fingerprint=resolved_timing_fingerprint(
+                script_version="v1", target_duration_seconds=9.0
+            ),
+            api_key_present=True,
+        )
+    assert gen.status == "failed"
+    assert wav.is_file()
+    assert wav.read_bytes() == old_bytes
+    assert (
+        music_result_path(project, scope="chapter", folder_name=folder).read_bytes()
+        == result_before
+    )
+    assert ui["status"] == "stale"
+    assert usable is None
+
+
+def test_r1_missing_key_keeps_completed_music_visible(tmp_path: Path) -> None:
+    """With current Music present, missing key disables generate but keeps display/OTIO."""
+    project = _project(tmp_path)
+    _write_locked(project)
+    folder = "Yosemite"
+    write_json(chapter_unified_cut_plan_path(project, folder), _plan(folder))
+    write_json(
+        chapter_resolved_timeline_path(project, folder),
+        _resolved_chapter(folder, duration=3.0),
+    )
+    wav = music_wav_path(project, scope="chapter", folder_name=folder)
+    _make_wav(wav, 3.0)
+    script_fp = fingerprint_text(
+        "Yosemite granite walls rise above the valley floor."
+    )
+    timing_fp = resolved_timing_fingerprint(
+        script_version="v1", target_duration_seconds=3.0
+    )
+    save_music_result(
+        project,
+        {
+            "scope": "chapter",
+            "chapter_id": folder,
+            "status": "completed",
+            "music_path": str(wav),
+            "actual_duration_seconds": 3.0,
+            "sample_rate": 48000,
+            "channels": 2,
+            "codec": "pcm_s16le",
+            "model_id": MUSIC_MODEL_ID,
+            "resolved_timing_fingerprint": timing_fp,
+            "script_fingerprint": script_fp,
+            "message": "completed",
+        },
+    )
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.is_elevenlabs_music_configured",
+            return_value=False,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.list_body_chapter_names",
+            return_value=["Yosemite", "Caddo", "Zion", "Bryce"],
+        ),
+    ):
+        ui = music_ui_status_chapter(
+            project,
+            folder,
+            status=SimpleNamespace(
+                folder_name=folder, has_resolved=True, matches=True
+            ),
+        )
+        usable = usable_music_path_for_otio(
+            project, scope="chapter", folder_name=folder
+        )
+    assert ui["status"] == "completed"
+    assert ui["enabled"] is False
+    assert "Neuerstellung nicht möglich" in ui["help"]
+    assert "API-Key fehlt" in ui["help"]
+    assert usable is not None
+    assert Path(usable).is_file()
 
 
 # --- L/M staleness ---------------------------------------------------------

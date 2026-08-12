@@ -45,6 +45,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
 )
 from otio_app.services.without_voiceover_enhanced.music_artifacts import (
     OUTPUT_CONTRACT,
+    canonical_completed_music_result,
     fingerprint_text,
     music_status_for_scope,
     resolved_timing_fingerprint,
@@ -307,6 +308,31 @@ def _write_failed_result(
     target_duration_seconds: float,
     music_length_ms: int,
 ) -> MusicGenerationResult:
+    """Persist failed only when no canonical completed Music exists.
+
+    If a successful ``music_result.json`` + ``music.wav`` already exist (current
+    or stale fingerprints), keep them untouched so OTIO usability / staleness
+    is not destroyed by a failed regeneration.
+    """
+    scope_lit = "intro" if scope == "intro" else "chapter"
+    preserved = canonical_completed_music_result(
+        project, scope=scope_lit, folder_name=folder_name
+    )
+    wav = music_wav_path(project, scope=scope, folder_name=folder_name)
+    if preserved is not None:
+        return MusicGenerationResult(
+            status="failed",
+            message=message,
+            music_path=str(wav) if wav.is_file() else "",
+            target_duration_seconds=target_duration_seconds,
+            music_length_ms=music_length_ms,
+            actual_duration_seconds=(
+                float(preserved["actual_duration_seconds"])
+                if preserved.get("actual_duration_seconds") is not None
+                else None
+            ),
+        )
+
     save_music_result(
         project,
         {
@@ -588,18 +614,15 @@ def generate_music_for_chapter(
     )
 
 
+_NO_KEY_REGENERATE_HELP = "Neuerstellung nicht möglich – API-Key fehlt."
+
+
 def music_ui_status_intro(project: Project) -> dict[str, Any]:
     from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
         intro_resolved_matches_plan,
     )
 
-    if not is_elevenlabs_music_configured():
-        return {
-            "status": "unavailable",
-            "message": "Music nicht verfügbar",
-            "enabled": False,
-            "help": "ElevenLabs Music nicht verfügbar – API-Key fehlt.",
-        }
+    key_ok = is_elevenlabs_music_configured()
     try:
         script_version, _text, script_fp = _script_fingerprint(
             project, scope="intro", folder_name=ENHANCED_INTRO_FOLDER_NAME
@@ -613,17 +636,60 @@ def music_ui_status_intro(project: Project) -> dict[str, Any]:
             and resolve_music_target_duration_seconds(resolved) > 0
         )
         if not timing_ok:
+            # Still surface existing completed Music when key missing, if any.
+            status = music_status_for_scope(
+                project,
+                scope="intro",
+                folder_name=ENHANCED_INTRO_FOLDER_NAME,
+                script_fingerprint=script_fp if resolved is not None else "",
+                resolved_timing_fingerprint=(
+                    resolved_timing_fingerprint(
+                        script_version=script_version,
+                        target_duration_seconds=resolve_music_target_duration_seconds(
+                            resolved
+                        ),
+                    )
+                    if resolved is not None
+                    else ""
+                ),
+                api_key_present=key_ok,
+            )
+            if status.get("status") == "completed":
+                status["enabled"] = False
+                status["help"] = (
+                    _NO_KEY_REGENERATE_HELP
+                    if not key_ok
+                    else "Zuerst aktuelles Intro: Python Timing."
+                )
+                return status
             return {
-                "status": "missing",
-                "message": "Music fehlt",
+                "status": status.get("status") or ("unavailable" if not key_ok else "missing"),
+                "message": (
+                    "Music nicht verfügbar"
+                    if not key_ok and status.get("status") == "unavailable"
+                    else (status.get("message") or "Music fehlt")
+                ),
                 "enabled": False,
-                "help": "Zuerst aktuelles Intro: Python Timing.",
+                "help": (
+                    "ElevenLabs Music nicht verfügbar – API-Key fehlt."
+                    if not key_ok
+                    else "Zuerst aktuelles Intro: Python Timing."
+                ),
+                "actual_duration_seconds": status.get("actual_duration_seconds"),
+                "music_path": status.get("music_path") or "",
             }
         target = resolve_music_target_duration_seconds(resolved)
         timing_fp = resolved_timing_fingerprint(
             script_version=script_version, target_duration_seconds=target
         )
     except Exception:  # noqa: BLE001
+        if not key_ok:
+            return {
+                "status": "unavailable",
+                "message": "Music nicht verfügbar",
+                "enabled": False,
+                "help": "ElevenLabs Music nicht verfügbar – API-Key fehlt.",
+            }
         return {
             "status": "missing",
             "message": "Music fehlt",
@@ -636,8 +702,17 @@ def music_ui_status_intro(project: Project) -> dict[str, Any]:
         folder_name=ENHANCED_INTRO_FOLDER_NAME,
         script_fingerprint=script_fp,
         resolved_timing_fingerprint=timing_fp,
-        api_key_present=True,
+        api_key_present=key_ok,
     )
+    if not key_ok:
+        status["enabled"] = False
+        if status.get("status") == "completed":
+            status["help"] = _NO_KEY_REGENERATE_HELP
+        else:
+            status["help"] = "ElevenLabs Music nicht verfügbar – API-Key fehlt."
+            if status.get("status") == "unavailable":
+                status["message"] = "Music nicht verfügbar"
+        return status
     status["enabled"] = True
     status["help"] = status.get("message") or ""
     return status
@@ -657,19 +732,17 @@ def music_ui_status_chapter(project: Project, folder_name: str, status: ChapterC
         statuses = {s.folder_name: s for s in list_chapter_cut_statuses(project)}
         status = statuses.get(folder)
     timing_ok = bool(status and status.has_resolved and status.matches)
-    if not is_elevenlabs_music_configured():
-        return {
-            "status": "unavailable",
-            "message": "Music nicht verfügbar",
-            "enabled": False,
-            "help": "ElevenLabs Music nicht verfügbar – API-Key fehlt.",
-        }
+    key_ok = is_elevenlabs_music_configured()
     if not timing_ok:
         return {
-            "status": "missing",
-            "message": "Music fehlt",
+            "status": "missing" if key_ok else "unavailable",
+            "message": "Music fehlt" if key_ok else "Music nicht verfügbar",
             "enabled": False,
-            "help": "Zuerst erfolgreiches Python Timing.",
+            "help": (
+                "Zuerst erfolgreiches Python Timing."
+                if key_ok
+                else "ElevenLabs Music nicht verfügbar – API-Key fehlt."
+            ),
         }
     try:
         script_version, _text, script_fp = _script_fingerprint(
@@ -683,10 +756,14 @@ def music_ui_status_chapter(project: Project, folder_name: str, status: ChapterC
         )
     except Exception:  # noqa: BLE001
         return {
-            "status": "missing",
-            "message": "Music fehlt",
+            "status": "missing" if key_ok else "unavailable",
+            "message": "Music fehlt" if key_ok else "Music nicht verfügbar",
             "enabled": False,
-            "help": "Zuerst erfolgreiches Python Timing.",
+            "help": (
+                "Zuerst erfolgreiches Python Timing."
+                if key_ok
+                else "ElevenLabs Music nicht verfügbar – API-Key fehlt."
+            ),
         }
     ui = music_status_for_scope(
         project,
@@ -694,8 +771,17 @@ def music_ui_status_chapter(project: Project, folder_name: str, status: ChapterC
         folder_name=folder,
         script_fingerprint=script_fp,
         resolved_timing_fingerprint=timing_fp,
-        api_key_present=True,
+        api_key_present=key_ok,
     )
+    if not key_ok:
+        ui["enabled"] = False
+        if ui.get("status") == "completed":
+            ui["help"] = _NO_KEY_REGENERATE_HELP
+        else:
+            ui["help"] = "ElevenLabs Music nicht verfügbar – API-Key fehlt."
+            if ui.get("status") == "unavailable":
+                ui["message"] = "Music nicht verfügbar"
+        return ui
     ui["enabled"] = True
     ui["help"] = ui.get("message") or ""
     return ui

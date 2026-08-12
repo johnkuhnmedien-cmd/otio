@@ -84,6 +84,32 @@ def save_music_result(project: Project, payload: dict[str, Any]) -> Path:
     return path
 
 
+def load_music_result(
+    project: Project, *, scope: MusicScope, folder_name: str = ""
+) -> dict[str, Any] | None:
+    return load_json_if_present(
+        music_result_path(project, scope=scope, folder_name=folder_name)
+    )
+
+
+def canonical_completed_music_result(
+    project: Project, *, scope: MusicScope, folder_name: str = ""
+) -> dict[str, Any] | None:
+    """Return completed music_result when a local WAV still exists.
+
+    Used so failed regenerations do not destroy a prior successful canonical state.
+    """
+    result = load_music_result(project, scope=scope, folder_name=folder_name)
+    if result is None:
+        return None
+    if str(result.get("status") or "") != "completed":
+        return None
+    wav = music_wav_path(project, scope=scope, folder_name=folder_name)
+    if not wav.is_file():
+        return None
+    return result
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -97,17 +123,21 @@ def music_status_for_scope(
     resolved_timing_fingerprint: str,
     api_key_present: bool,
 ) -> dict[str, Any]:
-    """UI-facing status without mutating artefacts."""
+    """UI-facing status without mutating artefacts.
+
+    Missing API key must not hide a current completed Music artefact; callers
+    disable Generate separately.
+    """
     wav = music_wav_path(project, scope=scope, folder_name=folder_name)
     result = load_json_if_present(music_result_path(project, scope=scope, folder_name=folder_name))
-    if not api_key_present:
-        return {
-            "status": "unavailable",
-            "message": "ElevenLabs Music nicht verfügbar – API-Key fehlt.",
-            "music_path": str(wav) if wav.is_file() else "",
-            "actual_duration_seconds": None,
-        }
     if result is None and not wav.is_file():
+        if not api_key_present:
+            return {
+                "status": "unavailable",
+                "message": "ElevenLabs Music nicht verfügbar – API-Key fehlt.",
+                "music_path": "",
+                "actual_duration_seconds": None,
+            }
         return {
             "status": "missing",
             "message": "Music fehlt",
@@ -135,6 +165,13 @@ def music_status_for_scope(
             "actual_duration_seconds": (result or {}).get("actual_duration_seconds"),
         }
     if status == "failed":
+        if not api_key_present and not wav.is_file():
+            return {
+                "status": "unavailable",
+                "message": "ElevenLabs Music nicht verfügbar – API-Key fehlt.",
+                "music_path": "",
+                "actual_duration_seconds": None,
+            }
         return {
             "status": "failed",
             "message": str((result or {}).get("message") or "Music fehlgeschlagen"),
@@ -147,6 +184,13 @@ def music_status_for_scope(
             "message": "⚠ Music veraltet — bitte neu erzeugen.",
             "music_path": str(wav),
             "actual_duration_seconds": (result or {}).get("actual_duration_seconds"),
+        }
+    if not api_key_present:
+        return {
+            "status": "unavailable",
+            "message": "ElevenLabs Music nicht verfügbar – API-Key fehlt.",
+            "music_path": "",
+            "actual_duration_seconds": None,
         }
     return {
         "status": "missing",
