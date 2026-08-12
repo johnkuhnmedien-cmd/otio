@@ -53,7 +53,11 @@ def test_cut_plan_options_model_accepts_dynamic_fields() -> None:
         still_image_dynamic_zoom_enabled=True,
         still_image_dynamic_zoom_factor=1.2,
     )
-    assert opts.schema_version == "1.10"
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CUT_PLAN_OPTIONS_SCHEMA_VERSION,
+    )
+
+    assert opts.schema_version == CUT_PLAN_OPTIONS_SCHEMA_VERSION
     dumped = opts.model_dump()
     assert dumped["still_image_dynamic_zoom_enabled"] is True
     assert dumped["still_image_dynamic_zoom_factor"] == 1.2
