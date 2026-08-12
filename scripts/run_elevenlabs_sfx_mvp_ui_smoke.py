@@ -339,7 +339,9 @@ def main() -> int:
             findings["checks"]["has_sfx_planner_model"] = "SFX Planner Model" in body
             findings["checks"]["has_max_sfx"] = "Maximum SFX per chapter" in body
             findings["checks"]["has_gpt56_sol"] = (
-                "GPT-5.6 Sol" in body or "gpt-5.6-sol" in body
+                "GPT-5.6 Sol" in body
+                or "gpt-5.6-sol" in body
+                or "Flagship" in body
             )
 
             shot_cut = OUT / "elevenlabs-sfx-mvp-cut-plan.png"
