@@ -51,8 +51,16 @@ class CutRhythmAssessment:
 def assess_cut_rhythm(
     final: FinalCutPlanDocument,
     resolved_shots: list[ResolvedShot],
+    *,
+    include_legacy_shot_length_band: bool = True,
 ) -> list[str]:
-    """Liefert Repair-/Hinweistexte (keine Hard-Errors)."""
+    """Liefert Repair-/Hinweistexte (keine Hard-Errors).
+
+    ``include_legacy_shot_length_band`` default True erhält das bisherige
+    10–17s-Zielband für rhythm / keyword_sync / keyword_flow.
+    Keyword Flow Free setzt False und nutzt ausschließlich Settings
+    shot_min/max (siehe ``assess_unified_cut_quality``).
+    """
     notes: list[str] = []
     shots = list(final.shots or [])
     total = len(shots)
@@ -76,7 +84,8 @@ def assess_cut_rhythm(
         max(0.0, shot.timeline_end_seconds - shot.timeline_start_seconds)
         for shot in resolved_shots
     ]
-    notes.extend(_shot_length_notes(lengths))
+    if include_legacy_shot_length_band:
+        notes.extend(_shot_length_notes(lengths))
     return notes
 
 
@@ -130,8 +139,14 @@ def assess_unified_cut_quality(
     plan: UnifiedCutPlanDocument,
     resolved: ResolvedTimelineDocument,
     options: CutPlanOptions,
+    include_legacy_shot_length_band: bool = True,
 ) -> CutRhythmAssessment:
-    """Erweiterte Soft-QS für Unified: Alignment, Länge, Coverage, Usage/Reuse."""
+    """Erweiterte Soft-QS für Unified: Alignment, Länge, Coverage, Usage/Reuse.
+
+    Legacy 10–17s-Band nur wenn ``include_legacy_shot_length_band`` True
+    (Default — rhythm / keyword_sync / keyword_flow unverändert).
+    Keyword Flow Free: False → nur Settings shot_min/max als Dauer-Diagnostik.
+    """
     assessment = CutRhythmAssessment()
 
     counts: Counter[str] = Counter()
@@ -161,9 +176,11 @@ def assess_unified_cut_quality(
         if not s.open_gap
     ]
     assessment.shot_lengths = lengths
-    assessment.notes.extend(_shot_length_notes(lengths))
+    if include_legacy_shot_length_band:
+        assessment.notes.extend(_shot_length_notes(lengths))
 
-    # Settings-Band soft markieren (Intro ausnehmen; gilt Rhythmus + Keyword-Sync).
+    # Settings-Band soft markieren (Intro ausnehmen).
+    # Für Keyword Flow Free ist dies die einzige Shot-Dauer-Diagnostik.
     lo = float(options.shot_min_sec)
     hi = float(options.shot_max_sec)
     body_lengths = [

@@ -36,9 +36,12 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     TIMING_MODE_LLM,
     UNIFIED_CUT_STYLE_CHOICES,
     UNIFIED_CUT_STYLE_KEYWORD_FLOW,
+    UNIFIED_CUT_STYLE_KEYWORD_FLOW_FREE,
     UNIFIED_CUT_STYLE_KEYWORD_SYNC,
     UNIFIED_CUT_STYLE_RHYTHM,
     CutPlanOptions,
+    is_keyword_flow_free_unified_style,
+    is_keyword_flow_unified_style,
     is_keyword_sync_unified_style,
     load_cut_plan_options,
     save_cut_plan_options,
@@ -554,6 +557,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             UNIFIED_CUT_STYLE_RHYTHM: "Rhythmus (shot_min/max)",
             UNIFIED_CUT_STYLE_KEYWORD_SYNC: "Keyword-Sync (Wort↔Bild)",
             UNIFIED_CUT_STYLE_KEYWORD_FLOW: "Keyword Flow",
+            UNIFIED_CUT_STYLE_KEYWORD_FLOW_FREE: "Keyword Flow Free",
         }
         style_options = list(UNIFIED_CUT_STYLE_CHOICES)
         style_index = (
@@ -574,7 +578,9 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 "Keyword-Sync: eigener Prompt (Buzzword-Onset) mit denselben "
                 "Cut-Settings und Word-Timestamps. "
                 "Keyword Flow: context-first mit echten Wort-Onsets und "
-                "flexibler ±1,5-s-Bildplatzierung."
+                "flexibler ±1,5-s-Bildplatzierung. "
+                "Keyword Flow Free: freier kontextbasierter Schnitt auf "
+                "kontinuierlichem Wortfluss."
             ),
         )
         if (
@@ -601,6 +607,26 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 "Keyword-Onset-Toleranz überschreitbar (Timing trotzdem akzeptieren)",
                 value=bool(current.keyword_flow_allow_onset_overflow),
                 key=f"enh_opt_kf_onset_overflow_{project.id}",
+                help=(
+                    "Default aus: Python Timing bricht ab, wenn die nötige "
+                    "Bildverschiebung zu einem Keyword-Onset > ±1,5 s liegt. "
+                    "Wenn aktiv: Timing wird mit den geklemmten Zeiten "
+                    "trotzdem geschrieben; die Überschreitung erscheint als Warnung "
+                    "unter Hinweise/Repairs. Audio wird nicht getrimmt."
+                ),
+            )
+        if (
+            cut_plan_mode == CUT_PLAN_MODE_UNIFIED
+            and unified_cut_style == UNIFIED_CUT_STYLE_KEYWORD_FLOW_FREE
+        ):
+            st.caption(
+                "Freier kontextbasierter Schnitt auf kontinuierlichem Wortfluss. "
+                "Mehrere Shots pro Satz und Shots über Satzgrenzen sind ausdrücklich erlaubt."
+            )
+            keyword_flow_allow_onset_overflow = st.checkbox(
+                "Keyword-Onset-Toleranz überschreitbar (Timing trotzdem akzeptieren)",
+                value=bool(current.keyword_flow_allow_onset_overflow),
+                key=f"enh_opt_kff_onset_overflow_{project.id}",
                 help=(
                     "Default aus: Python Timing bricht ab, wenn die nötige "
                     "Bildverschiebung zu einem Keyword-Onset > ±1,5 s liegt. "
@@ -1069,11 +1095,14 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             type="primary",
         ):
             saved = save_cut_plan_options(project, draft)
-            style_note = (
-                " · Keyword-Sync"
-                if is_keyword_sync_unified_style(saved)
-                else " · Rhythmus"
-            )
+            if is_keyword_flow_free_unified_style(saved):
+                style_note = " · Keyword Flow Free"
+            elif is_keyword_flow_unified_style(saved):
+                style_note = " · Keyword Flow"
+            elif is_keyword_sync_unified_style(saved):
+                style_note = " · Keyword-Sync"
+            else:
+                style_note = " · Rhythmus"
             style_note += f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
             st.success(
                 f"Gespeichert: mode={saved.cut_plan_mode} · "

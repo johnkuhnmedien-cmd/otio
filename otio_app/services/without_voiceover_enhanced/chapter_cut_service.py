@@ -306,13 +306,13 @@ def get_chapter_cut_status(
     )
     from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
         KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE,
-        is_keyword_flow_unified_style,
         load_cut_plan_options,
         plan_has_unsupported_keyword_flow_pause_directives,
+        uses_keyword_onset_timing_rules,
     )
 
     unsupported_pauses = bool(
-        is_keyword_flow_unified_style(load_cut_plan_options(project))
+        uses_keyword_onset_timing_rules(load_cut_plan_options(project))
         and plan_has_unsupported_keyword_flow_pause_directives(plan)
     )
     # Alte Cuts nach Skript-Neu-Erzeugung / Pause-Directives zählen nicht als fertig.
@@ -608,12 +608,12 @@ def resolve_chapter_timeline(
         )
     from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
         KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE,
-        is_keyword_flow_unified_style,
         load_cut_plan_options,
         plan_has_unsupported_keyword_flow_pause_directives,
+        uses_keyword_onset_timing_rules,
     )
 
-    if is_keyword_flow_unified_style(
+    if uses_keyword_onset_timing_rules(
         load_cut_plan_options(project)
     ) and plan_has_unsupported_keyword_flow_pause_directives(plan):
         raise ChapterCutError(KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE)
@@ -1012,12 +1012,12 @@ def export_chapter_otio(
         )
     from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
         KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE,
-        is_keyword_flow_unified_style,
         load_cut_plan_options,
         plan_has_unsupported_keyword_flow_pause_directives,
+        uses_keyword_onset_timing_rules,
     )
 
-    if is_keyword_flow_unified_style(
+    if uses_keyword_onset_timing_rules(
         load_cut_plan_options(project)
     ) and plan_has_unsupported_keyword_flow_pause_directives(plan):
         raise EnhancedOtioExportError(
