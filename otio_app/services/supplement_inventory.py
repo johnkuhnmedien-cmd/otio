@@ -37,6 +37,7 @@ from otio_app.services.asset_analysis_signature import (
     classify_asset_cache_status,
 )
 from otio_app.services.inventory_loader import (
+    load_folder_inventory,
     load_folder_inventory_file,
     save_folder_inventory,
 )
@@ -250,9 +251,12 @@ def upsert_supplement_into_inventory(
     path = get_folder_inventory_path(project.work_dir_path, folder_name)
     media_path = Path(asset.path)
     provider_key = _provider_key_for_asset(asset)
-    existing = load_folder_inventory_file(path)
+    # Cache-bewusst laden: ohne kanonische JSON (Ordner noch nicht grün) darf
+    # der Upsert die bereits analysierten Originale nicht aus dem Blick
+    # verlieren, sonst schreibt er eine Inventar-JSON nur mit Supplements.
+    existing = load_folder_inventory(project, folder_name)
 
-    if existing is None:
+    if existing is None or (not existing.assets and not existing.media_files):
         folder_doc = AssetFolderAnalysis(
             folder=folder_name,
             description="",

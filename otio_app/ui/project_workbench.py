@@ -437,15 +437,34 @@ def _render_analysis_actions(
         key=f"show_missing_assets_{project.id}",
         value=False,
     ):
+        from otio_app.services.supplement_inventory import (
+            count_supplements_needing_analysis,
+        )
+
         for folder_name in selected_folders:
             missing = list_assets_missing_successful_cache(project, folder_name)
             total = len(discover_folder_media_paths(project, folder_name))
+            open_supplements = count_supplements_needing_analysis(
+                project, [folder_name]
+            )
+            # Beschaffte Assets laufen im selben Lauf mit — sie gehören in die
+            # Vorschau, sonst überrascht die Kostenschätzung.
+            supplement_note = (
+                f" · zusätzlich {open_supplements} beschaffte(s) Asset(s)"
+                if open_supplements
+                else ""
+            )
             if missing:
                 labels = ", ".join(f"`{path.name}`" for path in missing[:8])
                 suffix = " …" if len(missing) > 8 else ""
                 st.warning(
                     f"**{folder_name}:** {len(missing)} von {total} Assets ohne Analyse-JSON "
-                    f"({labels}{suffix})"
+                    f"({labels}{suffix}){supplement_note}"
+                )
+            elif open_supplements:
+                st.warning(
+                    f"**{folder_name}:** alle {total} Originale analysiert,"
+                    f"{supplement_note}"
                 )
             else:
                 st.caption(f"**{folder_name}:** alle Assets analysiert ({total})")
