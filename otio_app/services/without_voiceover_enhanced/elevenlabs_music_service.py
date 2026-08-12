@@ -80,6 +80,7 @@ __all__ = [
     "body_chapter_music_index",
     "music_length_ms_from_seconds",
     "resolve_music_target_duration_seconds",
+    "resolve_chapter_narration_end_seconds",
     "narration_text_for_music",
     "generate_music_for_intro",
     "generate_music_for_chapter",
@@ -151,6 +152,43 @@ def resolve_music_target_duration_seconds(
     raise MusicServiceError(
         "Resolved Timing hat keine positive Dauer für ElevenLabs Music."
     )
+
+
+def resolve_chapter_narration_end_seconds(
+    resolved: ResolvedTimelineDocument,
+) -> float:
+    """Canonical VO end within the chapter track (local to chapter_video_start).
+
+    Source: ``ResolvedChapterEnvelope.chapter_audio_end`` from Python Timing.
+    Not estimated from script length or TTS raw data.
+    """
+    if not resolved.chapters:
+        raise MusicServiceError(
+            "Kapitel Resolved Timing hat keine Chapter-Envelope — "
+            "Voice-over-Endposition für Music-Prompt nicht bestimmbar."
+        )
+    env = resolved.chapters[0]
+    video_start = float(env.chapter_video_start)
+    audio_end = float(env.chapter_audio_end)
+    video_end = float(env.chapter_video_end)
+    narration_end = audio_end - video_start
+    total = video_end - video_start
+    if narration_end <= 1e-6:
+        raise MusicServiceError(
+            "Kapitel Resolved Timing: chapter_audio_end liefert keine positive "
+            "Voice-over-Endposition für Music."
+        )
+    if total <= 1e-6:
+        raise MusicServiceError(
+            "Kapitel Resolved Timing: Kapitel-Gesamtdauer ungültig für Music."
+        )
+    if narration_end > total + 1e-3:
+        raise MusicServiceError(
+            "Kapitel Resolved Timing inkonsistent: Narration-Ende "
+            f"({narration_end:.3f}s) liegt hinter Kapitelende ({total:.3f}s)."
+        )
+    # Clamp tiny float overshoot into the track length.
+    return round(min(narration_end, total), 6)
 
 
 def narration_text_for_music(project: Project, *, scope: str, folder_name: str = "") -> str:
@@ -604,12 +642,18 @@ def generate_music_for_chapter(
     plan = load_chapter_unified_plan(project, folder)
     if plan is None:
         raise MusicServiceError("Kapitel-Cut-Plan fehlt.")
+    total = resolve_music_target_duration_seconds(resolved)
+    narration_end = resolve_chapter_narration_end_seconds(resolved)
     return _generate(
         project,
         scope="chapter",
         folder_name=folder,
         resolved=resolved,
-        prompt_builder=lambda text: build_chapter_music_prompt(narration_text=text),
+        prompt_builder=lambda text: build_chapter_music_prompt(
+            narration_text=text,
+            total_duration_seconds=total,
+            narration_end_seconds=narration_end,
+        ),
         compose_callable=compose_callable,
     )
 

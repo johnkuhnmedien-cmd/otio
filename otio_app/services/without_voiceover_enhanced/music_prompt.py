@@ -10,8 +10,15 @@ _PAUSE_NOTE = (
 )
 
 
-def build_chapter_music_prompt(*, narration_text: str) -> str:
+def build_chapter_music_prompt(
+    *,
+    narration_text: str,
+    total_duration_seconds: float,
+    narration_end_seconds: float,
+) -> str:
     body = (narration_text or "").strip()
+    total = float(total_duration_seconds)
+    narration_end = float(narration_end_seconds)
     return f"""\
 Create an instrumental documentary underscore for the following narration.
 
@@ -26,6 +33,23 @@ No lyrics.
 Avoid exaggerated trailer-style drama.
 
 {_PAUSE_NOTE}
+
+Total track duration: {total:.2f} seconds.
+Narration ends at: {narration_end:.2f} seconds.
+
+Maintain a continuous, fully developed musical underscore throughout the complete narration.
+
+Do not begin the musical outro, fade-out, final cadence, or final resolution while the narrator is still speaking.
+
+Keep the music musically active and supportive until approximately {narration_end:.2f} seconds.
+
+Only after the narration has finished, transition into a very short and concise closing cadence using the remaining time.
+
+Do not create a long outro.
+Do not fade down early.
+Do not musically resolve early.
+
+If very little time remains after the narration, make the final cadence extremely short rather than starting the outro during the voice-over.
 
 Let the music develop naturally and end cleanly within the requested duration.
 

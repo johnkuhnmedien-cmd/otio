@@ -28,6 +28,7 @@ from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service impor
     music_length_ms_from_seconds,
     music_ui_status_chapter,
     music_ui_status_intro,
+    resolve_chapter_narration_end_seconds,
     resolve_music_target_duration_seconds,
     usable_music_path_for_otio,
     validate_final_music_wav,
@@ -142,8 +143,10 @@ def _resolved_chapter(
     folder: str,
     *,
     duration: float = 97.52,
+    narration_end: float | None = None,
     script_version: str = "v1",
 ) -> ResolvedTimelineDocument:
+    vo_end = float(duration if narration_end is None else narration_end)
     return ResolvedTimelineDocument(
         script_version=script_version,
         fps=25.0,
@@ -166,7 +169,7 @@ def _resolved_chapter(
                 folder_name=folder,
                 chapter_video_start=0.0,
                 chapter_audio_start=0.0,
-                chapter_audio_end=duration,
+                chapter_audio_end=vo_end,
                 chapter_video_end=duration,
                 first_shot_id=f"{folder}_slot_001",
                 last_shot_id=f"{folder}_slot_001",
@@ -342,7 +345,11 @@ def test_c_compose_request_force_instrumental_and_model(monkeypatch) -> None:
 def test_d_chapter_and_intro_prompts() -> None:
     chapter_text = "Yosemite granite walls rise above the valley floor."
     intro_text = "Welcome to the parks."
-    ch = build_chapter_music_prompt(narration_text=chapter_text)
+    ch = build_chapter_music_prompt(
+        narration_text=chapter_text,
+        total_duration_seconds=97.52,
+        narration_end_seconds=92.52,
+    )
     intro = build_intro_music_prompt(narration_text=intro_text)
     assert chapter_text in ch
     assert "No vocals" in ch
@@ -393,7 +400,11 @@ def test_e_prompt_over_4100_no_api_call(tmp_path: Path) -> None:
             ],
         ),
     ):
-        prompt = build_chapter_music_prompt(narration_text=long_text)
+        prompt = build_chapter_music_prompt(
+            narration_text=long_text,
+            total_duration_seconds=5.0,
+            narration_end_seconds=4.5,
+        )
         assert not music_prompt_within_limit(prompt)
         assert len(prompt) > MUSIC_PROMPT_MAX_CHARS
         result = generate_music_for_chapter(
@@ -1097,3 +1108,119 @@ def test_r_ui_helpers_disabled_without_timing(tmp_path: Path) -> None:
         )
     assert intro_ui["enabled"] is False
     assert ch_ui["enabled"] is False
+
+
+# --- R2: chapter outro only after narration ---------------------------------
+
+
+def test_r2_chapter_prompt_contains_narration_end_and_outro_rules() -> None:
+    prompt = build_chapter_music_prompt(
+        narration_text="Rocamadour rises above the Alzou canyon.",
+        total_duration_seconds=97.52,
+        narration_end_seconds=92.52,
+    )
+    assert "Total track duration: 97.52 seconds." in prompt
+    assert "Narration ends at: 92.52 seconds." in prompt
+    assert (
+        "Do not begin the musical outro, fade-out, final cadence, or final "
+        "resolution while the narrator is still speaking."
+    ) in prompt
+    assert "Only after the narration has finished" in prompt
+    assert "very short and concise closing cadence" in prompt
+    assert "Rocamadour rises above the Alzou canyon." in prompt
+
+
+def test_r2_chapter_prompt_short_postroll_still_defers_outro() -> None:
+    prompt = build_chapter_music_prompt(
+        narration_text="Short postroll chapter.",
+        total_duration_seconds=93.00,
+        narration_end_seconds=92.52,
+    )
+    assert "Total track duration: 93.00 seconds." in prompt
+    assert "Narration ends at: 92.52 seconds." in prompt
+    assert "while the narrator is still speaking" in prompt
+    assert "If very little time remains after the narration" in prompt
+    assert "extremely short rather than starting the outro during the voice-over" in prompt
+
+
+def test_r2_intro_prompt_unchanged_from_pre_r2() -> None:
+    """Intro prompt text must stay identical to the R1 / pre-R2 contract."""
+    intro = build_intro_music_prompt(narration_text="Welcome to the parks.")
+    expected = """\
+Create instrumental documentary opening music for the following intro narration.
+
+Match the location, atmosphere, cultural or historical character, and emotional tone of the narration.
+
+Begin atmospheric and restrained.
+Gradually build energy and forward momentum.
+The ending should feel more open and anticipatory so it leads naturally into the first chapter.
+
+The music must support spoken narration without dominating it.
+
+No vocals.
+No spoken words.
+No lyrics.
+Avoid exaggerated trailer-style drama.
+
+Any [pause …] markers describe narration pacing only; they must not be spoken or sung.
+
+End cleanly within the requested duration.
+
+INTRO NARRATION:
+
+Welcome to the parks.
+"""
+    assert intro == expected
+    assert "Narration ends at:" not in intro
+    assert "while the narrator is still speaking" not in intro
+
+
+def test_r2_narration_end_from_resolved_envelope() -> None:
+    resolved = _resolved_chapter("Yosemite", duration=97.52, narration_end=92.52)
+    assert resolve_chapter_narration_end_seconds(resolved) == pytest.approx(92.52)
+    assert resolve_music_target_duration_seconds(resolved) == pytest.approx(97.52)
+    assert music_length_ms_from_seconds(97.52) == 97520
+
+
+def test_r2_music_length_ms_still_from_total_only(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _write_locked(project)
+    folder = "Yosemite"
+    total = 5.0
+    narration_end = 4.5
+    write_json(chapter_unified_cut_plan_path(project, folder), _plan(folder))
+    write_json(
+        chapter_resolved_timeline_path(project, folder),
+        _resolved_chapter(folder, duration=total, narration_end=narration_end),
+    )
+    captured: dict = {}
+
+    def _compose(**kwargs):
+        captured.update(kwargs)
+        return ElevenLabsMusicResult(audio_bytes=_make_mp3_bytes(total))
+
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.is_elevenlabs_music_configured",
+            return_value=True,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.list_body_chapter_names",
+            return_value=["Yosemite", "Caddo", "Zion", "Bryce"],
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.list_chapter_cut_statuses",
+            return_value=[
+                SimpleNamespace(folder_name=folder, has_resolved=True, matches=True)
+            ],
+        ),
+    ):
+        result = generate_music_for_chapter(
+            project, folder, compose_callable=_compose
+        )
+    assert result.status == "completed"
+    assert captured["music_length_ms"] == 5000
+    assert result.music_length_ms == 5000
+    assert "Narration ends at: 4.50 seconds." in captured["prompt"]
+    assert "Total track duration: 5.00 seconds." in captured["prompt"]
+    assert "while the narrator is still speaking" in captured["prompt"]
