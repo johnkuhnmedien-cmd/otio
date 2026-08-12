@@ -281,7 +281,16 @@ def usable_sfx_effects_for_otio(
     script_fingerprint: str,
     resolved_timeline_fingerprint: str,
 ) -> list[dict[str, Any]]:
-    """Return completed non-stale effects with local WAV paths."""
+    """Return completed non-stale effects with locally revalidated WAV paths.
+
+    Fail-closed at OTIO time: each WAV is technically re-checked (RIFF/WAVE,
+    stream, positive duration, 48 kHz, stereo, pcm_s16le). Damaged / wrong
+    format files are skipped and never referenced.
+    """
+    from otio_app.services.without_voiceover_enhanced.sfx_service import (
+        validate_sfx_wav_technical,
+    )
+
     status = sfx_status_for_scope(
         project,
         scope=scope,
@@ -297,7 +306,7 @@ def usable_sfx_effects_for_otio(
     for effect in list(result.get("effects") or []):
         if not isinstance(effect, dict):
             continue
-        if not _effect_wav_ok(project, scope=scope, folder_name=folder_name, effect=effect):
+        if str(effect.get("status") or "") != "completed":
             continue
         sfx_id = str(effect.get("sfx_id") or "").strip()
         path = Path(str(effect.get("wav_path") or ""))
@@ -307,8 +316,13 @@ def usable_sfx_effects_for_otio(
             )
         if not path.is_file():
             continue
+        try:
+            actual_duration = validate_sfx_wav_technical(path)
+        except Exception:  # noqa: BLE001 — fail-closed skip for OTIO
+            continue
         item = dict(effect)
         item["wav_path"] = str(path)
+        item["validated_duration"] = float(actual_duration)
         out.append(item)
     return out
 

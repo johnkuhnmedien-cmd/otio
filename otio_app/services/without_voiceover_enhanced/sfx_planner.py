@@ -26,7 +26,6 @@ from otio_app.services.without_voiceover_enhanced.elevenlabs_sfx_client import (
     SFX_PROMPT_MAX_CHARS,
 )
 from otio_app.services.without_voiceover_enhanced.keyword_flow_free_input import (
-    build_continuous_word_flow_from_sentence_rows,
     load_cleaned_sentence_rows_for_segments,
 )
 from otio_app.services.without_voiceover_enhanced.models import (
@@ -210,12 +209,37 @@ def build_used_shots_for_planner(
     return shots
 
 
+def _resolve_audio_segment_for_sentence(
+    *,
+    sentence_id: str,
+    audio_by_seg: dict[str, Any],
+) -> Any | None:
+    """Return the uniquely mapped resolved audio segment, or None if ambiguous."""
+    if not audio_by_seg:
+        return None
+    if len(audio_by_seg) == 1:
+        return next(iter(audio_by_seg.values()))
+    matches = []
+    for seg_id, audio in audio_by_seg.items():
+        if sentence_id.startswith(seg_id) or seg_id in sentence_id:
+            matches.append(audio)
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def build_word_flow_for_planner(
     project: Project,
     *,
     resolved: ResolvedTimelineDocument,
 ) -> list[dict[str, Any]]:
-    """Real ElevenLabs word timestamps with absolute timeline onsets + word_ref."""
+    """Real ElevenLabs word timestamps with absolute timeline onsets + word_ref.
+
+    Only words that map unambiguously onto a resolved audio segment (and thus
+    the scope timeline) are included. Relative/offset-only fallbacks are never
+    emitted as absolute ``onset`` — those words are omitted so
+    ``narration_word`` cannot use them.
+    """
     segment_ids = [a.segment_id for a in list(resolved.audio_segments or []) if a.segment_id]
     if not segment_ids and resolved.chapters:
         for env in resolved.chapters:
@@ -223,61 +247,41 @@ def build_word_flow_for_planner(
     segment_ids = [s for s in dict.fromkeys(segment_ids) if s]
     rows = load_cleaned_sentence_rows_for_segments(project, segment_ids=segment_ids)
 
-    # Map segment_id → timeline placement for absolute onset.
     audio_by_seg = {
         str(a.segment_id): a for a in list(resolved.audio_segments or []) if a.segment_id
     }
-    # Sentence rows include start_seconds relative to their audio file.
-    # Prefer cleaned words' start_seconds when present.
     flow: list[dict[str, Any]] = []
     for row in rows:
         sentence_id = str(row.get("sentence_id") or "").strip()
-        # Infer segment from sentence_id prefix patterns if needed.
-        segment = None
-        for seg_id, audio in audio_by_seg.items():
-            if sentence_id.startswith(seg_id) or seg_id in sentence_id:
-                segment = audio
-                break
-        if segment is None and len(audio_by_seg) == 1:
-            segment = next(iter(audio_by_seg.values()))
+        segment = _resolve_audio_segment_for_sentence(
+            sentence_id=sentence_id, audio_by_seg=audio_by_seg
+        )
+        if segment is None:
+            # Not absolutely mappable → omit (narration_word unavailable for these).
+            continue
         cleaned = clean_words_for_keyword_flow_prompt(
             list(row.get("words") or []), sentence_id=sentence_id
         )
         for word in cleaned:
+            if word.get("start_seconds") is None:
+                continue
             word_ref = str(word.get("word_ref") or "").strip()
             if not word_ref and sentence_id:
                 word_ref = f"{sentence_id}#{int(word.get('original_word_index', 0))}"
+            if not word_ref:
+                continue
             word_start = float(word.get("start_seconds") or 0.0)
-            if segment is not None:
-                onset = float(segment.timeline_start_seconds) + (
-                    word_start - float(segment.source_start_seconds or 0.0)
-                )
-            else:
-                # Fallback: sentence-relative offset only (still real EL data).
-                onset = float(row.get("start_seconds") or 0.0) + float(
-                    word.get("offset_seconds") or 0.0
-                )
+            onset = float(segment.timeline_start_seconds) + (
+                word_start - float(segment.source_start_seconds or 0.0)
+            )
             flow.append(
                 {
                     "word_ref": word_ref,
                     "text": str(word.get("text") or ""),
                     "sentence_id": sentence_id,
-                    "segment_id": str(getattr(segment, "segment_id", "") or ""),
+                    "segment_id": str(segment.segment_id or ""),
                     "onset": round(max(0.0, onset), 3),
-                }
-            )
-    # If continuous helper produced refs but we already built richer rows, keep ours.
-    if not flow:
-        # Last resort: continuous flow offsets only (no absolute mapping).
-        continuous = build_continuous_word_flow_from_sentence_rows(rows)
-        for item in continuous:
-            flow.append(
-                {
-                    "word_ref": str(item.get("word_ref") or ""),
-                    "text": str(item.get("text") or ""),
-                    "sentence_id": str(item.get("sentence_id") or ""),
-                    "segment_id": "",
-                    "onset": round(float(item.get("offset_seconds") or 0.0), 3),
+                    "absolute_mapped": True,
                 }
             )
     return flow

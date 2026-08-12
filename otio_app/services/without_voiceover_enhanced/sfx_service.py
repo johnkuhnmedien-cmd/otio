@@ -89,6 +89,8 @@ __all__ = [
     "resolve_sfx_anchor",
     "convert_and_normalize_sfx_wav",
     "validate_final_sfx_wav",
+    "validate_sfx_wav_technical",
+    "sfx_intervals_overlap",
 ]
 
 SFX_MVP_MAX_BODY_CHAPTERS = 3
@@ -266,10 +268,18 @@ def convert_and_normalize_sfx_wav(
     return validate_final_sfx_wav(output_path, target_duration_seconds=target)
 
 
-def validate_final_sfx_wav(path: Path, *, target_duration_seconds: float) -> float:
+def validate_sfx_wav_technical(path: Path) -> float:
+    """Fail-closed technical WAV contract for OTIO / artefact use.
+
+    Requires local RIFF/WAVE, valid audio stream, positive duration,
+    exactly 48 kHz, stereo, pcm_s16le. Never invents a duration fallback.
+    """
     if not path.is_file():
-        raise SfxServiceError("Finale SFX-WAV fehlt.")
-    header = path.read_bytes()[:12]
+        raise SfxServiceError("SFX-WAV fehlt (keine lokale Datei).")
+    try:
+        header = path.read_bytes()[:12]
+    except OSError as exc:
+        raise SfxServiceError(f"SFX-WAV nicht lesbar: {exc}") from exc
     if len(header) < 12 or header[0:4] != b"RIFF" or header[8:12] != b"WAVE":
         raise SfxServiceError("Finale Datei ist kein gültiges WAV (RIFF/WAVE).")
     info = _ffprobe_audio_stream(path)
@@ -280,19 +290,40 @@ def validate_final_sfx_wav(path: Path, *, target_duration_seconds: float) -> flo
     codec = str(info.get("codec_name") or "")
     duration = probe_duration_seconds(path)
     if duration is None or duration <= 0:
-        raise SfxServiceError("WAV-Dauer ungültig.")
+        raise SfxServiceError("WAV-Dauer ungültig / nicht decodierbar.")
     if sample_rate != 48000:
         raise SfxServiceError(f"WAV Sample-Rate {sample_rate} ≠ 48000.")
     if channels != 2:
         raise SfxServiceError(f"WAV Kanäle {channels} ≠ 2.")
-    if codec not in {"pcm_s16le", "pcm_s16be"}:
+    if codec != "pcm_s16le":
         raise SfxServiceError(f"WAV Codec {codec!r} ≠ pcm_s16le.")
+    return float(duration)
+
+
+def validate_final_sfx_wav(path: Path, *, target_duration_seconds: float) -> float:
+    duration = validate_sfx_wav_technical(path)
     if abs(duration - float(target_duration_seconds)) > _DURATION_MATCH_TOLERANCE_SEC:
         raise SfxServiceError(
             f"WAV-Dauer {duration:.3f}s weicht von Ziel "
             f"{float(target_duration_seconds):.3f}s ab."
         )
     return float(duration)
+
+
+def sfx_intervals_overlap(
+    intervals: list[tuple[float, float]],
+) -> bool:
+    """True when any [start, end) pair overlaps (end == next start is OK)."""
+    ordered = sorted(
+        ((float(start), float(end)) for start, end in intervals if end > start),
+        key=lambda pair: pair[0],
+    )
+    for index in range(1, len(ordered)):
+        prev_end = ordered[index - 1][1]
+        cur_start = ordered[index][0]
+        if cur_start < prev_end - 1e-9:
+            return True
+    return False
 
 
 def _ffprobe_audio_stream(path: Path) -> dict[str, Any] | None:
@@ -514,6 +545,60 @@ def _generate(
             }
         )
         to_generate.append((item, start, duration))
+
+    # Overlaps are invalid for this MVP — reject before any ElevenLabs call.
+    if len(to_generate) >= 2:
+        intervals = [
+            (float(start), float(start) + float(duration))
+            for _item, start, duration in to_generate
+        ]
+        if sfx_intervals_overlap(intervals):
+            message = (
+                "SFX-Plan ungültig: überlappende Effekte nach Anchor-Auflösung. "
+                "Keine ElevenLabs-Calls."
+            )
+            if prior is not None:
+                return SfxGenerationResult(
+                    status="failed",
+                    message=f"{message} Bisheriges Set erhalten.",
+                    effect_count=len(list(prior.get("effects") or [])),
+                    planner_model=planner.planner_model,
+                )
+            save_sfx_plan(
+                project,
+                {
+                    "schema_version": plan_out.get("schema_version"),
+                    "scope": scope,
+                    "chapter_id": folder_name if scope == "chapter" else "",
+                    "planner_model": planner.planner_model,
+                    "max_sfx": max_sfx,
+                    "script_fingerprint": script_fp,
+                    "resolved_timeline_fingerprint": timeline_fp,
+                    "created_at": utc_now_iso(),
+                    "planner_output": plan_out,
+                    "resolved_anchors": resolved_anchors,
+                    "validation_error": "overlapping_intervals",
+                },
+            )
+            save_sfx_result(
+                project,
+                {
+                    "status": "failed",
+                    "scope": scope,
+                    "chapter_id": folder_name if scope == "chapter" else "",
+                    "planner_model": planner.planner_model,
+                    "script_fingerprint": script_fp,
+                    "resolved_timeline_fingerprint": timeline_fp,
+                    "effects": [],
+                    "generated_at": utc_now_iso(),
+                    "message": message,
+                },
+            )
+            return SfxGenerationResult(
+                status="failed",
+                message=message,
+                planner_model=planner.planner_model,
+            )
 
     plan_payload = {
         "schema_version": plan_out.get("schema_version"),

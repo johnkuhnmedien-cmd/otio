@@ -52,6 +52,9 @@ A sentence, keyword, shot, or visible action does NOT automatically imply an SFX
 Silence is a valid and preferred decision.
 0, 1, 2, or at most {max_n} effects are allowed — never more than {max_n}.
 
+Do not propose overlapping sound effects for this MVP.
+Resolved timeline intervals of proposed effects must not overlap.
+
 Allowed evidence_basis values only:
 - visible
 - environmental_plausible

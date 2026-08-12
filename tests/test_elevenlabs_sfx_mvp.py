@@ -76,6 +76,7 @@ from otio_app.services.without_voiceover_enhanced.sfx_planner import (
     SfxPlanValidationError,
     build_planner_input_bundle,
     build_used_shots_for_planner,
+    build_word_flow_for_planner,
     parse_and_validate_sfx_plan,
     resolve_sfx_planner_model_id,
 )
@@ -87,9 +88,11 @@ from otio_app.services.without_voiceover_enhanced.sfx_service import (
     generate_sfx_for_chapter,
     is_sfx_mvp_chapter_allowed,
     resolve_sfx_anchor,
+    sfx_intervals_overlap,
     sfx_ui_status_chapter,
     usable_sfx_placements_for_otio,
     validate_final_sfx_wav,
+    validate_sfx_wav_technical,
 )
 
 
@@ -1025,16 +1028,13 @@ def test_z_aa_ab_ae_af_otio_with_music_and_sfx(tmp_path: Path) -> None:
                     "wav_path": str(sfx),
                     "timeline_start": 1.5,
                     "duration": 2.0,
+                    "validated_duration": 2.0,
                 }
             ],
         ),
         patch(
             "otio_app.services.without_voiceover_enhanced.otio_music_track.usable_music_path_for_otio",
             return_value=music,
-        ),
-        patch(
-            "otio_app.services.without_voiceover_enhanced.otio_sfx_track.probe_duration_seconds",
-            return_value=2.0,
         ),
         patch(
             "otio_app.services.without_voiceover_enhanced.otio_music_track.probe_duration_seconds",
@@ -1087,3 +1087,296 @@ def test_no_key_blocks_only_sfx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         )
     assert result.status == "unavailable"
     assert "API-Key" in result.message
+
+
+# --- R1 fail-closed corrections ---
+
+
+def _seed_completed_sfx(
+    project: Project,
+    *,
+    folder: str = "Yosemite",
+    wav: Path,
+) -> tuple[str, str]:
+    resolved = _resolved(folder)
+    shots = [
+        {
+            "shot_id": s.shot_id,
+            "asset_id": s.asset_id,
+            "timeline_start": s.timeline_start_seconds,
+            "timeline_end": s.timeline_end_seconds,
+            "source_start": s.source_start_seconds,
+            "source_end": s.source_end_seconds,
+        }
+        for s in resolved.shots
+    ]
+    script_fp = fingerprint_text("Yosemite granite walls rise above the valley floor.")
+    timeline_fp = resolved_timeline_fingerprint_from_shots(
+        script_version="v1", shots=shots
+    )
+    save_sfx_result(
+        project,
+        {
+            "status": "completed",
+            "scope": "chapter",
+            "chapter_id": folder,
+            "script_fingerprint": script_fp,
+            "resolved_timeline_fingerprint": timeline_fp,
+            "effects": [
+                {
+                    "sfx_id": "sfx_001",
+                    "status": "completed",
+                    "wav_path": str(wav),
+                    "timeline_start": 1.5,
+                    "duration": 2.0,
+                    "prompt": "subtle wind",
+                }
+            ],
+        },
+    )
+    return script_fp, timeline_fp
+
+
+def test_r1_otio_skips_corrupted_completed_wav(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    resolved = _seed_chapter(project)
+    wav = sfx_wav_path(project, scope="chapter", folder_name="Yosemite", sfx_id="sfx_001")
+    _make_wav(wav, duration=2.0)
+    script_fp, timeline_fp = _seed_completed_sfx(project, wav=wav)
+    # Corrupt after successful completion.
+    wav.write_bytes(b"not-a-real-wav-file")
+    with pytest.raises(Exception):
+        validate_sfx_wav_technical(wav)
+    effects = usable_sfx_effects_for_otio(
+        project,
+        scope="chapter",
+        folder_name="Yosemite",
+        script_fingerprint=script_fp,
+        resolved_timeline_fingerprint=timeline_fp,
+    )
+    assert effects == []
+    placements = collect_sfx_placements(project, resolved)
+    assert placements == []
+    path = _export_otio_allowing_gaps(project, resolved, "corrupt_sfx")
+    tl = otio.adapters.read_from_file(str(path))
+    assert "Sound Effects" not in [t.name for t in tl.tracks]
+    assert str(wav) not in str(tl.to_json_string())
+
+
+def test_r1_otio_skips_wrong_sample_rate_wav(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    resolved = _seed_chapter(project)
+    wav = sfx_wav_path(project, scope="chapter", folder_name="Yosemite", sfx_id="sfx_001")
+    wav.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-nostdin",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=2",
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
+        "-c:a",
+        "pcm_s16le",
+        str(wav),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    script_fp, timeline_fp = _seed_completed_sfx(project, wav=wav)
+    with pytest.raises(Exception, match="48000"):
+        validate_sfx_wav_technical(wav)
+    effects = usable_sfx_effects_for_otio(
+        project,
+        scope="chapter",
+        folder_name="Yosemite",
+        script_fingerprint=script_fp,
+        resolved_timeline_fingerprint=timeline_fp,
+    )
+    assert effects == []
+    path = _export_otio_allowing_gaps(project, resolved, "bad_rate_sfx")
+    tl = otio.adapters.read_from_file(str(path))
+    assert "Sound Effects" not in [t.name for t in tl.tracks]
+
+
+def test_r1_overlapping_plan_rejected_no_elevenlabs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    _seed_chapter(project)
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.sfx_service.is_elevenlabs_sfx_configured",
+        lambda: True,
+    )
+    called = {"n": 0}
+
+    def boom(**_k):
+        called["n"] += 1
+        raise AssertionError("ElevenLabs must not be called")
+
+    plan = {
+        "schema_version": "sfx-plan-v1",
+        "scope": "chapter",
+        "sfx": [
+            {
+                "sfx_id": "sfx_001",
+                "sfx_type": "natural_ambience",
+                "prompt": "subtle wind, no music, no speech",
+                "evidence_basis": "environmental_plausible",
+                "editorial_value": "high",
+                "shot_id": "Yosemite_slot_001",
+                "anchor_type": "shot_start",
+                "word_ref": None,
+                "duration_class": "medium",
+                "reason": "a",
+            },
+            {
+                "sfx_id": "sfx_002",
+                "sfx_type": "location_ambience",
+                "prompt": "distant birds, no music, no speech",
+                "evidence_basis": "environmental_plausible",
+                "editorial_value": "high",
+                "shot_id": "Yosemite_slot_001",
+                "anchor_type": "shot_center",
+                "word_ref": None,
+                "duration_class": "medium",
+                "reason": "b",
+            },
+        ],
+    }
+    assert "overlapping" in build_sfx_planner_system_rules(max_sfx_per_chapter=3).lower()
+    assert sfx_intervals_overlap([(0.0, 5.0), (2.0, 7.0)]) is True
+    with _patch_chapter_ready(), patch(
+        "otio_app.services.without_voiceover_enhanced.sfx_planner.load_cleaned_sentence_rows_for_segments",
+        return_value=[],
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.sfx_planner._local_assets_payload",
+        return_value=[],
+    ):
+        result = generate_sfx_for_chapter(
+            project,
+            "Yosemite",
+            llm_callable=_fake_llm(plan),
+            generate_callable=boom,
+        )
+    assert result.status == "failed"
+    assert "überlapp" in result.message.lower() or "overlap" in result.message.lower()
+    assert called["n"] == 0
+
+
+def test_r1_unmapped_word_ref_not_narration_anchor(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    resolved = _seed_chapter(project)
+    # Multiple audio segments → sentence without clear mapping is omitted.
+    resolved.audio_segments = [
+        ResolvedAudioSegment(
+            segment_id="seg_a",
+            audio_path="/tmp/a.mp3",
+            timeline_start_seconds=0.0,
+            timeline_end_seconds=5.0,
+            source_start_seconds=0.0,
+            source_end_seconds=5.0,
+            chapter_id="Yosemite",
+        ),
+        ResolvedAudioSegment(
+            segment_id="seg_b",
+            audio_path="/tmp/b.mp3",
+            timeline_start_seconds=5.0,
+            timeline_end_seconds=10.0,
+            source_start_seconds=0.0,
+            source_end_seconds=5.0,
+            chapter_id="Yosemite",
+        ),
+    ]
+    rows = [
+        {
+            "sentence_id": "orphan_sentence",
+            "start_seconds": 0.0,
+            "end_seconds": 1.0,
+            "words": [
+                {
+                    "text": "orphan",
+                    "start_seconds": 0.2,
+                    "end_seconds": 0.5,
+                    "offset_seconds": 0.2,
+                    "original_word_index": 0,
+                }
+            ],
+        }
+    ]
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.sfx_planner.load_cleaned_sentence_rows_for_segments",
+        return_value=rows,
+    ):
+        flow = build_word_flow_for_planner(project, resolved=resolved)
+    assert flow == []
+    with pytest.raises(SfxPlanValidationError, match="word_ref"):
+        parse_and_validate_sfx_plan(
+            {
+                "schema_version": "sfx-plan-v1",
+                "scope": "chapter",
+                "sfx": [
+                    {
+                        "sfx_id": "sfx_001",
+                        "sfx_type": "location_ambience",
+                        "prompt": "distant birds, no music, no speech",
+                        "evidence_basis": "environmental_plausible",
+                        "editorial_value": "high",
+                        "shot_id": "Yosemite_slot_001",
+                        "anchor_type": "narration_word",
+                        "word_ref": "orphan_sentence#0",
+                        "duration_class": "short",
+                        "reason": "x",
+                    }
+                ],
+            },
+            max_sfx=3,
+            known_shot_ids={"Yosemite_slot_001"},
+            known_word_refs={w["word_ref"] for w in flow},
+            scope="chapter",
+        )
+
+
+def test_r1_mapped_word_ref_keeps_absolute_timeline(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    resolved = _seed_chapter(project)
+    rows = [
+        {
+            "sentence_id": "ch_1#s0",
+            "start_seconds": 0.0,
+            "end_seconds": 2.0,
+            "words": [
+                {
+                    "text": "granite",
+                    "start_seconds": 0.4,
+                    "end_seconds": 0.8,
+                    "offset_seconds": 0.4,
+                    "original_word_index": 0,
+                }
+            ],
+        }
+    ]
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.sfx_planner.load_cleaned_sentence_rows_for_segments",
+        return_value=rows,
+    ):
+        flow = build_word_flow_for_planner(project, resolved=resolved)
+    assert len(flow) == 1
+    assert flow[0]["absolute_mapped"] is True
+    assert flow[0]["onset"] == pytest.approx(1.4)
+    shot = resolved.shots[0]
+    start, dur = resolve_sfx_anchor(
+        item={
+            "anchor_type": "narration_word",
+            "word_ref": flow[0]["word_ref"],
+            "duration_class": "short",
+        },
+        shot=shot,
+        word_onsets={flow[0]["word_ref"]: flow[0]["onset"]},
+        scope_total_duration=20.0,
+    )
+    assert start == pytest.approx(1.4)
+    assert dur == pytest.approx(2.0)
