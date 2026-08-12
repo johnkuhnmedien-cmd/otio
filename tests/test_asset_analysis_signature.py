@@ -397,7 +397,7 @@ def test_freshness_uses_effective_clean_media_path(
 
     monkeypatch.setattr(
         "otio_app.services.media_inventory_cache.resolve_media_for_analysis",
-        lambda project, folder_name, media_path: clean,
+        lambda project, folder_name, media_path, **_kwargs: clean,
     )
     signature = build_analysis_signature(clean, resolved_model_id="gemini-test")
     # Signatur/Fingerprint vom Clean-Medium; Freshness muss denselben Pfad nutzen.

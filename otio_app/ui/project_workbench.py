@@ -520,6 +520,13 @@ def _render_analysis_actions(
                 st.caption(f"⚠️ {skip}")
             st.rerun()
 
+    _render_supplement_analysis_status(
+        project,
+        selected_folders=selected_folders,
+        selected_model=selected_model,
+        any_job_running=any_job_running,
+    )
+
     if without_voiceover:
         return
 
@@ -549,6 +556,92 @@ def _render_analysis_actions(
                 chain_asset_model=selected_model,
             ):
                 st.rerun()
+
+
+def _render_supplement_analysis_status(
+    project,
+    *,
+    selected_folders: list[str],
+    selected_model: str | None,
+    any_job_running: bool,
+) -> None:
+    """Beschaffte Assets im Inventar, denen die reguläre Analyse fehlt.
+
+    Betrifft Material aus Supplement-Funnel und Coverage-Gap-Inbox, das vor der
+    Vereinheitlichung importiert wurde oder ohne API-Schlüssel ankam. Erst mit
+    der Analyse trägt es dieselben Parameter wie ein Original — und ist damit
+    für ein zweites Sprachprojekt im selben Ordner voll nutzbar.
+    """
+    from otio_app.services.supplement_inventory import (
+        analyze_supplements_for_folder,
+        list_supplement_assets,
+    )
+
+    folders = list(selected_folders or project.asset_subdir_names)
+    if not folders:
+        return
+
+    open_by_folder: dict[str, list] = {}
+    total = 0
+    for folder_name in folders:
+        statuses = list_supplement_assets(project, folder_name, model=selected_model)
+        total += len(statuses)
+        open_items = [status for status in statuses if status.needs_analysis]
+        if open_items:
+            open_by_folder[folder_name] = open_items
+
+    st.divider()
+    st.markdown("**Beschaffte Assets** — Analyse wie bei Originalen.")
+    if not total:
+        st.caption("Keine beschafften Assets in der aktuellen Ordnerauswahl.")
+        return
+
+    open_count = sum(len(items) for items in open_by_folder.values())
+    if not open_count:
+        st.caption(
+            f"{total} beschaffte(s) Asset(s) vollständig analysiert — im geteilten "
+            "Inventar für jede Sprache dieses Medienordners nutzbar."
+        )
+        return
+
+    st.warning(
+        f"{open_count} von {total} beschafften Assets ohne aktuelle Analyse. "
+        "Ohne sie fehlen Dauer, Tags, Motion, Framing und Qualitätsprofil — "
+        "der Cut-LLM wählt sie dann kaum aus."
+    )
+    for folder_name, items in open_by_folder.items():
+        names = ", ".join(f"`{status.media_path.name}`" for status in items[:8])
+        suffix = " …" if len(items) > 8 else ""
+        reasons = sorted({status.reason for status in items if status.reason})
+        reason_text = f" — {', '.join(reasons)}" if reasons else ""
+        st.caption(f"**{folder_name}:** {names}{suffix}{reason_text}")
+
+    if st.button(
+        "🧠 Beschaffte Assets regulär analysieren",
+        key=f"analyze_supplements_{project.id}",
+        disabled=any_job_running,
+        help=(
+            "Nutzt denselben Prompt wie die Erstanalyse. Herkunft, Lizenz und "
+            "Beschaffungsbegründung bleiben erhalten."
+        ),
+    ):
+        if not is_gemini_configured():
+            st.error("GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** oder in `.env`.")
+        else:
+            analyzed = 0
+            failures: list[str] = []
+            with st.spinner("Analysiere beschaffte Assets …"):
+                for folder_name in open_by_folder:
+                    report = analyze_supplements_for_folder(
+                        project, folder_name, model=selected_model
+                    )
+                    analyzed += report.analyzed + report.cached
+                    failures.extend(report.failures)
+            if analyzed:
+                st.success(f"{analyzed} beschaffte(s) Asset(s) analysiert.")
+            for failure in failures[:20]:
+                st.caption(f"⚠️ {failure}")
+            st.rerun()
 
 
 def render_project_workbench() -> None:

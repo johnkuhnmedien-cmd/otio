@@ -49,6 +49,7 @@ from otio_app.services.without_voiceover_enhanced.stock.safe_fetch import (
     decode_preview_image,
     fetch_full_media_bytes,
 )
+from otio_app.services.supplement_inventory import INTAKE_SOURCE_MANUAL
 from otio_app.services.without_voiceover_enhanced.supplement_resolve_service import (
     _folder_for_gap,
     _import_into_inventory,
@@ -291,11 +292,15 @@ def assign_local_file_to_open_gap(
     *,
     gap_id: str,
     source_path: str,
+    intake_source: str = INTAKE_SOURCE_MANUAL,
 ) -> ManualGapAssignResult:
     """Kopiert lokale Datei oder lädt https-URL, validiert, Accepted + Inventar.
 
     E2E-4 Nachtrag: bewusste Redaktionsentscheidung — ersetzt vorhandene
     Accepted-Kandidaten desselben Gaps (kein Fehler bei export_ready).
+
+    ``intake_source`` unterscheidet die Herkunft im Inventar (manuelle Zuweisung
+    in der App vs. externe Recherche über die Inbox).
     """
     gap_id = (gap_id or "").strip()
     if not gap_id:
@@ -442,6 +447,7 @@ def assign_local_file_to_open_gap(
             description=description,
             validation_status="PASS",
             validation_score=1.0,
+            intake_source=intake_source,
         )
         _mark_gap_filled_in_funnel_report(
             project,
