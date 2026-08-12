@@ -45,6 +45,12 @@ FINAL_CUT_PLAN_FILENAME = "final_cut_plan.json"
 RESOLVED_TIMELINE_FILENAME = "resolved_timeline.json"
 REPAIR_LOG_FILENAME = "timeline_repair_log.json"
 GAP_MERGE_REPORT_FILENAME = "gap_merge_report.json"
+MUSIC_SUBDIR = "music"
+MUSIC_INTRO_SUBDIR = "intro"
+MUSIC_CHAPTERS_SUBDIR = "chapters"
+MUSIC_WAV_FILENAME = "music.wav"
+MUSIC_REQUEST_FILENAME = "music_request.json"
+MUSIC_RESULT_FILENAME = "music_result.json"
 
 
 def assert_enhanced_work_root(project: Project) -> Path:
@@ -284,3 +290,41 @@ def repair_log_path(project: Project) -> Path:
 
 def gap_merge_report_path(project: Project) -> Path:
     return cut_dir(project) / GAP_MERGE_REPORT_FILENAME
+
+
+def music_root(project: Project) -> Path:
+    """``_otio_enhanced/{LANG}/voiceover_generation/music``."""
+    return enhanced_generation_root(project) / MUSIC_SUBDIR
+
+
+def music_intro_dir(project: Project) -> Path:
+    return music_root(project) / MUSIC_INTRO_SUBDIR
+
+
+def music_chapters_dir(project: Project) -> Path:
+    return music_root(project) / MUSIC_CHAPTERS_SUBDIR
+
+
+def music_chapter_dir(project: Project, folder_name: str) -> Path:
+    from otio_app.project_layout import safe_folder_slug
+
+    slug = safe_folder_slug((folder_name or "").strip() or "chapter")
+    return music_chapters_dir(project) / slug
+
+
+def music_wav_path(project: Project, *, scope: str, folder_name: str = "") -> Path:
+    if str(scope).strip().lower() == "intro":
+        return music_intro_dir(project) / MUSIC_WAV_FILENAME
+    return music_chapter_dir(project, folder_name) / MUSIC_WAV_FILENAME
+
+
+def music_request_path(project: Project, *, scope: str, folder_name: str = "") -> Path:
+    if str(scope).strip().lower() == "intro":
+        return music_intro_dir(project) / MUSIC_REQUEST_FILENAME
+    return music_chapter_dir(project, folder_name) / MUSIC_REQUEST_FILENAME
+
+
+def music_result_path(project: Project, *, scope: str, folder_name: str = "") -> Path:
+    if str(scope).strip().lower() == "intro":
+        return music_intro_dir(project) / MUSIC_RESULT_FILENAME
+    return music_chapter_dir(project, folder_name) / MUSIC_RESULT_FILENAME
