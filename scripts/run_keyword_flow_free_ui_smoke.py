@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Minimal Streamlit UI smoke for Keyword Flow Free style selector."""
+"""TECHNICAL HARNESS / STUB TEST — not a real product UI test.
+
+Launches a minimal /tmp Streamlit app that only renders the style radio labels.
+Do NOT treat screenshots as proof of the real Enhanced Cut Plan product UI.
+Manual product UI testing is performed by the user.
+"""
 
 from __future__ import annotations
 

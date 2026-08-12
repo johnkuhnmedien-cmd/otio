@@ -116,12 +116,16 @@ def test_flow_isolation_prompts() -> None:
     assert "Treat narration as a continuous spoken flow" in free
     assert "KEYWORD FLOW MARKER" not in free
     assert "CUT RHYTHM TARGETS" not in free
-    # Schema example shows multi-cut same sentence + cross-boundary.
-    assert free.count('"sentence_id": "chapter_s001"') >= 3
-    assert '"sentence_id": "chapter_s002"' in free
-    assert "multiple cuts inside one sentence" in free.lower() or (
-        "multiple cuts inside one sentence" in free
-    )
+    # Structural freedom without pseudo-realistic timing numbers to copy.
+    assert "COPY_FROM_WORD_FLOW_offset_seconds" in free
+    assert "same sentence_id" in free
+    assert "several words into that next sentence" in free
+    assert "1.05" not in free
+    assert "3.40" not in free
+    assert "1.82" not in free
+    assert "First ask: does the visual story need a new shot here?" in free
+    assert "Keyword ≠ Pflicht-Cut" in free or "not mandatory cuts" in free
+    assert "copy sentence_id and offset_seconds verbatim" in free
 
     kf = build_keyword_flow_unified_cut_prompt(
         locked_script_json="{}",
@@ -490,6 +494,27 @@ def test_prompt_sections_are_hierarchical_and_short() -> None:
     assert "NAMED ENTITY PRIORITY (BINDING)" not in prompt
     assert "PAUSE RULES (DISABLED)" not in prompt
     assert "ATMOSPHERIC PASSAGES WITHOUT KEYWORD" not in prompt
+    # No pseudo-realistic mid-sentence floats that could prime the LLM.
+    assert '"offset_seconds": 1.05' not in prompt
+    assert '"offset_seconds": 3.40' not in prompt
+    assert '"offset_seconds": 1.82' not in prompt
+    assert "Never estimate, interpolate, invent" in prompt
+    assert "Do not create a gap merely because a new sentence begins" in prompt
+
+
+def test_prompt_has_no_cut_quotas() -> None:
+    prompt = build_keyword_flow_free_prompt(
+        locked_script_json="{}",
+        segment_timings_json="{}",
+        local_assets_json="[]",
+        style_profile_text="s",
+        dramaturgy_text="d",
+        continuous_word_flow_json="[]",
+    )
+    lowered = prompt.lower()
+    assert "mindestens 2 shots" not in lowered
+    assert "mindestens 50 %" not in lowered
+    assert "jeder relevante begriff benötigt einen cut" not in lowered
 
 
 def test_existing_keyword_flow_prompt_body_untouched() -> None:

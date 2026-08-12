@@ -97,22 +97,21 @@ Do not give every sentence its own visual.
 
 CUT DECISION
 
-Create a new shot only when there is a visual reason:
+First ask: does the visual story need a new shot here?
+Only then choose a real word onset from CONTINUOUS WORD FLOW as the cut point.
+
+Create a new shot only when there is a visual or editorial reason:
 - an important visible subject or entity appears,
 - the visual idea changes,
 - a deliberate change of scale or perspective improves the sequence,
 - a reveal, contrast or transition benefits from a cut,
 - or the current shot would become editorially too long.
 
-Keywords are useful anchors, not mandatory cuts.
+Keywords are useful timing anchors, not mandatory cuts.
+Keyword ≠ Pflicht-Cut.
 
 Cuts may occur on real word onsets inside a sentence.
 A shot may continue into the next sentence until the next meaningful visual anchor.
-
-Visual lead is allowed: a new picture may begin slightly before a central term
-when editorially useful and a real word onset exists.
-Visual lag is allowed: a picture may continue across a sentence boundary until
-the next meaningful visual anchor several words into the next sentence.
 
 
 ASSET DECISION
@@ -133,13 +132,14 @@ weak / none must not be masked with unsuitable material.
 
 TIMING CONTRACT
 
-For a mid-sentence cut, use only a provided real word onset from
-CONTINUOUS WORD FLOW.
-Never estimate word timing.
-sentence_id is a technical timing address only.
+For mid_sentence cuts, copy sentence_id and offset_seconds verbatim from one
+existing CONTINUOUS WORD FLOW entry. Same entry for both fields.
 
-Do not output absolute timeline seconds or frames.
+Never estimate, interpolate, invent, or reuse timing numbers from this prompt's
+examples or schema.
+Do not invent absolute timeline seconds or frames.
 Python resolves final timing, shot_min/shot_max repairs, frames and OTIO.
+sentence_id is a technical timing address only.
 
 
 OUTPUT CONTRACT
@@ -152,18 +152,17 @@ Keep all IDs valid and unique.
 Always return \"pause_directives\": [].
 Return strict JSON matching the provided schema (unified-cut-v1).
 
-Example shape (editorial freedom — NOT one sentence = one shot):
-boundaries may cut mid-sentence inside the same sentence_id, then continue
-across a sentence boundary and cut several words into the next sentence:
+Allowed editorial shape (structure only — timings come from CONTINUOUS WORD FLOW):
+- multiple mid_sentence cuts may share the same sentence_id
+- a shot may cross into the next sentence
+- a cut may land several words into that next sentence
 
-  cut_000 → sentence_id=s001, position=start, offset_seconds=0
-  cut_001 → sentence_id=s001, alignment=mid_sentence, offset_seconds=<word #3 onset>
-  cut_002 → sentence_id=s001, alignment=mid_sentence, offset_seconds=<word #9 onset>
-  cut_003 → sentence_id=s002, alignment=mid_sentence, offset_seconds=<word #4 onset>
+Example structure (NOT timing values to copy):
+  cut_000 → sentence_id from word-flow, position=start
+  cut_001 → same sentence_id, mid_sentence, offset copied from an earlier word entry
+  cut_002 → same sentence_id, mid_sentence, offset copied from a later word entry
+  cut_003 → next sentence_id, mid_sentence, offset copied from a word several entries into that sentence
   cut_00N → last sentence, position=end
-
-That means: multiple cuts inside one sentence AND a shot that crosses the
-sentence boundary until a later word in the next sentence.
 
 
 {chapter_context}
@@ -171,8 +170,8 @@ CONTINUOUS WORD FLOW
 
 Primary timing view. Chronological spoken words with real ElevenLabs onsets.
 offset_seconds is relative to the owning sentence_id (technical address only).
-Use word_ref / sentence_id + offset_seconds for mid_sentence cuts.
-NEVER invent or estimate onsets.
+For every mid_sentence boundary: copy sentence_id + offset_seconds from one row.
+NEVER invent, estimate, interpolate, or take offsets from the schema example.
 {continuous_word_flow_json}
 
 LOCKED SCRIPT:
@@ -194,6 +193,9 @@ SHOT CONSTRAINTS
 
 OUTPUT SCHEMA
 
+Field shapes only. For mid_sentence, replace COPY_FROM_WORD_FLOW_* with values
+copied from one real CONTINUOUS WORD FLOW row (never invent numbers).
+
 {{
   "voiceover_preroll_sec": null,
   "voiceover_postroll_sec": null,
@@ -205,35 +207,35 @@ OUTPUT SCHEMA
   "boundaries": [
     {{
       "cut_id": "{slug}_cut_000",
-      "sentence_id": "chapter_s001",
+      "sentence_id": "COPY_FROM_WORD_FLOW_sentence_id",
       "position": "start",
       "offset_seconds": 0,
       "alignment": "sentence_boundary"
     }},
     {{
       "cut_id": "{slug}_cut_001",
-      "sentence_id": "chapter_s001",
+      "sentence_id": "COPY_FROM_WORD_FLOW_sentence_id_same_as_cut_000",
       "position": "middle",
-      "offset_seconds": 1.05,
+      "offset_seconds": "COPY_FROM_WORD_FLOW_offset_seconds",
       "alignment": "mid_sentence"
     }},
     {{
       "cut_id": "{slug}_cut_002",
-      "sentence_id": "chapter_s001",
+      "sentence_id": "COPY_FROM_WORD_FLOW_sentence_id_same_as_cut_000",
       "position": "middle",
-      "offset_seconds": 3.40,
+      "offset_seconds": "COPY_FROM_WORD_FLOW_offset_seconds_later_word_same_sentence",
       "alignment": "mid_sentence"
     }},
     {{
       "cut_id": "{slug}_cut_003",
-      "sentence_id": "chapter_s002",
+      "sentence_id": "COPY_FROM_WORD_FLOW_sentence_id_next_sentence",
       "position": "middle",
-      "offset_seconds": 1.82,
+      "offset_seconds": "COPY_FROM_WORD_FLOW_offset_seconds_several_words_into_next_sentence",
       "alignment": "mid_sentence"
     }},
     {{
       "cut_id": "{slug}_cut_00N",
-      "sentence_id": "chapter_s00N",
+      "sentence_id": "COPY_FROM_WORD_FLOW_sentence_id_last",
       "position": "end",
       "offset_seconds": null,
       "alignment": "sentence_boundary"
@@ -260,7 +262,7 @@ OUTPUT SCHEMA
       "desired_framing": "close|medium|wide|aerial|pov",
       "preferred_media_type": "video|photo|either",
       "fact_check_required": false,
-      "covered_sentence_ids": ["chapter_s001"]
+      "covered_sentence_ids": ["COPY_FROM_WORD_FLOW_sentence_id"]
     }}
   ]
 }}

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Keyword Flow Free smoke: Free vs Keyword Flow on a voiced chapter fixture.
+"""TECHNICAL HARNESS / STUB TEST — not a real LLM or product UI test.
 
-Nachweise (Smoke, keine Quoten):
-- mindestens ein Satz enthält mehrere Shots
-- mindestens ein Shot überschreitet eine Satzgrenze
-- mindestens ein Cut liegt mehrere Wörter nach Beginn eines neuen Satzes
+Uses a mocked llm_callable and a synthetic voiced chapter fixture to exercise
+routing, continuous-word-flow input, and resolve plumbing for Keyword Flow Free.
+
+Do NOT treat output as a real LLM cut or real Streamlit product test.
+Manual product comparison is performed by the user.
 """
 
 from __future__ import annotations
