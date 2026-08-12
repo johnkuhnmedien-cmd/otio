@@ -33,3 +33,4 @@ exports/
 # Lokale Handoff-/Reference-Dateien (nicht committen)
 HANDOFF_*.md
 reference_build_*.py
+otio_app.db

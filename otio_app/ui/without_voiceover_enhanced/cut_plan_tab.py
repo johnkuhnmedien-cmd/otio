@@ -29,6 +29,10 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     CUT_PLAN_MODE_CHOICES,
     CUT_PLAN_MODE_LEGACY,
     CUT_PLAN_MODE_UNIFIED,
+    DEFAULT_MAX_SFX_PER_CHAPTER,
+    DEFAULT_SFX_PLANNER_MODEL,
+    MAX_SFX_PER_CHAPTER_MAX,
+    MAX_SFX_PER_CHAPTER_MIN,
     STILL_BACKGROUND_CHOICES,
     STILL_PAN_MODE_CHOICES,
     TIMING_MODE_CHOICES,
@@ -143,6 +147,13 @@ from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service impor
     generate_music_for_intro,
     music_ui_status_chapter,
     music_ui_status_intro,
+)
+from otio_app.services.without_voiceover_enhanced.sfx_service import (
+    SfxServiceError,
+    generate_sfx_for_chapter,
+    generate_sfx_for_intro,
+    sfx_ui_status_chapter,
+    sfx_ui_status_intro,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
     accepted_supplements_path,
@@ -662,6 +673,36 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             disabled=cut_plan_mode != CUT_PLAN_MODE_UNIFIED
             or not enable_unified_mini_repair,
         )
+        st.markdown("##### Sound Effects (MVP)")
+        sfx_model_options = list(ENHANCED_CUT_LLM_MODEL_CHOICES)
+        current_sfx_model = str(
+            current.sfx_planner_model or DEFAULT_SFX_PLANNER_MODEL
+        ).strip()
+        if current_sfx_model not in sfx_model_options:
+            sfx_model_options = [current_sfx_model, *sfx_model_options]
+        sfx_planner_model = st.selectbox(
+            "SFX Planner Model",
+            options=sfx_model_options,
+            index=sfx_model_options.index(current_sfx_model),
+            format_func=lambda m: ENHANCED_CUT_LLM_MODEL_LABELS.get(m, m),
+            key=f"enh_opt_sfx_planner_model_{project.id}",
+            help=(
+                "Unabhängig vom Final/Unified Cut Modell. Default: GPT-5.6 Sol "
+                "über den bestehenden Plan-LLM-Router."
+            ),
+        )
+        max_sfx_per_chapter = st.number_input(
+            "Maximum SFX per chapter",
+            min_value=MAX_SFX_PER_CHAPTER_MIN,
+            max_value=MAX_SFX_PER_CHAPTER_MAX,
+            value=int(current.max_sfx_per_chapter or DEFAULT_MAX_SFX_PER_CHAPTER),
+            step=1,
+            key=f"enh_opt_max_sfx_{project.id}",
+            help=(
+                "Hartes Maximum pro Intro/Kapitel — kein Ziel. "
+                "Planner soll möglichst weniger verwenden. Default 3."
+            ),
+        )
         col1, col2, col3 = st.columns(3)
         with col1:
             shot_min_sec = st.number_input(
@@ -1052,7 +1093,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             )
 
         draft = CutPlanOptions(
-            schema_version="1.10",
+            schema_version="1.11",
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
             unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
             keyword_flow_allow_onset_overflow=bool(
@@ -1060,6 +1101,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             ),
             enable_unified_mini_repair=bool(enable_unified_mini_repair),
             unified_mini_repair_threshold=float(unified_mini_repair_threshold),
+            sfx_planner_model=str(sfx_planner_model),
+            max_sfx_per_chapter=int(max_sfx_per_chapter),
             include_middle_frames=bool(include_middle_frames),
             max_middle_frames_per_chapter=int(max_middle_frames_per_chapter),
             max_candidates_per_gap=int(max_candidates_per_gap),
@@ -1102,6 +1145,23 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             type="primary",
         ):
             saved = save_cut_plan_options(project, draft)
+            # Mirror SFX planner into model-settings role (same registry/router).
+            from otio_app.services.voiceover_generation.model_settings_service import (
+                split_llm_model_id,
+            )
+
+            sfx_prov, sfx_mod = split_llm_model_id(str(saved.sfx_planner_model))
+            model_settings = load_model_settings(project)
+            save_model_settings(
+                project,
+                model_settings.model_copy(
+                    update={
+                        "enhanced_sfx_planner": LlmRoleSettings(
+                            provider=sfx_prov, model=sfx_mod
+                        )
+                    }
+                ),
+            )
             if is_keyword_flow_free_unified_style(saved):
                 style_note = " · Keyword Flow Free"
             elif is_keyword_flow_unified_style(saved):
@@ -1111,6 +1171,10 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             else:
                 style_note = " · Rhythmus"
             style_note += f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
+            style_note += (
+                f" · SFX planner={saved.sfx_planner_model} "
+                f"· max SFX={saved.max_sfx_per_chapter}"
+            )
             st.success(
                 f"Gespeichert: mode={saved.cut_plan_mode} · "
                 f"style={saved.unified_cut_style}{style_note} · "
@@ -1208,6 +1272,20 @@ def _music_button_label(ui_status: dict) -> str:
     return "ElevenLabs Music"
 
 
+def _sfx_button_label(ui_status: dict) -> str:
+    status = str(ui_status.get("status") or "")
+    if status in {"completed", "completed_partial"}:
+        return str(ui_status.get("message") or "✅ Sound Effects")
+    if status == "stale":
+        return "⚠ Sound Effects veraltet"
+    if status == "unavailable":
+        msg = str(ui_status.get("message") or "")
+        if "Kapitel 1–3" in msg or "Kapitel 1-3" in msg:
+            return "Sound Effects MVP: nur Kapitel 1–3"
+        return "Sound Effects nicht verfügbar"
+    return "Sound Effects"
+
+
 def _render_intro_cut_section(
     project,
     *,
@@ -1243,10 +1321,15 @@ def _render_intro_cut_section(
         key=f"enh_intro_otio_basename_{project.id}",
     )
     music_ui = music_ui_status_intro(project)
-    music_done = str(music_ui.get("status") or "") == "completed"
-    if music_done:
-        _inject_chapter_done_button_css([f"enh_intro_cut_music_{project.id}"])
-    col_a, col_b, col_music, col_c = st.columns(4)
+    sfx_ui = sfx_ui_status_intro(project)
+    done_css_keys = []
+    if str(music_ui.get("status") or "") == "completed":
+        done_css_keys.append(f"enh_intro_cut_music_{project.id}")
+    if str(sfx_ui.get("status") or "") in {"completed", "completed_partial"}:
+        done_css_keys.append(f"enh_intro_cut_sfx_{project.id}")
+    if done_css_keys:
+        _inject_chapter_done_button_css(done_css_keys)
+    col_a, col_b, col_music, col_sfx, col_c = st.columns(5)
     with col_a:
         run_intro_llm = st.button(
             "Intro: LLM Schnitt",
@@ -1274,6 +1357,16 @@ def _render_intro_cut_section(
         )
         if music_ui.get("status") in {"stale", "unavailable", "failed"}:
             st.caption(str(music_ui.get("message") or ""))
+    with col_sfx:
+        run_intro_sfx = st.button(
+            _sfx_button_label(sfx_ui),
+            key=f"enh_intro_cut_sfx_{project.id}",
+            use_container_width=True,
+            disabled=not bool(sfx_ui.get("enabled")),
+            help=str(sfx_ui.get("help") or "Sound Effects (optional)."),
+        )
+        if sfx_ui.get("status") in {"stale", "unavailable", "failed"}:
+            st.caption(str(sfx_ui.get("message") or ""))
     with col_c:
         run_intro_otio = st.button(
             "Intro: OTIO exportieren",
@@ -1379,6 +1472,22 @@ def _render_intro_cut_section(
             st.warning(f"ElevenLabs Music: {exc}")
         except Exception as exc:  # noqa: BLE001
             st.warning(f"ElevenLabs Music-Fehler: {exc}")
+
+    if run_intro_sfx:
+        try:
+            with st.spinner("Intro Sound Effects…"):
+                sfx_result = generate_sfx_for_intro(project)
+            if sfx_result.status in {"completed", "completed_partial"}:
+                st.success(sfx_result.message)
+                st.rerun()
+            elif sfx_result.status == "unavailable":
+                st.info(sfx_result.message)
+            else:
+                st.warning(sfx_result.message)
+        except SfxServiceError as exc:
+            st.warning(f"Sound Effects: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            st.warning(f"Sound Effects-Fehler: {exc}")
 
     if run_intro_otio:
         try:
@@ -1501,6 +1610,9 @@ def _render_chapter_cut_rows(
         music_ui_done = music_ui_status_chapter(project, status.folder_name, status)
         if str(music_ui_done.get("status") or "") == "completed":
             done_keys.append(f"enh_ch_music_{key_base}")
+        sfx_ui_done = sfx_ui_status_chapter(project, status.folder_name, status)
+        if str(sfx_ui_done.get("status") or "") in {"completed", "completed_partial"}:
+            done_keys.append(f"enh_ch_sfx_{key_base}")
     _inject_chapter_done_button_css(done_keys)
 
     done_count = sum(1 for s in statuses if s.matches)
@@ -1516,8 +1628,9 @@ def _render_chapter_cut_rows(
         key_base = f"{slug}_{project.id}"
         label = f"{'✅ ' if status.matches else ''}{folder}"
         music_ui = music_ui_status_chapter(project, folder, status)
-        name_col, llm_col, timing_col, music_col, otio_col = st.columns(
-            [2.0, 1, 1, 1.15, 1]
+        sfx_ui = sfx_ui_status_chapter(project, folder, status)
+        name_col, llm_col, timing_col, music_col, sfx_col, otio_col = st.columns(
+            [1.8, 0.9, 0.95, 1.05, 1.15, 0.85]
         )
         with name_col:
             st.markdown(f"**{label}**")
@@ -1572,6 +1685,16 @@ def _render_chapter_cut_rows(
             )
             if music_ui.get("status") in {"stale", "unavailable", "failed"}:
                 st.caption(str(music_ui.get("message") or ""))
+        with sfx_col:
+            run_sfx = st.button(
+                _sfx_button_label(sfx_ui),
+                key=f"enh_ch_sfx_{key_base}",
+                use_container_width=True,
+                disabled=not bool(sfx_ui.get("enabled")),
+                help=str(sfx_ui.get("help") or "Sound Effects (optional)."),
+            )
+            if sfx_ui.get("status") in {"stale", "unavailable", "failed"}:
+                st.caption(str(sfx_ui.get("message") or ""))
         with otio_col:
             run_otio = st.button(
                 "OTIO",
@@ -1637,6 +1760,22 @@ def _render_chapter_cut_rows(
                 st.warning(f"ElevenLabs Music ({folder}): {exc}")
             except Exception as exc:  # noqa: BLE001
                 st.warning(f"ElevenLabs Music-Fehler ({folder}): {exc}")
+
+        if run_sfx:
+            try:
+                with st.spinner(f"Sound Effects · „{folder}“…"):
+                    sfx_result = generate_sfx_for_chapter(project, folder)
+                if sfx_result.status in {"completed", "completed_partial"}:
+                    st.success(sfx_result.message)
+                    st.rerun()
+                elif sfx_result.status == "unavailable":
+                    st.info(sfx_result.message)
+                else:
+                    st.warning(sfx_result.message)
+            except SfxServiceError as exc:
+                st.warning(f"Sound Effects ({folder}): {exc}")
+            except Exception as exc:  # noqa: BLE001
+                st.warning(f"Sound Effects-Fehler ({folder}): {exc}")
 
         if run_otio:
             try:

@@ -133,6 +133,11 @@ LLM_INPUT_INFO = {
         "Kapitel-Rough-Cut · Ordner-Assets · akzeptierte Supplements · Style → "
         "finaler Cut Plan. Ein LLM-Call pro Dramaturgie-Kapitel."
     ),
+    "enhanced_sfx_planner": (
+        "Resolved Visual Timeline (nur verwendete Shots) · Locked Script · "
+        "echte ElevenLabs Word-Timestamps → optionaler SFX-Plan "
+        "(0–max Effekte). Unabhängig vom Cut-Modell."
+    ),
     "enhanced_supplement_funnel": (
         "Pro offenem Coverage Gap: Text-Ranking der Stock-Metadaten · "
         "Thumbnail-Vision in Batches · Finalisten-Vergleich. "
