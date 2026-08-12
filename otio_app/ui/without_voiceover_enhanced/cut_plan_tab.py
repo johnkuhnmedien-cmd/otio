@@ -137,6 +137,13 @@ from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     export_portable_otio_package,
     validate_resolved_timeline_for_production,
 )
+from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service import (
+    MusicServiceError,
+    generate_music_for_chapter,
+    generate_music_for_intro,
+    music_ui_status_chapter,
+    music_ui_status_intro,
+)
 from otio_app.services.without_voiceover_enhanced.paths import (
     accepted_supplements_path,
     coverage_gaps_path,
@@ -1184,6 +1191,23 @@ def _render_slim_status(project) -> None:
         )
 
 
+def _music_button_label(ui_status: dict) -> str:
+    status = str(ui_status.get("status") or "")
+    if status == "completed":
+        dur = ui_status.get("actual_duration_seconds")
+        if dur is not None:
+            return f"✅ ElevenLabs Music · {float(dur):.2f}s WAV"
+        return "✅ ElevenLabs Music"
+    if status == "stale":
+        return "⚠ Music veraltet"
+    if status == "unavailable":
+        msg = str(ui_status.get("message") or "")
+        if "Kapitel 1–3" in msg or "Kapitel 1-3" in msg:
+            return "Music MVP: nur Kapitel 1–3"
+        return "Music nicht verfügbar"
+    return "ElevenLabs Music"
+
+
 def _render_intro_cut_section(
     project,
     *,
@@ -1218,7 +1242,11 @@ def _render_intro_cut_section(
         value=f"{project.name}_intro",
         key=f"enh_intro_otio_basename_{project.id}",
     )
-    col_a, col_b, col_c = st.columns(3)
+    music_ui = music_ui_status_intro(project)
+    music_done = str(music_ui.get("status") or "") == "completed"
+    if music_done:
+        _inject_chapter_done_button_css([f"enh_intro_cut_music_{project.id}"])
+    col_a, col_b, col_music, col_c = st.columns(4)
     with col_a:
         run_intro_llm = st.button(
             "Intro: LLM Schnitt",
@@ -1236,6 +1264,16 @@ def _render_intro_cut_section(
                 "Opening 4s / Closing 5–8s). Gesamt-Timeline bleibt unverändert."
             ),
         )
+    with col_music:
+        run_intro_music = st.button(
+            _music_button_label(music_ui),
+            key=f"enh_intro_cut_music_{project.id}",
+            use_container_width=True,
+            disabled=not bool(music_ui.get("enabled")),
+            help=str(music_ui.get("help") or "ElevenLabs Music (optional)."),
+        )
+        if music_ui.get("status") in {"stale", "unavailable", "failed"}:
+            st.caption(str(music_ui.get("message") or ""))
     with col_c:
         run_intro_otio = st.button(
             "Intro: OTIO exportieren",
@@ -1325,6 +1363,22 @@ def _render_intro_cut_section(
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             st.error(f"Intro-Timing-Fehler: {exc}")
+
+    if run_intro_music:
+        try:
+            with st.spinner("Intro ElevenLabs Music…"):
+                music_result = generate_music_for_intro(project)
+            if music_result.status == "completed":
+                st.success(music_result.message)
+                st.rerun()
+            elif music_result.status == "unavailable":
+                st.info(music_result.message)
+            else:
+                st.warning(music_result.message)
+        except MusicServiceError as exc:
+            st.warning(f"ElevenLabs Music: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            st.warning(f"ElevenLabs Music-Fehler: {exc}")
 
     if run_intro_otio:
         try:
@@ -1426,7 +1480,7 @@ def _render_chapter_cut_rows(
     provider: str,
     model: str,
 ) -> None:
-    """Pro Körper-Kapitel: Name | LLM Cut | Python Timing | OTIO."""
+    """Pro Körper-Kapitel: Name | LLM Cut | Python Timing | ElevenLabs Music | OTIO."""
     statuses = list_chapter_cut_statuses(project)
     if not statuses:
         st.caption("Keine Körper-Kapitel — Dramaturgie / Locked Script prüfen.")
@@ -1444,6 +1498,9 @@ def _render_chapter_cut_rows(
                 f"enh_ch_otio_{key_base}",
             ]
         )
+        music_ui_done = music_ui_status_chapter(project, status.folder_name, status)
+        if str(music_ui_done.get("status") or "") == "completed":
+            done_keys.append(f"enh_ch_music_{key_base}")
     _inject_chapter_done_button_css(done_keys)
 
     done_count = sum(1 for s in statuses if s.matches)
@@ -1458,7 +1515,10 @@ def _render_chapter_cut_rows(
         slug = status.folder_slug
         key_base = f"{slug}_{project.id}"
         label = f"{'✅ ' if status.matches else ''}{folder}"
-        name_col, llm_col, timing_col, otio_col = st.columns([2.2, 1, 1, 1])
+        music_ui = music_ui_status_chapter(project, folder, status)
+        name_col, llm_col, timing_col, music_col, otio_col = st.columns(
+            [2.0, 1, 1, 1.15, 1]
+        )
         with name_col:
             st.markdown(f"**{label}**")
             if status.stale_for_unsupported_pauses:
@@ -1502,6 +1562,16 @@ def _render_chapter_cut_rows(
                     )
                 ),
             )
+        with music_col:
+            run_music = st.button(
+                _music_button_label(music_ui),
+                key=f"enh_ch_music_{key_base}",
+                use_container_width=True,
+                disabled=not bool(music_ui.get("enabled")),
+                help=str(music_ui.get("help") or "ElevenLabs Music (optional)."),
+            )
+            if music_ui.get("status") in {"stale", "unavailable", "failed"}:
+                st.caption(str(music_ui.get("message") or ""))
         with otio_col:
             run_otio = st.button(
                 "OTIO",
@@ -1551,6 +1621,22 @@ def _render_chapter_cut_rows(
                 st.error(str(exc))
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Timing-Fehler ({folder}): {exc}")
+
+        if run_music:
+            try:
+                with st.spinner(f"ElevenLabs Music · „{folder}“…"):
+                    music_result = generate_music_for_chapter(project, folder)
+                if music_result.status == "completed":
+                    st.success(music_result.message)
+                    st.rerun()
+                elif music_result.status == "unavailable":
+                    st.info(music_result.message)
+                else:
+                    st.warning(music_result.message)
+            except MusicServiceError as exc:
+                st.warning(f"ElevenLabs Music ({folder}): {exc}")
+            except Exception as exc:  # noqa: BLE001
+                st.warning(f"ElevenLabs Music-Fehler ({folder}): {exc}")
 
         if run_otio:
             try:
