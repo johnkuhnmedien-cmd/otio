@@ -1,7 +1,8 @@
-"""Intro aus Ordner-Signalen — 5 Inhaltsvarianten einer Struktur, Bestätigung."""
+"""Intro aus Ordner-Signalen — N Inhaltsvarianten einer Struktur, Bestätigung."""
 
 from __future__ import annotations
 
+from otio_app.defaults import INTRO_HOOK_CANDIDATE_COUNT
 from otio_app.models import Project
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.intro_hook_service import (
@@ -14,8 +15,13 @@ from otio_app.services.voiceover_generation.intro_hook_service import (
     load_intro_hook_candidates,
     missing_intro_source_folder_names,
     regenerate_intro_hook_candidates,
+    revise_all_intro_hook_candidates,
+    revise_intro_hook_candidate,
     unconfirm_intro_hook,
     update_intro_hook_candidate,
+)
+from otio_app.services.voiceover_generation.prompts import (
+    DEFAULT_INTRO_HOOK_REVISION_INSTRUCTIONS,
 )
 from otio_app.services.voiceover_generation.intro_hook_settings_service import (
     default_intro_hook_settings,
@@ -37,6 +43,7 @@ from otio_app.services.voiceover_generation.llm_pricing import (
 )
 from otio_app.ui.voiceover_generation._shared import (
     LLM_INPUT_INFO,
+    render_llm_input_info,
     render_llm_model_selectbox,
     require_without_voiceover_mode,
     style_source_metric_value,
@@ -44,7 +51,7 @@ from otio_app.ui.voiceover_generation._shared import (
 
 import streamlit as st
 
-# Output-Token-Ceiling für Intro (5 Varianten + visual_beats). Unverbrauchtes
+# Output-Token-Ceiling für Intro (Varianten + visual_beats). Unverbrauchtes
 # Limit kostet nichts. Anthropic streamt oberhalb ~20k automatisch.
 _INTRO_MAX_OUTPUT_TOKENS_MIN = 16_384
 _INTRO_MAX_OUTPUT_TOKENS_MAX = 100_000
@@ -249,7 +256,8 @@ def _render_max_tokens_slider(
         step=_INTRO_MAX_OUTPUT_TOKENS_STEP,
         key=slider_key,
         help=(
-            "Obergrenze für die Antwortlänge (5 Intro-Varianten + visual_beats). "
+            f"Obergrenze für die Antwortlänge ({INTRO_HOOK_CANDIDATE_COUNT} "
+            "Intro-Varianten + visual_beats). "
             "Du zahlst nur die tatsächlich erzeugten Output-Tokens — nicht "
             "automatisch das volle Limit. Bei Truncation höher stellen."
         ),
@@ -358,9 +366,11 @@ def render_intro_page() -> None:
 
     st.subheader("Intro-Varianten generieren")
     st.caption(
-        "Eine Intro-Struktur (Raw-Intro-Referenz) × fünf unterschiedliche Inhalte. "
-        "Nicht fünf verschiedene Hook-Strategien."
+        f"Eine Intro-Struktur (Raw-Intro-Referenz) × {INTRO_HOOK_CANDIDATE_COUNT} "
+        f"unterschiedliche Inhalte. Nicht {INTRO_HOOK_CANDIDATE_COUNT} verschiedene "
+        "Hook-Strategien."
     )
+    render_llm_input_info(LLM_INPUT_INFO["intro"])
     max_output_tokens = _render_max_tokens_slider(
         project, provider=provider, model=model
     )
@@ -373,7 +383,7 @@ def render_intro_page() -> None:
     label = (
         "Intro-Varianten neu generieren"
         if candidates_document is not None
-        else "5 Intro-Varianten generieren"
+        else f"{INTRO_HOOK_CANDIDATE_COUNT} Intro-Varianten generieren"
     )
     if st.button(label, key=f"vo_intro_generate_{project.id}", type="primary"):
         with st.spinner("Intro-Varianten werden generiert…"):
@@ -414,6 +424,14 @@ def render_intro_page() -> None:
     if candidates_document.risks:
         st.warning("Hinweise zum letzten Lauf:\n" + "\n".join(f"- {risk}" for risk in candidates_document.risks))
 
+    _render_intro_revision_section(
+        project,
+        candidates_document,
+        provider=provider,
+        model=model,
+        max_output_tokens=max_output_tokens,
+    )
+
     st.subheader("Varianten")
     confirmed_hook_id = confirmed_hook.hook_id if confirmed_hook is not None else None
     for candidate in candidates_document.candidates:
@@ -446,3 +464,116 @@ def render_intro_page() -> None:
         unconfirm_intro_hook(project)
         st.info("Bestätigung zurückgenommen.")
         st.rerun()
+
+
+def _render_intro_revision_section(
+    project: Project,
+    candidates_document,
+    *,
+    provider: str,
+    model: str,
+    max_output_tokens: int,
+) -> None:
+    st.subheader("Intro mit Freitext nachbearbeiten")
+    render_llm_input_info(LLM_INPUT_INFO["intro_revision"])
+    hook_ids = [c.hook_id for c in candidates_document.candidates]
+    if not hook_ids:
+        st.info("Keine Varianten zum Nachbearbeiten.")
+        return
+
+    selected = st.selectbox(
+        "Variante für Nachbearbeitung",
+        options=hook_ids,
+        format_func=lambda hook_id: next(
+            (
+                f"{c.hook_id} — {c.hook_type}"
+                for c in candidates_document.candidates
+                if c.hook_id == hook_id
+            ),
+            hook_id,
+        ),
+        key=f"vo_intro_revise_hook_{project.id}",
+    )
+    prompt_key = f"vo_intro_revise_prompt_{project.id}"
+    if prompt_key not in st.session_state:
+        st.session_state[prompt_key] = DEFAULT_INTRO_HOOK_REVISION_INSTRUCTIONS
+    instructions = st.text_area(
+        "Freitext-Anweisung an das LLM",
+        key=prompt_key,
+        height=140,
+        help=(
+            "Nur dieser Text und der aktuelle Intro-Text "
+            "(inkl. [pause N seconds]-Marker) gehen an das LLM."
+        ),
+    )
+    selected_candidate = next(
+        (c for c in candidates_document.candidates if c.hook_id == selected),
+        None,
+    )
+    with st.expander("Aktuelles Intro (wird mitgeschickt)", expanded=False):
+        st.write(
+            (selected_candidate.hook_text if selected_candidate else "") or "(leer)"
+        )
+
+    col_one, col_all = st.columns(2)
+    with col_one:
+        if st.button(
+            "Ausgewählte Variante nachbearbeiten",
+            type="primary",
+            key=f"vo_intro_revise_one_{project.id}",
+        ):
+            if not (instructions or "").strip():
+                st.warning("Bitte zuerst eine Freitext-Anweisung eingeben.")
+            else:
+                with st.spinner(f"„{selected}“ wird nachbearbeitet…"):
+                    result = revise_intro_hook_candidate(
+                        project,
+                        selected,
+                        editor_instructions=instructions,
+                        provider=provider,
+                        model=model,
+                        max_output_tokens=max_output_tokens,
+                    )
+                if result.status == STATUS_PASS:
+                    # Clear text-area session so UI reloads revised text.
+                    st.session_state.pop(
+                        f"vo_intro_hook_text_{selected}_{project.id}", None
+                    )
+                    st.success(f"„{selected}“ nachbearbeitet.")
+                else:
+                    st.error(result.error or "Fehlgeschlagen.")
+                st.rerun()
+    with col_all:
+        if st.button(
+            f"Alle {len(hook_ids)} Varianten nachbearbeiten",
+            key=f"vo_intro_revise_all_{project.id}",
+        ):
+            if not (instructions or "").strip():
+                st.warning("Bitte zuerst eine Freitext-Anweisung eingeben.")
+            else:
+                progress = st.empty()
+
+                def _progress(hook_id: str, index: int, total: int) -> None:
+                    progress.info(f"Variante {index}/{total}: „{hook_id}“…")
+
+                with st.spinner("Alle Intro-Varianten werden nachbearbeitet…"):
+                    results = revise_all_intro_hook_candidates(
+                        project,
+                        editor_instructions=instructions,
+                        provider=provider,
+                        model=model,
+                        max_output_tokens=max_output_tokens,
+                        progress_callback=_progress,
+                    )
+                progress.empty()
+                ok = [r for r in results if r.status == STATUS_PASS]
+                fail = [r for r in results if r.status != STATUS_PASS]
+                for candidate in candidates_document.candidates:
+                    st.session_state.pop(
+                        f"vo_intro_hook_text_{candidate.hook_id}_{project.id}",
+                        None,
+                    )
+                st.success(f"{len(ok)}/{len(results)} Varianten nachbearbeitet.")
+                for result in fail:
+                    st.error(f"„{result.hook_id}“: {result.error}")
+                st.rerun()

@@ -1,8 +1,8 @@
 """Intro-Erzeugung aus allen bestätigten Folder-Voice-overs (Phase 5).
 
-Erzeugt genau 5 Inhaltsvarianten einer gemeinsamen Intro-Struktur
-(Raw-Intro-Referenz) mit visueller Zuordnung (visual_beats). Schreibt
-niemals EditPlanDocuments und löst nie OTIO-Export aus.
+Erzeugt genau INTRO_HOOK_CANDIDATE_COUNT Inhaltsvarianten einer gemeinsamen
+Intro-Struktur (Raw-Intro-Referenz) mit visueller Zuordnung (visual_beats).
+Schreibt niemals EditPlanDocuments und löst nie OTIO-Export aus.
 intro_hook.confirmed.json entsteht ausschließlich durch explizite
 Nutzerbestätigung (confirm_intro_hook) — niemals automatisch.
 """
@@ -63,7 +63,10 @@ from otio_app.services.voiceover_generation.models import (
     as_str_list,
 )
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
-from otio_app.services.voiceover_generation.prompts import build_intro_hook_prompt
+from otio_app.services.voiceover_generation.prompts import (
+    build_intro_hook_prompt,
+    build_intro_hook_revision_prompt,
+)
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
 from otio_app.services.voiceover_generation.voiceover_author_service import (
     _count_words,
@@ -92,6 +95,9 @@ __all__ = [
     "confirm_intro_hook",
     "unconfirm_intro_hook",
     "update_intro_hook_candidate",
+    "IntroHookRevisionResult",
+    "revise_intro_hook_candidate",
+    "revise_all_intro_hook_candidates",
 ]
 
 
@@ -537,12 +543,12 @@ def build_intro_hook_candidates(
     model: str,
     max_output_tokens: int | None = None,
 ) -> IntroHookBuildResult:
-    """Erzeugt genau 5 Intro-Inhaltsvarianten (gleiche Struktur, anderer Content).
+    """Erzeugt genau N Intro-Inhaltsvarianten (gleiche Struktur, anderer Content).
 
     Klassisch: alle aktiven Ordner mit bestätigtem Folder-Voice-over.
     Enhanced: Script Lock + Kapitel-Skript für jeden aktiven Dramaturgie-Ordner.
 
-    max_output_tokens hebt das Antwort-Ceiling an (5 Varianten + visual_beats
+    max_output_tokens hebt das Antwort-Ceiling an (Varianten + visual_beats
     können das Default-Limit leicht sprengen).
     """
     missing = missing_intro_source_folder_names(project)
@@ -747,3 +753,153 @@ def regenerate_intro_hook_candidates(
         model=model,
         max_output_tokens=max_output_tokens,
     )
+
+
+@dataclass
+class IntroHookRevisionResult:
+    hook_id: str
+    status: str  # PASS | FAIL
+    error: str | None = None
+    hook_text: str | None = None
+
+
+def _strip_plain_intro_response(raw_text: str) -> str:
+    text = (raw_text or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
+def revise_intro_hook_candidate(
+    project: Project,
+    hook_id: str,
+    *,
+    editor_instructions: str,
+    provider: str,
+    model: str,
+    max_output_tokens: int | None = None,
+    llm_callable=None,
+) -> IntroHookRevisionResult:
+    """Revidiert ein fertiges Intro per Freitext — inkl. Pause-Marker 1:1."""
+    instructions = (editor_instructions or "").strip()
+    if not instructions:
+        return IntroHookRevisionResult(
+            hook_id=hook_id,
+            status=STATUS_FAIL,
+            error="Freitext-Anweisung ist leer.",
+        )
+    document = load_intro_hook_candidates(project)
+    if document is None:
+        return IntroHookRevisionResult(
+            hook_id=hook_id,
+            status=STATUS_FAIL,
+            error="Keine Intro-Varianten vorhanden.",
+        )
+    candidate = next((c for c in document.candidates if c.hook_id == hook_id), None)
+    if candidate is None:
+        return IntroHookRevisionResult(
+            hook_id=hook_id,
+            status=STATUS_FAIL,
+            error=f"Hook-Kandidat '{hook_id}' nicht gefunden.",
+        )
+    current = (candidate.hook_text or "").strip()
+    if not current:
+        return IntroHookRevisionResult(
+            hook_id=hook_id,
+            status=STATUS_FAIL,
+            error="Intro-Text ist leer.",
+        )
+
+    settings = load_intro_hook_settings(project)
+    prompt = build_intro_hook_revision_prompt(
+        editor_instructions=instructions,
+        current_hook_text=current,
+        hook_id=hook_id,
+        language=settings.language or project.language,
+    )
+    model_id = resolve_llm_model_id(provider, model)
+    try:
+        if llm_callable is not None:
+            raw = llm_callable(
+                prompt=prompt,
+                model=model_id,
+                max_output_tokens=max_output_tokens,
+            )
+            raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+        else:
+            raw_text = generate_plan_text_with_metadata(
+                prompt=prompt,
+                model=model_id,
+                max_output_tokens=max_output_tokens,
+            ).raw_text
+        revised = _strip_plain_intro_response(raw_text)
+        if not revised:
+            return IntroHookRevisionResult(
+                hook_id=hook_id,
+                status=STATUS_FAIL,
+                error="LLM-Antwort war leer.",
+            )
+        update_intro_hook_candidate(project, hook_id, {"hook_text": revised})
+        confirmed = load_confirmed_intro_hook(project)
+        if confirmed is not None and confirmed.hook_id == hook_id:
+            confirm_intro_hook(project, hook_id, edited_hook_text=revised)
+            if project.is_without_voiceover_enhanced:
+                try:
+                    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+                        ensure_confirmed_intro_in_locked_script,
+                    )
+
+                    ensure_confirmed_intro_in_locked_script(project)
+                except Exception:
+                    # Candidate/confirmed already updated; bridge is best-effort.
+                    pass
+        return IntroHookRevisionResult(
+            hook_id=hook_id,
+            status=STATUS_PASS,
+            hook_text=revised,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return IntroHookRevisionResult(
+            hook_id=hook_id,
+            status=STATUS_FAIL,
+            error=str(exc),
+        )
+
+
+def revise_all_intro_hook_candidates(
+    project: Project,
+    *,
+    editor_instructions: str,
+    provider: str,
+    model: str,
+    max_output_tokens: int | None = None,
+    llm_callable=None,
+    progress_callback=None,
+) -> list[IntroHookRevisionResult]:
+    """Wendet denselben Freitext sequenziell auf alle Intro-Varianten an."""
+    document = load_intro_hook_candidates(project)
+    if document is None:
+        return []
+    results: list[IntroHookRevisionResult] = []
+    total = len(document.candidates)
+    for index, candidate in enumerate(document.candidates, start=1):
+        if progress_callback is not None:
+            progress_callback(candidate.hook_id, index, total)
+        results.append(
+            revise_intro_hook_candidate(
+                project,
+                candidate.hook_id,
+                editor_instructions=editor_instructions,
+                provider=provider,
+                model=model,
+                max_output_tokens=max_output_tokens,
+                llm_callable=llm_callable,
+            )
+        )
+    return results
+

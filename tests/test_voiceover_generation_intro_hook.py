@@ -36,8 +36,15 @@ from otio_app.services.voiceover_generation.intro_hook_service import (
     load_intro_hook_candidates,
     missing_intro_source_folder_names,
     regenerate_intro_hook_candidates,
+    revise_all_intro_hook_candidates,
+    revise_intro_hook_candidate,
     unconfirm_intro_hook,
+    update_intro_hook_candidate,
     validate_intro_hook_candidate,
+)
+from otio_app.services.voiceover_generation.prompts import (
+    DEFAULT_INTRO_HOOK_REVISION_INSTRUCTIONS,
+    build_intro_hook_revision_prompt,
 )
 from otio_app.services.without_voiceover_enhanced.models import (
     EnhancedScriptDocument,
@@ -159,7 +166,7 @@ VALID_INTRO_RESPONSE = json.dumps(
                 "reason": "Starker Einstieg.",
                 "risks": [],
             }
-            for i in range(1, 6)
+            for i in range(1, 4)
         ]
     }
 )
@@ -250,7 +257,7 @@ def test_build_writes_intro_hook_candidates_json(tmp_path: Path) -> None:
 
     assert result.status == STATUS_PASS
     assert result.document is not None
-    assert len(result.document.candidates) == 5
+    assert len(result.document.candidates) == 3
     path = get_intro_hook_candidates_path(project.language_work_dir_path)
     assert path.is_file()
 
@@ -452,17 +459,17 @@ def test_validate_detects_missing_supplement_reason() -> None:
 
 
 def test_candidate_count_mismatch_is_documented_as_risk(tmp_path: Path) -> None:
-    """Bewusste Entscheidung (§12.18): Bei != 5 Kandidaten wird trotzdem
+    """Bei != INTRO_HOOK_CANDIDATE_COUNT Kandidaten wird trotzdem
     gespeichert (kein harter Abbruch), aber mit einem dokumentierten
     Hinweis auf Dokument-Ebene."""
     project = _make_project_with_confirmed_folder_voiceovers(tmp_path)
     payload = json.loads(VALID_INTRO_RESPONSE)
-    payload["candidates"] = payload["candidates"][:3]
+    payload["candidates"] = payload["candidates"][:2]
     with patch(f"{_INTRO_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response(json.dumps(payload))):
         result = build_intro_hook_candidates(project, provider="anthropic", model="claude-sonnet-5")
 
     assert result.status == STATUS_PASS
-    assert len(result.document.candidates) == 3
+    assert len(result.document.candidates) == 2
     assert any("CANDIDATE_COUNT_MISMATCH" in risk for risk in result.document.risks)
 
 
@@ -607,4 +614,73 @@ def test_parse_candidate_rejects_garbage_hook_type():
     )
     assert candidate is not None
     assert candidate.hook_type == "cinematic_promise"
+
+
+def test_intro_revision_prompt_preserves_pause_markers() -> None:
+    prompt = build_intro_hook_revision_prompt(
+        editor_instructions=DEFAULT_INTRO_HOOK_REVISION_INSTRUCTIONS,
+        current_hook_text=(
+            "Germany opens with history.\n\n"
+            "[pause 2 seconds]\n\n"
+            "Then the Alps rise."
+        ),
+        hook_id="hook_001",
+        language="en",
+    )
+    assert "[pause 2 seconds]" in prompt
+    assert "copy 1:1" in prompt.lower() or "Keep every" in prompt
+    assert "more human" in prompt
+    assert "Project Brief" not in prompt
+
+
+def test_revise_all_intro_hook_candidates_applies_freetext(tmp_path: Path) -> None:
+    project = _make_project_with_confirmed_folder_voiceovers(tmp_path)
+    with patch(
+        f"{_INTRO_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(),
+    ):
+        build_intro_hook_candidates(project, provider="anthropic", model="claude-sonnet-5")
+
+    calls: list[str] = []
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        calls.append(prompt)
+        assert "[pause" in prompt or "CURRENT INTRO" in prompt
+        assert "more human" in prompt
+        return (
+            "Revised intro opening.\n\n"
+            "[pause 2 seconds]\n\n"
+            "Revised close."
+        )
+
+    # Seed pause markers into candidates so the revision prompt includes them.
+    document = load_intro_hook_candidates(project)
+    assert document is not None
+    for candidate in document.candidates:
+        update_intro_hook_candidate(
+            project,
+            candidate.hook_id,
+            {
+                "hook_text": (
+                    f"{candidate.hook_text}\n\n"
+                    "[pause 2 seconds]\n\n"
+                    "Closing beat."
+                )
+            },
+        )
+
+    results = revise_all_intro_hook_candidates(
+        project,
+        editor_instructions=DEFAULT_INTRO_HOOK_REVISION_INSTRUCTIONS,
+        provider="anthropic",
+        model="claude-sonnet-5",
+        llm_callable=fake_llm,
+    )
+    assert len(results) == 3
+    assert all(r.status == "PASS" for r in results)
+    assert len(calls) == 3
+    loaded = load_intro_hook_candidates(project)
+    assert loaded is not None
+    assert all("Revised intro opening." in c.hook_text for c in loaded.candidates)
 
