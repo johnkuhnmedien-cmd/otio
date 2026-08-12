@@ -740,7 +740,8 @@ def revise_enhanced_script_for_folder(
         )
 
     draft = load_script_draft(project)
-    current = chapter_narration_text(draft, folder_name).strip()
+    # Display text includes [pause N seconds] so the LLM can preserve timing 1:1.
+    current = chapter_display_text_for_folder(draft, folder_name).strip()
     if not current:
         return FolderScriptBuildResult(
             folder_name=folder_name,

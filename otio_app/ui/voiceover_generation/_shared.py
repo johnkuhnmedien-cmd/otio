@@ -118,7 +118,8 @@ LLM_INPUT_INFO = {
         "Ein Call = nur dieses Kapitel — kein Inventar, keine Asset-Zuordnung."
     ),
     "enhanced_script_revision": (
-        "Nur dein Freitext + das bereits erzeugte Kapitel-Skript. "
+        "Nur dein Freitext + das bereits erzeugte Kapitel-Skript "
+        "(inkl. [pause N seconds]-Marker). "
         "Kein Brief, keine Dramaturgie, kein Style, kein Inventory."
     ),
     "enhanced_rough_cut": (

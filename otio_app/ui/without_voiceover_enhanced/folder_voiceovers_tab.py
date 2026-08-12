@@ -29,6 +29,9 @@ from otio_app.services.without_voiceover_enhanced.script_author_service import (
     revise_enhanced_script_for_folder,
     segments_for_folder,
 )
+from otio_app.services.without_voiceover_enhanced.script_prompts import (
+    DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS,
+)
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     ScriptLockError,
     load_locked_script,
@@ -550,17 +553,19 @@ def _render_script_revision_section(
         options=present,
         key=f"enh_revise_folder_{project.id}",
     )
+    prompt_key = f"enh_revise_prompt_{project.id}"
+    if prompt_key not in st.session_state:
+        st.session_state[prompt_key] = DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS
     instructions = st.text_area(
         "Freitext-Anweisung an das LLM",
-        key=f"enh_revise_prompt_{project.id}",
+        key=prompt_key,
         height=160,
-        placeholder=(
-            "z. B. Kürzer, weniger Pathos, mehr konkrete Ortsdetails, "
-            "Ton ruhiger …"
+        help=(
+            "Nur dieser Text und das aktuelle Kapitel-Skript "
+            "(inkl. [pause N seconds]-Marker) gehen an das LLM."
         ),
-        help="Nur dieser Text und das aktuelle Kapitel-Skript gehen an das LLM.",
     )
-    preview = chapter_narration_text(document, selected)
+    preview = chapter_display_text_for_folder(document, selected)
     with st.expander("Aktuelles Skript (wird mitgeschickt)", expanded=False):
         st.write(preview or "(leer)")
 

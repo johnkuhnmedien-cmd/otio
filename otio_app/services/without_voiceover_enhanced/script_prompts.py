@@ -324,6 +324,13 @@ VERIFIED FACTS / METADATA (only these may be stated as facts):
 """
 
 
+DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS = (
+    "change the text so it sounds more human. "
+    "Keep the structure and the pause tags in brackets. "
+    "It must not be detected by AI Detectors."
+)
+
+
 def build_enhanced_script_revision_prompt(
     *,
     editor_instructions: str,
@@ -331,7 +338,7 @@ def build_enhanced_script_revision_prompt(
     folder_name: str,
     language: str = "de",
 ) -> str:
-    """Minimaler Revisions-Prompt: nur Freitext-Anweisung + bestehendes Skript."""
+    """Minimaler Revisions-Prompt: Freitext + Kapiteltext inkl. [pause N seconds]."""
     instructions = (editor_instructions or "").strip()
     script = (current_script or "").strip()
     return f"""\
@@ -343,12 +350,18 @@ CHAPTER / folder_name: {folder_name}
 EDITOR INSTRUCTIONS (follow these; they override the current wording where they conflict):
 {instructions or "(no instructions provided)"}
 
-CURRENT SCRIPT:
+CURRENT SCRIPT (includes timed pause markers on their own lines):
 {script or "(empty)"}
 
-Return ONLY the revised spoken narration as plain text.
-No JSON, no markdown code fences, no commentary, no bullet lists of notes —
-only the narration that should be spoken aloud for this chapter.
+PAUSE MARKERS — copy 1:1:
+- The input may contain lines like [pause 3 seconds] or [pause 4 seconds].
+- Keep every such marker exactly as written (same numbers, same positions between beats).
+- Do NOT write bare [pause] without a duration.
+- Do NOT invent new pause markers unless the editor instructions explicitly ask for them.
+- Only rewrite the spoken prose between those markers.
+
+Return ONLY the revised narration as plain text, including the preserved [pause N seconds] lines.
+No JSON, no markdown code fences, no commentary, no bullet lists of notes.
 """
 
 
