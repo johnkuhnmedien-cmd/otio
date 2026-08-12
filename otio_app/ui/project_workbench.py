@@ -165,7 +165,12 @@ def _start_asset_analysis_background(project, folders: list[str], model: str) ->
 def _render_folder_picker(project) -> list[str]:
     """Multiselect und Schnellauswahl — oben in der Analyse-Ansicht."""
     folder_state_key = f"workbench_folders_{project.id}"
-    if folder_state_key not in st.session_state:
+    pending_key = f"workbench_folders_pending_{project.id}"
+    # Apply button-driven selection before the multiselect is instantiated.
+    # Streamlit forbids writing a widget key after that widget exists in the run.
+    if pending_key in st.session_state:
+        st.session_state[folder_state_key] = st.session_state.pop(pending_key)
+    elif folder_state_key not in st.session_state:
         st.session_state[folder_state_key] = list(project.selected_asset_subdirs)
 
     status_cache = _get_folder_status_cache(project)
@@ -187,7 +192,7 @@ def _render_folder_picker(project) -> list[str]:
     btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
     with btn_col1:
         if st.button("Alle Ordner auswählen", key=f"all_{project.id}"):
-            st.session_state[folder_state_key] = list(project.asset_subdir_names)
+            st.session_state[pending_key] = list(project.asset_subdir_names)
             st.rerun()
     with btn_col2:
         if st.button("Nur offene Ordner", key=f"open_{project.id}"):
@@ -197,11 +202,11 @@ def _render_folder_picker(project) -> list[str]:
                 if status_cache.get(name)
                 in {FolderAnalysisState.PENDING, FolderAnalysisState.PARTIAL}
             ]
-            st.session_state[folder_state_key] = open_names
+            st.session_state[pending_key] = open_names
             st.rerun()
     with btn_col3:
         if st.button("Gespeicherte Auswahl", key=f"reload_{project.id}"):
-            st.session_state[folder_state_key] = list(project.selected_asset_subdirs)
+            st.session_state[pending_key] = list(project.selected_asset_subdirs)
             st.rerun()
     with btn_col4:
         if st.button("Auswahl speichern", key=f"save_sel_{project.id}"):
