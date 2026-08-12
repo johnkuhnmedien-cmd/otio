@@ -51,6 +51,12 @@ MUSIC_CHAPTERS_SUBDIR = "chapters"
 MUSIC_WAV_FILENAME = "music.wav"
 MUSIC_REQUEST_FILENAME = "music_request.json"
 MUSIC_RESULT_FILENAME = "music_result.json"
+SOUND_EFFECTS_SUBDIR = "sound_effects"
+SOUND_EFFECTS_INTRO_SUBDIR = "intro"
+SOUND_EFFECTS_CHAPTERS_SUBDIR = "chapters"
+SOUND_EFFECTS_AUDIO_SUBDIR = "audio"
+SFX_PLAN_FILENAME = "sfx_plan.json"
+SFX_RESULT_FILENAME = "sfx_result.json"
 
 
 def assert_enhanced_work_root(project: Project) -> Path:
@@ -328,3 +334,60 @@ def music_result_path(project: Project, *, scope: str, folder_name: str = "") ->
     if str(scope).strip().lower() == "intro":
         return music_intro_dir(project) / MUSIC_RESULT_FILENAME
     return music_chapter_dir(project, folder_name) / MUSIC_RESULT_FILENAME
+
+
+def sound_effects_root(project: Project) -> Path:
+    """``_otio_enhanced/{LANG}/voiceover_generation/sound_effects``."""
+    return enhanced_generation_root(project) / SOUND_EFFECTS_SUBDIR
+
+
+def sound_effects_intro_dir(project: Project) -> Path:
+    return sound_effects_root(project) / SOUND_EFFECTS_INTRO_SUBDIR
+
+
+def sound_effects_chapters_dir(project: Project) -> Path:
+    return sound_effects_root(project) / SOUND_EFFECTS_CHAPTERS_SUBDIR
+
+
+def sound_effects_chapter_dir(project: Project, folder_name: str) -> Path:
+    from otio_app.project_layout import safe_folder_slug
+
+    slug = safe_folder_slug((folder_name or "").strip() or "chapter")
+    return sound_effects_chapters_dir(project) / slug
+
+
+def sound_effects_scope_dir(
+    project: Project, *, scope: str, folder_name: str = ""
+) -> Path:
+    if str(scope).strip().lower() == "intro":
+        return sound_effects_intro_dir(project)
+    return sound_effects_chapter_dir(project, folder_name)
+
+
+def sound_effects_audio_dir(
+    project: Project, *, scope: str, folder_name: str = ""
+) -> Path:
+    return sound_effects_scope_dir(
+        project, scope=scope, folder_name=folder_name
+    ) / SOUND_EFFECTS_AUDIO_SUBDIR
+
+
+def sfx_plan_path(project: Project, *, scope: str, folder_name: str = "") -> Path:
+    return sound_effects_scope_dir(
+        project, scope=scope, folder_name=folder_name
+    ) / SFX_PLAN_FILENAME
+
+
+def sfx_result_path(project: Project, *, scope: str, folder_name: str = "") -> Path:
+    return sound_effects_scope_dir(
+        project, scope=scope, folder_name=folder_name
+    ) / SFX_RESULT_FILENAME
+
+
+def sfx_wav_path(
+    project: Project, *, scope: str, folder_name: str = "", sfx_id: str
+) -> Path:
+    safe_id = (sfx_id or "sfx").strip() or "sfx"
+    return sound_effects_audio_dir(
+        project, scope=scope, folder_name=folder_name
+    ) / f"{safe_id}.wav"

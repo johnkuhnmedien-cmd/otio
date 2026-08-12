@@ -1159,6 +1159,16 @@ def export_otio_from_resolved_timeline(
     if music_track is not None:
         timeline.tracks.append(music_track)
         timeline.metadata["enhanced_music_track"] = True
+    from otio_app.services.without_voiceover_enhanced.otio_sfx_track import (
+        build_optional_sfx_track,
+    )
+
+    sfx_track = build_optional_sfx_track(
+        project, resolved, fps=fps, time_range_fn=_time_range
+    )
+    if sfx_track is not None:
+        timeline.tracks.append(sfx_track)
+        timeline.metadata["enhanced_sfx_track"] = True
     if title_notes:
         timeline.metadata["folder_title_notes"] = list(title_notes)
     if allow_errors:
@@ -1435,6 +1445,35 @@ def export_portable_otio_package(
                 pending_music.append((child, media_path.resolve(), asset_id))
         timeline.tracks.append(music_track)
         timeline.metadata["enhanced_music_track"] = True
+    from otio_app.services.without_voiceover_enhanced.otio_sfx_track import (
+        build_optional_sfx_track,
+        collect_sfx_placements,
+    )
+
+    sfx_track = build_optional_sfx_track(
+        project, resolved, fps=fps, time_range_fn=_time_range
+    )
+    pending_sfx: list[tuple[otio.schema.Clip, Path, str]] = []
+    if sfx_track is not None:
+        for path, _start, _dur, label in collect_sfx_placements(project, resolved):
+            stage_items.append((path, label, "audio"))
+        for child in sfx_track:
+            media = getattr(child, "media_reference", None)
+            if media is None:
+                continue
+            target = str(getattr(media, "target_url", "") or "").strip()
+            if not target:
+                continue
+            media_path = Path(target)
+            if media_path.is_file():
+                asset_id = str(
+                    (getattr(child, "metadata", None) or {}).get("resolved_media_path")
+                    or media_path.stem
+                )
+                child.metadata["original_media_path"] = str(media_path.resolve())
+                pending_sfx.append((child, media_path.resolve(), asset_id))
+        timeline.tracks.append(sfx_track)
+        timeline.metadata["enhanced_sfx_track"] = True
     if title_notes:
         timeline.metadata["folder_title_notes"] = list(title_notes)
     timeline.metadata["enhanced_export_mode"] = "production_portable"
@@ -1445,7 +1484,9 @@ def export_portable_otio_package(
         raise EnhancedOtioExportError(str(exc)) from exc
 
     # Rewrite target_urls → relative media/<unique>
-    for clip, original, _asset_id in pending_video + pending_audio + pending_titles + pending_music:
+    for clip, original, _asset_id in (
+        pending_video + pending_audio + pending_titles + pending_music + pending_sfx
+    ):
         try:
             entry = lookup_packaged_path(entries, original)
         except PortableExportError as exc:

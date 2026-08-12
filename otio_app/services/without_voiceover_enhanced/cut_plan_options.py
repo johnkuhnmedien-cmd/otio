@@ -114,7 +114,11 @@ DEFAULT_INTRO_VOICEOVER_PREROLL_SEC = 4.0
 DEFAULT_INTRO_VOICEOVER_POSTROLL_SEC = 6.5
 DEFAULT_INTRO_VOICEOVER_POSTROLL_MIN_SEC = 5.0
 DEFAULT_INTRO_VOICEOVER_POSTROLL_MAX_SEC = 8.0
-CUT_PLAN_OPTIONS_SCHEMA_VERSION = "1.10"
+CUT_PLAN_OPTIONS_SCHEMA_VERSION = "1.11"
+DEFAULT_MAX_SFX_PER_CHAPTER = 3
+MAX_SFX_PER_CHAPTER_MIN = 0
+MAX_SFX_PER_CHAPTER_MAX = 5
+DEFAULT_SFX_PLANNER_MODEL = "openai:gpt-5.6-sol"
 
 
 class CutPlanOptions(BaseModel):
@@ -129,6 +133,14 @@ class CutPlanOptions(BaseModel):
     # Phase 6: optionaler Mini-Repair nach Gap-Merge (Default aus).
     enable_unified_mini_repair: bool = False
     unified_mini_repair_threshold: float = Field(default=0.20, ge=0.0, le=1.0)
+    # ElevenLabs SFX MVP: planner model (independent of Final/Unified Cut model).
+    sfx_planner_model: str = DEFAULT_SFX_PLANNER_MODEL
+    # Hard maximum per chapter/intro scope — not a target. Prefer fewer.
+    max_sfx_per_chapter: int = Field(
+        default=DEFAULT_MAX_SFX_PER_CHAPTER,
+        ge=MAX_SFX_PER_CHAPTER_MIN,
+        le=MAX_SFX_PER_CHAPTER_MAX,
+    )
     include_middle_frames: bool = False
     max_middle_frames_per_chapter: int = Field(
         default=DEFAULT_MAX_MIDDLE_FRAMES_PER_CHAPTER,
@@ -424,6 +436,17 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             default=defaults.unified_mini_repair_threshold,
             lo=0.0,
             hi=1.0,
+        ),
+        sfx_planner_model=str(
+            raw.get("sfx_planner_model", defaults.sfx_planner_model)
+            or defaults.sfx_planner_model
+        ).strip()
+        or defaults.sfx_planner_model,
+        max_sfx_per_chapter=_clamp_int(
+            raw.get("max_sfx_per_chapter", defaults.max_sfx_per_chapter),
+            default=defaults.max_sfx_per_chapter,
+            lo=MAX_SFX_PER_CHAPTER_MIN,
+            hi=MAX_SFX_PER_CHAPTER_MAX,
         ),
         include_middle_frames=bool(
             raw.get("include_middle_frames", defaults.include_middle_frames)

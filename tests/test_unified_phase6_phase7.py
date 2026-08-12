@@ -173,7 +173,11 @@ def test_cut_plan_mode_options_roundtrip(tmp_path) -> None:
     assert loaded.cut_plan_mode == CUT_PLAN_MODE_UNIFIED
     assert loaded.enable_unified_mini_repair is True
     assert loaded.unified_mini_repair_threshold == 0.25
-    assert saved.schema_version == "1.3"
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CUT_PLAN_OPTIONS_SCHEMA_VERSION,
+    )
+
+    assert saved.schema_version == CUT_PLAN_OPTIONS_SCHEMA_VERSION
 
 
 def test_merge_report_slot_result_shape() -> None:
