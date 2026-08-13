@@ -263,6 +263,26 @@ Für Etappen gibt es „Assets pro Durchlauf". Der Job nimmt dabei immer erst di
 Assets ohne aktuelle Analyse, damit eine Etappe keinen Platz an bereits fertige
 verliert.
 
+## 3.7a Neuanalyse muss in der Inventar-JSON ankommen
+
+Gefunden beim Prüfen eines echten Projekts, in dem zwei Kapitel noch auf einer
+Legacy-Analyse standen: `should_skip_folder_analysis` akzeptiert Legacy-Zeilen
+als „erfolgreich analysiert". `materialize_folder_inventory_from_cache` hat die
+vorhandene JSON deshalb unverändert weiterverwendet — auch direkt nach einem
+Analyselauf, der für dieselben Dateien bereits eine v3-Fassung in den Cache
+geschrieben hatte. Bezahlt, aber nicht angekommen: die Slim-Sicht und damit der
+Cut-LLM lasen weiter den alten Stand.
+
+`_cache_is_newer_than_inventory` vergleicht jetzt pro Datei `analysis_signature`
+und `description` zwischen Cache und Inventarzeile. Unterscheiden sie sich, wird
+neu aufgebaut; sonst bleibt die JSON unangetastet (kein unnötiges Schreiben).
+
+Beschaffte Assets bleiben dabei erhalten und werden **nicht** erneut analysiert:
+sie liegen im eigenen Cache-Scope und tragen bereits eine aktuelle Signatur.
+`test_reanalyzing_legacy_originals_keeps_supplements_untouched` prüft beides —
+nur das Original geht erneut an Gemini, die Supplement-Zeile behält Signatur,
+Tags und Beschaffungsnotiz.
+
 ## 3.8 Was ein neuer LLM-Cut mit den Gaps macht
 
 Teilweise automatisch, aber nicht vollständig:

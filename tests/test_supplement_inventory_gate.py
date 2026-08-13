@@ -300,6 +300,85 @@ def test_purge_removes_original_wrongly_kept_as_supplement(tmp_path):
     assert load_folder_inventory(project, FOLDER).assets[0].asset_id == "orig_clip"
 
 
+def test_reanalyzing_legacy_originals_keeps_supplements_untouched(tmp_path, monkeypatch):
+    """Originale neu analysieren darf beschaffte Assets nicht kosten oder verlieren.
+
+    Ausgangslage wie im echten Projekt: die Originale tragen eine Legacy-Analyse
+    ohne Signatur, das beschaffte Asset ist schon vollständig v3. Ein
+    Analyselauf muss die Originale nachziehen und das Supplement unverändert
+    stehen lassen — ohne erneuten Gemini-Aufruf dafür.
+    """
+    from otio_app.services.asset_analyzer import analyze_asset_folders
+
+    project = _project(tmp_path)
+
+    # Original mit Legacy-Analyse: Beschreibung vorhanden, aber keine Signatur.
+    original = project.project_root_path / FOLDER / "orig_clip.mp4"
+    original.write_bytes(b"\x00" * 1024)
+    legacy = AssetMediaAnalysis(
+        path=str(original),
+        description="Alte Beschreibung ohne Signatur",
+        asset_id="orig_clip",
+        analysis_status="complete",
+    )
+    save_cached_media(media_cache_path(project, FOLDER, original), legacy)
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, FOLDER),
+        AssetFolderAnalysis(
+            folder=FOLDER, media_files=[str(original)], assets=[legacy]
+        ),
+    )
+
+    analysed_names: list[str] = []
+
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        frame = output_dir / "frame_001.jpg"
+        frame.write_bytes(b"jpeg")
+        return [frame]
+
+    def fake_analyze(media_name, folder_name, frame_paths, language, *, model=None):
+        analysed_names.append(media_name)
+        return MediaFrameAnalysis.successful(description=f"Neu: {media_name}")
+
+    monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", fake_extract)
+    monkeypatch.setattr(
+        "otio_app.services.asset_analyzer.analyze_media_from_frames", fake_analyze
+    )
+
+    supplement = _supplement_file(project, "pexels_777.mp4")
+    ingest_supplement_asset(
+        project,
+        folder_name=FOLDER,
+        media_path=supplement,
+        provenance=_provenance("pexels_video_777"),
+    )
+    analysed_names.clear()
+
+    supplement_before = next(
+        asset
+        for asset in load_folder_inventory(project, FOLDER).assets
+        if asset.path == str(supplement)
+    )
+    assert supplement_before.analysis_signature is not None
+
+    analyze_asset_folders(project, [FOLDER], use_api=True)
+
+    # Nur das Original wurde erneut an Gemini geschickt.
+    assert analysed_names == ["orig_clip.mp4"]
+
+    rows = {a.path: a for a in load_folder_inventory(project, FOLDER).assets}
+    assert set(rows) == {str(original), str(supplement)}
+    assert rows[str(original)].description == "Neu: orig_clip.mp4"
+    assert rows[str(original)].analysis_signature is not None
+
+    kept = rows[str(supplement)]
+    assert kept.asset_origin == "pexels"
+    assert kept.analysis_signature == supplement_before.analysis_signature
+    assert kept.content_tags == supplement_before.content_tags
+    assert kept.supplement_intake_note == supplement_before.supplement_intake_note
+
+
 def test_supplement_cache_is_separate_from_primary_cache(tmp_path, analysis_stub):
     project = _project(tmp_path)
     _green_folder(project)

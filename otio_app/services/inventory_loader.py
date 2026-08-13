@@ -296,6 +296,36 @@ def _with_preserved_supplements(
     )
 
 
+def _cache_is_newer_than_inventory(
+    project: Project,
+    folder_name: str,
+    item: AssetFolderAnalysis,
+    media_paths: list[Path],
+    indexed_cache: dict[str, AssetMediaAnalysis],
+) -> bool:
+    """True, wenn der Analyse-Cache eine frischere Fassung hält als das Inventar.
+
+    Ohne diese Prüfung bliebe eine Legacy-Zeile im Inventar stehen, obwohl der
+    Ordner gerade neu analysiert wurde: ``should_skip_folder_analysis`` akzeptiert
+    Legacy-Analysen als „erfolgreich", und die vorhandene JSON würde
+    unverändert weiterverwendet. Der Cut-LLM läse dann weiter den alten Stand,
+    obwohl die Analyse bezahlt wurde.
+    """
+    rows = {asset.path: asset for asset in item.assets or []}
+    for media_path in media_paths:
+        cached = _resolve_cached_asset(project, folder_name, media_path, indexed_cache)
+        if cached is None:
+            continue
+        row = rows.get(cached.path)
+        if row is None:
+            return True
+        if row.analysis_signature != cached.analysis_signature:
+            return True
+        if row.description != cached.description:
+            return True
+    return False
+
+
 def materialize_folder_inventory_from_cache(
     project: Project,
     folder_name: str,
@@ -313,7 +343,9 @@ def materialize_folder_inventory_from_cache(
         return None, "Keine Medien und kein Cache gefunden."
 
     existing = should_skip_folder_analysis(project, folder_name, media_paths)
-    if existing is not None:
+    if existing is not None and not _cache_is_newer_than_inventory(
+        project, folder_name, existing, media_paths, indexed_cache
+    ):
         restored = _with_preserved_supplements(project, folder_name, existing)
         if restored is not existing:
             try:
