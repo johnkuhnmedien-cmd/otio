@@ -9,9 +9,11 @@ Dieses Dokument hält den Befund und die umgesetzte Lösung fest. Tests:
 `tests/test_crosslang_gapfill_reuse.py` (DE/EN-Szenario),
 `tests/test_supplement_inventory_gate.py` (Vertrag des Eingangstors),
 `tests/test_supplement_recovery.py` und
-`tests/test_recover_supplement_inventory_script.py` (Bestandsprojekte).
+`tests/test_recover_supplement_inventory_script.py` (Bestandsprojekte),
+`tests/test_gap_reset_service.py` (Räumen vor einem neuen Cut).
 
-Für ein bereits laufendes Projekt ist Abschnitt 3.7 der Einstieg.
+Für ein bereits laufendes Projekt ist Abschnitt 3.7 der Einstieg, für einen
+frischen LLM-Cut Abschnitt 3.8.
 
 ---
 
@@ -213,6 +215,44 @@ dem Cache übernommen statt neu bezahlt. Die Sprache, aus der man den Lauf
 startet, ist gleichgültig — die Acceptance-Listen aller Sprachen werden gelesen
 und das Ziel ist das geteilte Inventar.
 
+## 3.8 Was ein neuer LLM-Cut mit den Gaps macht
+
+Teilweise automatisch, aber nicht vollständig:
+
+| Artefakt | Verhalten beim neuen Cut |
+|---|---|
+| `coverage_gaps.json` | wird aus den Slots des neuen Plans **komplett neu geschrieben** (`unified_to_rough` → `persist_coverage_gaps`); Gaps, die der neue Plan nicht erzeugt, verschwinden |
+| Weak-Bestätigungen | werden für wiederkehrende Gap-IDs übernommen (`carry_over_user_confirmed_weak`, nur `priority=medium`) |
+| Fertige Fills | werden auf die neue Run-ID **umgebogen**, wenn die Gap-ID wieder vorkommt (`rebind_gap_fills_to_current_run`) |
+| `search_results.json` | bleibt unverändert |
+| `supplement_funnel_report.json` | bleibt unverändert |
+
+Der wunde Punkt ist die Wiederbindung. `gap_id` ist `gap_{slot_id}` und damit
+deterministisch: Slot 3 heißt in jedem Lauf Slot 3. Ein neuer Gap an dieser
+Position erbt deshalb den alten Kandidaten, obwohl es redaktionell um etwas
+anderes gehen kann. `tests/test_gap_reset_service.py::test_new_cut_rebinds_fill_to_recurring_gap_id`
+hält das fest.
+
+`gap_reset_service.reset_open_coverage_gaps` räumt daher gezielt:
+
+- offene Gaps aus `coverage_gaps.json` (External-Spiegel bleibt synchron),
+- deren Kandidaten aus `search_results.json`,
+- deren Einträge aus dem Funnel-Report (inklusive der ID-Listen),
+- vorgemerkte Accepted-Einträge **ohne** fertiges Medium.
+
+Zwei Invarianten: Dateien werden nie gelöscht, und `export_ready`-Einträge
+bleiben im Ledger — sie sind bezahltes Material und zugleich Quelle der
+Bestandsaufnahme aus 3.7.
+
+Optional (`unbind_filled=True`) wird zusätzlich die Gap-Bindung fertiger Assets
+gelöst: `gap_id` und `cut_plan_run_id` werden geleert, Asset, Pfad und Lizenz
+bleiben. Danach muss der neue Cut jede Zuweisung neu aus dem Inventar verdienen.
+Das ist genau dann richtig, wenn das Material inzwischen regulär im Inventar
+steht — vorher wäre es ein Verlust an Zuordnung ohne Ersatz.
+
+UI: Schnittplan-Tab → Gap-Übersicht → „Offene Coverage Gaps zurücksetzen",
+erst prüfen, dann räumen.
+
 ---
 
 ## 4. Was das für das EN-Projekt bedeutet
@@ -256,7 +296,9 @@ einen Rebuild. Das ist korrekt — das Inventar hat sich inhaltlich geändert.
 | `analysis_models` | `is_supplement_asset`, `supplement_asset_paths`, zwei Herkunftsfelder |
 | `services/supplement_inventory` | neu: Eingangstor, Statusliste, Nachanalyse |
 | `services/supplement_recovery` | neu: Bestandsaufnahme für Altprojekte |
+| `services/without_voiceover_enhanced/gap_reset_service` | neu: offene Gaps vor einem neuen Cut räumen |
 | `scripts/recover_supplement_inventory.py` | neu: Wiederherstellung im Terminal |
+| `ui/without_voiceover_enhanced/cut_plan_tab` | Reset-Abschnitt in der Gap-Übersicht |
 | `services/asset_analyzer` | Scope-Parameter, `analyze_supplement_media`, Supplements im Lauf |
 | `services/media_inventory_cache` | Cache-Scopes, Supplement-Scan, Phantom-Schutz |
 | `services/inventory_loader` | Erhalt über Herkunft, Wiederherstellung aus dem Cache |

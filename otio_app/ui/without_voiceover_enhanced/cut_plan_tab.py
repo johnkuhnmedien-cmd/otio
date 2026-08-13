@@ -2338,6 +2338,92 @@ def _render_section_rough(project) -> None:
                     f"{gap.gap_id}: {gap.needed_visual or gap.subject} · "
                     f"Status: {status} · queries={queries}"
                 )
+        _render_open_gap_reset(project)
+
+
+def _render_open_gap_reset(project) -> None:
+    """Offene Gaps und ihren Funnel-Zustand vor einem neuen LLM-Cut räumen.
+
+    Ein neuer Cut schreibt die Gap-Liste ohnehin neu. Was er nicht aufräumt:
+    Suchtreffer, Funnel-Report und die Bindung fertiger Fills an wiederkehrende
+    Gap-IDs (``gap_{slot_id}`` ist über Läufe hinweg dieselbe ID).
+    """
+    from otio_app.services.without_voiceover_enhanced.gap_reset_service import (
+        preview_open_gap_reset,
+        reset_open_coverage_gaps,
+    )
+
+    preview_key = f"enh_gap_reset_preview_{project.id}"
+    with st.expander("Offene Coverage Gaps zurücksetzen", expanded=False):
+        st.caption(
+            "Ein neuer LLM-Cut erzeugt die Gap-Liste komplett neu. Suchtreffer, "
+            "Funnel-Report und die Bindung fertiger Fills an wiederkehrende "
+            "Gap-IDs bleiben aber bestehen — vor einem bewusst frischen Cut "
+            "(z. B. nachdem neues Material ins Inventar kam) hier räumen."
+        )
+        st.caption(
+            "Beschaffte Dateien werden nie gelöscht: Downloads, Clean-Fassungen "
+            "und Inventar bleiben unverändert."
+        )
+
+        if st.button("🔍 Prüfen (ohne Änderung)", key=f"enh_gap_reset_scan_{project.id}"):
+            st.session_state[preview_key] = preview_open_gap_reset(project)
+
+        preview = st.session_state.get(preview_key)
+        if preview is None:
+            return
+        if not preview.has_work:
+            st.success("Kein offener Gap-Zustand zum Räumen.")
+            return
+
+        st.warning(
+            f"Zu entfernen: **{preview.open_count} offene Gap(s)**, "
+            f"{preview.search_candidates} Suchtreffer, "
+            f"{preview.funnel_gap_reports} Funnel-Eintrag/-Einträge, "
+            f"{preview.accepted_pending} vorgemerkte(r) Kandidat(en) ohne Medium."
+        )
+        if preview.open_gap_ids:
+            shown = ", ".join(f"`{gid}`" for gid in preview.open_gap_ids[:10])
+            more = (
+                f" … und {len(preview.open_gap_ids) - 10} weitere"
+                if len(preview.open_gap_ids) > 10
+                else ""
+            )
+            st.caption(shown + more)
+        st.caption(
+            f"Bleibt erhalten: {len(preview.filled_gap_ids)} erfüllte(r) Gap(s) "
+            f"und {preview.accepted_export_ready} fertige(s) Asset(s)."
+        )
+
+        unbind = st.checkbox(
+            "Auch die Gap-Bindung fertiger Assets lösen",
+            key=f"enh_gap_reset_unbind_{project.id}",
+            help=(
+                "Asset, Pfad und Lizenz bleiben erhalten — nur die Zuordnung zu "
+                "einem Gap entfällt, damit der neue Cut jede Zuweisung neu aus "
+                "dem Inventar verdient. Sinnvoll, wenn das Material inzwischen "
+                "regulär im Inventar steht."
+            ),
+        )
+        if st.button(
+            "🧹 Offene Gaps jetzt zurücksetzen",
+            key=f"enh_gap_reset_run_{project.id}",
+            type="primary",
+        ):
+            report = reset_open_coverage_gaps(project, unbind_filled=unbind)
+            st.success(
+                f"{report.removed_count} offene Gap(s) entfernt · "
+                f"{report.removed_search_candidates} Suchtreffer · "
+                f"{report.removed_funnel_gap_reports} Funnel-Einträge · "
+                f"{report.removed_accepted_pending} vorgemerkte Kandidaten"
+                + (
+                    f" · {report.unbound_accepted_export_ready} Bindung(en) gelöst"
+                    if report.unbound_accepted_export_ready
+                    else ""
+                )
+            )
+            st.caption("Jetzt den LLM Cut für die gewünschten Kapitel neu erzeugen.")
+            st.session_state.pop(preview_key, None)
 
 
 def _render_section_funnel(project) -> None:
