@@ -774,11 +774,12 @@ def _render_supplement_analysis_status(
         "der Cut-LLM wählt sie dann kaum aus."
     )
     for folder_name, items in open_by_folder.items():
-        names = ", ".join(f"`{status.media_path.name}`" for status in items[:8])
-        suffix = " …" if len(items) > 8 else ""
-        reasons = sorted({status.reason for status in items if status.reason})
-        reason_text = f" — {', '.join(reasons)}" if reasons else ""
-        st.caption(f"**{folder_name}:** {names}{suffix}{reason_text}")
+        st.caption(f"**{folder_name}**")
+        for status in items[:8]:
+            reason = f" — {status.reason}" if status.reason else ""
+            st.caption(f"　`{status.media_path.name}`{reason}")
+        if len(items) > 8:
+            st.caption(f"　… und {len(items) - 8} weitere")
 
     if st.button(
         "🧠 Beschaffte Assets regulär analysieren",
@@ -793,6 +794,7 @@ def _render_supplement_analysis_status(
             st.error("GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** oder in `.env`.")
         else:
             analyzed = 0
+            purged = 0
             failures: list[str] = []
             with st.spinner("Analysiere beschaffte Assets …"):
                 for folder_name in open_by_folder:
@@ -800,9 +802,15 @@ def _render_supplement_analysis_status(
                         project, folder_name, model=selected_model
                     )
                     analyzed += report.analyzed + report.cached
+                    purged += report.purged_own_material
                     failures.extend(report.failures)
             if analyzed:
                 st.success(f"{analyzed} beschaffte(s) Asset(s) analysiert.")
+            if purged:
+                st.info(
+                    f"{purged} Eintrag/Einträge waren eigene Originale und wurden "
+                    "im Inventar wieder als solche geführt."
+                )
             for failure in failures[:20]:
                 st.caption(f"⚠️ {failure}")
             st.rerun()

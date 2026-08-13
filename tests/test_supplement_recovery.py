@@ -297,6 +297,92 @@ def test_stock_download_without_clean_copy_is_recovered(tmp_path, analysis_stub)
     assert str(download) in paths
 
 
+def test_generic_fallback_on_an_original_is_not_recoverable(tmp_path):
+    """Ein generischer Fallback nutzt ein Original — da ist nichts nachzutragen.
+
+    ``generic_gap_fallback_service`` schreibt einen Acceptance-Eintrag, dessen
+    ``local_media_path`` auf ein bereits inventarisiertes Original zeigt. Würde
+    die Bestandsaufnahme das nachtragen, ersetzte sie die Originalzeile durch
+    eine Supplement-Zeile — und ein Ordner-Sync machte es wieder rückgängig.
+    """
+    de = _project(tmp_path, "de")
+    original = _green_folder(de)
+    _write_accepted_ledger(
+        de,
+        "DE",
+        [
+            {
+                "candidate_id": "generic_orig_clip",
+                "provider": "generic_fallback",
+                "provider_asset_id": "orig_clip",
+                "media_type": "video",
+                "gap_id": "Cliffs_of_Moher_gap_slot_004",
+                "local_media_path": str(original),
+                "media_validation_status": "export_ready",
+                "license": "project_inventory",
+            }
+        ],
+    )
+
+    items, report = scan_recoverable_supplements(de)
+
+    assert items == []
+    assert report.scanned == 0
+
+    before = {a.asset_id: a.asset_origin for a in load_folder_inventory(de, FOLDER).assets}
+    recover_supplements_into_inventory(de)
+    after = {a.asset_id: a.asset_origin for a in load_folder_inventory(de, FOLDER).assets}
+    assert after == before == {"orig_clip": "local_original"}
+
+
+def test_manual_assignment_of_an_original_is_not_recoverable(tmp_path):
+    """Auch eine manuelle Zuweisung darf ein Original nicht in ein Supplement drehen."""
+    de = _project(tmp_path, "de")
+    original = _green_folder(de)
+    _write_accepted_ledger(
+        de,
+        "DE",
+        [
+            {
+                "candidate_id": "manual_orig_clip_abc123",
+                "provider": "manual",
+                "media_type": "video",
+                "gap_id": "Cliffs_of_Moher_gap_slot_005",
+                "local_media_path": str(original),
+                "media_validation_status": "export_ready",
+            }
+        ],
+    )
+
+    items, _report = scan_recoverable_supplements(de)
+
+    assert items == []
+
+
+def test_ingest_refuses_to_overwrite_a_local_original(tmp_path, analysis_stub):
+    """Schutz im Eingangstor selbst — unabhängig von der Bestandsaufnahme."""
+    from otio_app.services.supplement_inventory import (
+        SupplementProvenance,
+        ingest_supplement_asset,
+    )
+
+    de = _project(tmp_path, "de")
+    original = _green_folder(de)
+
+    with pytest.raises(ValueError, match="Original"):
+        ingest_supplement_asset(
+            de,
+            folder_name=FOLDER,
+            media_path=original,
+            provenance=SupplementProvenance(
+                asset_id="generic_orig_clip", asset_origin="generic_fallback"
+            ),
+        )
+
+    rows = {a.asset_id: a.asset_origin for a in load_folder_inventory(de, FOLDER).assets}
+    assert rows == {"orig_clip": "local_original"}
+
+
 def _three_recoverable_assets(tmp_path: Path) -> Project:
     de = _project(tmp_path, "de")
     _green_folder(de)

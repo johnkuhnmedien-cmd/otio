@@ -216,6 +216,32 @@ dem Cache übernommen statt neu bezahlt. Die Sprache, aus der man den Lauf
 startet, ist gleichgültig — die Acceptance-Listen aller Sprachen werden gelesen
 und das Ziel ist das geteilte Inventar.
 
+### Eigenes Material gehört nicht in die Bestandsaufnahme
+
+Acceptance-Listen enthalten nicht nur beschaffte Assets. Der generische Fallback
+(`generic_gap_fallback_service`) und die manuelle Zuweisung eines lokalen Pfads
+schreiben Einträge, deren `local_media_path` auf ein **bereits inventarisiertes
+Original** zeigt — beim Fallback ist das der ganze Sinn: `provider` ist
+`generic_fallback`, `license` ist `project_inventory`.
+
+Solche Einträge dürfen nicht nachgetragen werden. Sonst ersetzt der Upsert die
+Originalzeile durch eine Supplement-Zeile, ein Ordner-Sync stellt sie aus dem
+Primär-Cache wieder her, und der nächste Scan meldet dieselben Dateien erneut —
+eine Schleife, die pro Runde echte Gemini-Aufrufe kostet.
+
+`supplement_inventory.is_local_original_media` entscheidet das über zwei
+Signale: eine Inventarzeile mit `asset_origin=local_original` oder eine Datei
+innerhalb eines Asset-Ordners. Geprüft wird an drei Stellen:
+
+- im Scan der Bestandsaufnahme (alle drei Quellen),
+- im Eingangstor selbst (`ingest_supplement_asset` wirft `ValueError`),
+- in `list_supplement_assets`, damit die UI Altlasten nicht endlos anzeigt.
+
+`purge_supplement_rows_for_own_material` reinigt Bestände, in denen das schon
+passiert ist: falsche Inventarzeile weg, Supplement-Cache-Eintrag weg, danach
+ein Sync, der das Original aus dem Primär-Cache zurückholt. Der normale
+Supplement-Analyselauf ruft das selbst auf und meldet die Zahl.
+
 ### Kosten und Laufzeit
 
 Jedes beschaffte Asset kostet **einmal** Frame-Extraktion plus einen

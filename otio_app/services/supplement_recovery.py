@@ -200,6 +200,20 @@ def _inventory_supplement_paths(project: Project) -> set[str]:
     return paths
 
 
+def _is_own_material(project: Project, media_path: Path) -> bool:
+    """True für eigenes Material — nichts zum Nachtragen.
+
+    Acceptance-Listen enthalten nicht nur beschaffte Assets: der generische
+    Fallback und die manuelle Zuweisung verweisen bewusst auf bereits
+    inventarisierte Originale. Diese nachzutragen würde die Originalzeile durch
+    eine Supplement-Zeile ersetzen — ein Ordner-Sync stellt sie aus dem
+    Primär-Cache wieder her, und der nächste Lauf fängt von vorn an.
+    """
+    from otio_app.services.supplement_inventory import is_local_original_media
+
+    return is_local_original_media(project, media_path)
+
+
 def _usable_media(path: Path | str | None) -> Path | None:
     text = str(path or "").strip()
     if not text or text.startswith(("http://", "https://")):
@@ -328,7 +342,7 @@ def _scan_ledgers(
             if media is None:
                 continue
             key = str(media)
-            if key in found:
+            if key in found or _is_own_material(project, media):
                 continue
             gap_id = str(getattr(candidate, "gap_id", "") or "")
             folder = _resolve_folder(project, media, gap_id=gap_id)
@@ -363,7 +377,7 @@ def _scan_clean_manifests(
             if media is None:
                 continue
             key = str(media)
-            if key in found:
+            if key in found or _is_own_material(project, media):
                 continue
             original = Path(str(entry.original_path or ""))
             try:
@@ -402,7 +416,7 @@ def _scan_stock_downloads(
                 if candidate is None:
                     continue
                 key = str(candidate)
-                if key in found:
+                if key in found or _is_own_material(project, candidate):
                     continue
                 folder = _resolve_folder(project, candidate, gap_id=gap_dir.name)
                 if not folder:

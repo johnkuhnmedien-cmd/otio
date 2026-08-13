@@ -40,6 +40,7 @@ from otio_app.services.inventory_loader import (
     load_folder_inventory,
     load_folder_inventory_file,
     save_folder_inventory,
+    sync_folder_inventory_with_status,
 )
 from otio_app.services.media_inventory_cache import (
     CACHE_SCOPE_SUPPLEMENT,
@@ -61,7 +62,9 @@ __all__ = [
     "analyze_supplements_for_folder",
     "count_supplements_needing_analysis",
     "ingest_supplement_asset",
+    "is_local_original_media",
     "list_supplement_assets",
+    "purge_supplement_rows_for_own_material",
     "upsert_supplement_into_inventory",
 ]
 
@@ -126,6 +129,8 @@ class SupplementAssetStatus:
     asset_origin: str
     cache_status: AssetCacheStatus
     in_inventory: bool
+    #: Fehlermeldung des letzten Analyseversuchs, falls vorhanden.
+    error: str = ""
 
     @property
     def needs_analysis(self) -> bool:
@@ -133,6 +138,9 @@ class SupplementAssetStatus:
 
     @property
     def reason(self) -> str:
+        """Für die UI lesbarer Grund — Fehlertext schlägt Statuscode."""
+        if self.error:
+            return self.error
         return ", ".join(self.cache_status.reasons)
 
 
@@ -143,6 +151,8 @@ class SupplementAnalysisReport:
     cached: int = 0
     failed: int = 0
     cancelled: bool = False
+    #: Entfernte Altlasten: Originale, die als Supplement geführt wurden.
+    purged_own_material: int = 0
     failures: list[str] = field(default_factory=list)
 
 
@@ -236,6 +246,54 @@ def _provider_key_for_asset(asset: AssetMediaAnalysis) -> str | None:
     return identity.key if identity is not None else None
 
 
+def is_local_original_media(project: Project, media_path: Path | str) -> bool:
+    """True, wenn dieser Pfad ein selbst gedrehtes Original ist.
+
+    Zwei Signale: eine Inventarzeile mit ``asset_origin=local_original`` oder
+    eine Datei innerhalb eines Asset-Ordners. Nötig, weil Acceptance-Listen auch
+    Originale enthalten — der generische Fallback und die manuelle Zuweisung
+    verweisen bewusst auf bereits inventarisiertes Material.
+    """
+    path = Path(media_path)
+    text = str(path)
+    root = project.project_root_path
+    for folder in (project.asset_subdir_names or []) + (
+        project.selected_asset_subdirs or []
+    ):
+        if not folder:
+            continue
+        try:
+            path.relative_to(root / folder)
+        except ValueError:
+            continue
+        return True
+
+    for folder in _folders_with_inventory(project):
+        inventory = load_folder_inventory_file(
+            get_folder_inventory_path(project.work_dir_path, folder)
+        )
+        for asset in getattr(inventory, "assets", None) or []:
+            if asset.path == text and not is_supplement_asset(asset):
+                return True
+    return False
+
+
+def _folders_with_inventory(project: Project) -> list[str]:
+    names: list[str] = []
+    for folder in (project.asset_subdir_names or []) + (
+        project.selected_asset_subdirs or []
+    ):
+        if folder and folder not in names:
+            names.append(folder)
+    inventory_dir = project.work_dir_path / "inventory"
+    if inventory_dir.is_dir():
+        for path in sorted(inventory_dir.glob("*.json")):
+            item = load_folder_inventory_file(path)
+            if item is not None and item.folder and item.folder not in names:
+                names.append(item.folder)
+    return names
+
+
 def upsert_supplement_into_inventory(
     project: Project,
     *,
@@ -320,6 +378,13 @@ def ingest_supplement_asset(
     path = Path(media_path)
     if not path.is_file() or path.stat().st_size <= 0:
         raise ValueError(f"Supplement-Datei fehlt oder ist leer: {path}")
+    if is_local_original_media(project, path):
+        # Sonst würde die Originalzeile durch eine Supplement-Zeile ersetzt —
+        # ein Ordner-Sync macht das aus dem Primär-Cache wieder rückgängig, und
+        # jeder Lauf würde dieselbe Analyse erneut bezahlen.
+        raise ValueError(
+            f"Pfad ist ein lokales Original, kein beschafftes Asset: {path.name}"
+        )
 
     status = "not_analyzed"
     error: str | None = None
@@ -363,9 +428,11 @@ def ingest_supplement_asset(
 
     # Supplement-Cache ist der haltbare Speicher: aus ihm stellt
     # ``inventory_loader`` verlorene Zeilen ohne neuen LLM-Aufruf wieder her.
+    # Der Grund eines Fehlschlags gehört in den Cache (Diagnose), nicht in die
+    # Inventarzeile — dort würde ``error`` das Asset unbenutzbar machen.
     save_cached_media(
         media_cache_path(project, folder_name, path, scope=CACHE_SCOPE_SUPPLEMENT),
-        asset,
+        asset.model_copy(update={"error": error}) if error else asset,
     )
     upsert_supplement_into_inventory(project, folder_name=folder_name, asset=asset)
 
@@ -420,6 +487,10 @@ def list_supplement_assets(
         path = Path(raw_path)
         if not path.is_file():
             continue
+        if is_local_original_media(project, path):
+            # Altlast: eine frühere Programmversion hat Originale als
+            # Supplements aufgenommen. Der Primär-Cache bleibt maßgeblich.
+            continue
         cached = load_cached_media_for_asset(
             project, folder_name, path, scope=CACHE_SCOPE_SUPPLEMENT
         )
@@ -435,9 +506,64 @@ def list_supplement_assets(
                     row, path, resolved_model_id=resolved_model
                 ),
                 in_inventory=raw_path in inventory_paths,
+                error=str(getattr(row, "error", "") or "").strip(),
             )
         )
     return statuses
+
+
+def purge_supplement_rows_for_own_material(
+    project: Project,
+    folder_name: str,
+) -> list[str]:
+    """Entfernt Supplement-Spuren, die auf eigene Originale zeigen.
+
+    Reparatur für Inventare, in denen eine frühere Programmversion ein Original
+    als beschafftes Asset aufgenommen hat: die Inventarzeile wird gelöscht (der
+    Primär-Cache stellt das Original beim nächsten Sync wieder her) und der
+    Supplement-Cache-Eintrag verschwindet, damit die UI ihn nicht endlos als
+    offen meldet.
+    """
+    removed: list[str] = []
+    inventory_path = get_folder_inventory_path(project.work_dir_path, folder_name)
+    inventory = load_folder_inventory_file(inventory_path)
+    if inventory is not None:
+        kept = [
+            asset
+            for asset in inventory.assets or []
+            if not (
+                is_supplement_asset(asset)
+                and is_local_original_media(project, asset.path)
+            )
+        ]
+        if len(kept) != len(inventory.assets or []):
+            removed.extend(
+                asset.path
+                for asset in (inventory.assets or [])
+                if asset not in kept
+            )
+            save_folder_inventory(
+                inventory_path, inventory.model_copy(update={"assets": kept})
+            )
+
+    for asset in scan_folder_supplement_cache_assets(project, folder_name):
+        if not is_local_original_media(project, asset.path):
+            continue
+        cache_file = media_cache_path(
+            project, folder_name, Path(asset.path), scope=CACHE_SCOPE_SUPPLEMENT
+        )
+        try:
+            cache_file.unlink(missing_ok=True)
+        except OSError:
+            continue
+        if asset.path not in removed:
+            removed.append(asset.path)
+
+    if removed:
+        # Aus dem Primär-Cache zurückholen, was das Original wirklich ist —
+        # sonst bliebe eine Inventar-JSON ohne Zeile für diese Datei zurück.
+        sync_folder_inventory_with_status(project, folder_name)
+    return removed
 
 
 def count_supplements_needing_analysis(
@@ -474,6 +600,11 @@ def analyze_supplements_for_folder(
     from otio_app.services.asset_analyzer import analyze_supplement_media
 
     report = SupplementAnalysisReport(folder_name=folder_name)
+    # Selbstheilung: Altlasten aus der Zeit, in der Originale als beschaffte
+    # Assets aufgenommen wurden, dürfen keinen Analyselauf mehr auslösen.
+    report.purged_own_material = len(
+        purge_supplement_rows_for_own_material(project, folder_name)
+    )
     open_statuses = [
         status
         for status in list_supplement_assets(project, folder_name, model=model)

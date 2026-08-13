@@ -233,6 +233,73 @@ def test_upsert_preserves_originals_when_inventory_file_missing(tmp_path):
     assert asset_ids == {"orig_clip", "pexels_video_555"}
 
 
+def test_failed_analysis_reason_is_visible(tmp_path, monkeypatch):
+    """Ein Fehlschlag muss lesbar sein, nicht nur „missing_signature"."""
+    project = _project(tmp_path)
+    _green_folder(project)
+    media = _supplement_file(project, "kaputt.mp4")
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("Frames konnten nicht extrahiert werden")
+
+    monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", boom)
+
+    result = ingest_supplement_asset(
+        project,
+        folder_name=FOLDER,
+        media_path=media,
+        provenance=_provenance("pexels_video_888", fallback_description="Titel"),
+    )
+
+    assert not result.has_full_analysis
+    status = next(
+        item
+        for item in list_supplement_assets(project, FOLDER)
+        if item.media_path == media
+    )
+    assert status.needs_analysis
+    assert "Frames konnten nicht extrahiert werden" in status.reason
+    # Die Inventarzeile bleibt nutzbar — der Fehler steht nur im Cache.
+    row = next(
+        asset
+        for asset in load_folder_inventory(project, FOLDER).assets
+        if asset.path == str(media)
+    )
+    assert not row.error
+
+
+def test_purge_removes_original_wrongly_kept_as_supplement(tmp_path):
+    """Reparatur einer Altlast: Original war als beschafftes Asset geführt."""
+    from otio_app.services.supplement_inventory import (
+        purge_supplement_rows_for_own_material,
+    )
+
+    project = _project(tmp_path)
+    original = _green_folder(project)
+
+    # Zustand nachbauen, den eine frühere Programmversion erzeugt hat.
+    inventory = load_folder_inventory(project, FOLDER)
+    broken = inventory.assets[0].model_copy(
+        update={"asset_origin": "generic_fallback", "analysis_signature": None}
+    )
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, FOLDER),
+        inventory.model_copy(update={"assets": [broken]}),
+    )
+    stale_cache = media_cache_path(
+        project, FOLDER, original, scope=CACHE_SCOPE_SUPPLEMENT
+    )
+    save_cached_media(stale_cache, broken)
+
+    assert list_supplement_assets(project, FOLDER) == []
+
+    removed = purge_supplement_rows_for_own_material(project, FOLDER)
+
+    assert removed == [str(original)]
+    assert not stale_cache.is_file()
+    assert load_folder_inventory(project, FOLDER).assets[0].asset_id == "orig_clip"
+
+
 def test_supplement_cache_is_separate_from_primary_cache(tmp_path, analysis_stub):
     project = _project(tmp_path)
     _green_folder(project)
