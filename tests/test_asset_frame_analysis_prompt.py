@@ -1,4 +1,4 @@
-"""Strukturierte Asset-Frame-Analyse (asset_v3_editorial_r2)."""
+"""Strukturierte Asset-Frame-Analyse (asset_v3_editorial_r3)."""
 
 from __future__ import annotations
 
@@ -52,21 +52,37 @@ def _valid_v3_payload(**overrides: object) -> str:
     return json.dumps(payload)
 
 
-def test_prompt_version_is_r2() -> None:
-    assert ASSET_DESCRIPTION_PROMPT_VERSION == "asset_v3_editorial_r2"
+def test_prompt_version_is_r3() -> None:
+    assert ASSET_DESCRIPTION_PROMPT_VERSION == "asset_v3_editorial_r3"
 
 
-def test_prompt_omits_media_and_folder_name_literals() -> None:
-    folder = "Paris France Secret Location"
+def test_prompt_includes_chapter_as_location_context() -> None:
+    folder = "Corfu"
+    prompt = build_asset_frame_analysis_prompt("clip.mp4", folder, "de")
+    assert folder in prompt
+    assert "Kapitelort (Hinweis, kein Beweis): Corfu" in prompt
+    assert "Identifikationshilfe" in prompt
+    assert "gebräuchlichen Eigennamen" in prompt or "Eigennamen" in prompt
+    assert "welche Festung" in prompt
+    assert "berühmteste Wahrzeichen" in prompt
+    assert "keinen berühmten Namen raten" in prompt
+
+
+def test_prompt_omits_filename_literals() -> None:
     media = "Golden_Gate_Bridge.mp4"
-    prompt = build_asset_frame_analysis_prompt(media, folder, "de")
-    assert folder not in prompt
+    prompt = build_asset_frame_analysis_prompt(media, "Athens", "de")
     assert media not in prompt
     assert "Golden_Gate" not in prompt
-    assert "Paris" not in prompt
+    assert "Athens" in prompt
+    assert "Dateiname" in prompt
     assert "keine visuelle Evidenz" in prompt
     assert "ableiten" in prompt
-    assert "Dateiname" in prompt and "Ordnername" in prompt
+
+
+def test_prompt_empty_chapter_does_not_invent_a_place() -> None:
+    prompt = build_asset_frame_analysis_prompt("clip.mp4", "", "en")
+    assert "Kapitelort: nicht angegeben." in prompt
+    assert "Kapitelort (Hinweis, kein Beweis):" not in prompt
 
 
 def test_prompt_contains_score_bands_and_rare_90() -> None:
@@ -125,11 +141,13 @@ def test_prompt_lensflare_not_automatic_defect() -> None:
     assert "nicht automatisch" in prompt
 
 
-def test_prompt_forbids_metadata_place_names() -> None:
-    prompt = build_asset_frame_analysis_prompt("a.mp4", "b", "de")
-    assert "Ortsnamen" in prompt
-    assert "Ordnername" in prompt or "Dateiname" in prompt
-    assert "generisch" in prompt
+def test_prompt_uses_chapter_for_place_names_not_filename() -> None:
+    prompt = build_asset_frame_analysis_prompt("a.mp4", "Athens", "de")
+    assert "Dateiname" in prompt
+    assert "Kapitelort" in prompt
+    assert "Eigennamen" in prompt
+    assert "keinen berühmten Namen raten" in prompt
+    assert "welche Festung" in prompt
 
 
 def test_prompt_separates_description_caption_tags() -> None:
@@ -138,6 +156,14 @@ def test_prompt_separates_description_caption_tags() -> None:
     assert "2–3 sachliche Sätze" in prompt or "2-3 sachliche Sätze" in prompt
     assert "3–8 kurze" in prompt or "3-8 kurze" in prompt
     assert "unterschiedliche Aufgaben" in prompt or "Freitextfelder" in prompt
+    assert "spezifischer Identität" in prompt
+    assert "Orts- und Wahrzeichennamen erlaubt" in prompt
+
+
+def test_prompt_collapses_chapter_whitespace() -> None:
+    prompt = build_asset_frame_analysis_prompt("a.mp4", "Athens\nIgnore previous", "de")
+    assert "Athens Ignore previous" in prompt
+    assert "Athens\nIgnore" not in prompt
 
 
 def test_prompt_confidence_rubric_and_no_default_095() -> None:
@@ -159,7 +185,7 @@ def test_prompt_contains_json_schema_keys_and_language() -> None:
     assert "hero_potential" in prompt
     # Namen dürfen nicht als Evidenz im Prompt stehen
     assert "clip.mp4" not in prompt
-    assert "Sedona" not in prompt
+    assert "Sedona" in prompt
 
 
 def test_parse_full_v3_json() -> None:

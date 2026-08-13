@@ -21,7 +21,7 @@ from otio_app.defaults import (
     MATCH_QUALITY_UNPASSEND,
 )
 
-ASSET_DESCRIPTION_PROMPT_VERSION = "asset_v3_editorial_r2"
+ASSET_DESCRIPTION_PROMPT_VERSION = "asset_v3_editorial_r3"
 _CAPTION_MAX_CHARS = 180
 _ALLOWED_MOTION = frozenset(
     {"static", "pan", "tilt", "tracking", "drone", "handheld", "zoom", "unknown"}
@@ -137,7 +137,7 @@ def _extract_json(text: str) -> Any:
 
 @dataclass(frozen=True)
 class MediaFrameAnalysis:
-    """Strukturierte Asset-Frame-Analyse (asset_v3_editorial_r2)."""
+    """Strukturierte Asset-Frame-Analyse (asset_v3_editorial_r3)."""
 
     description: str = ""
     caption: str = ""
@@ -237,28 +237,44 @@ class MediaFrameAnalysis:
         )
 
 
+def _chapter_location_hint(folder_name: str) -> str:
+    """Kapitel-/Ordnername als einzeiliger Orts-Hinweis, ohne Prompt-Umbrüche."""
+    return " ".join(str(folder_name or "").split())[:120]
+
+
 def build_asset_frame_analysis_prompt(
     media_name: str, folder_name: str, language: str
 ) -> str:
-    """Baut den Asset-Frame-Prompt (v3 editorial r2).
+    """Baut den Asset-Frame-Prompt (v3 editorial r3).
 
-    ``media_name`` und ``folder_name`` bleiben aus Kompatibilitätsgründen Parameter,
-    werden aber bewusst nicht in den inhaltlichen Prompt interpoliert — sie sind
-    nur technische Identifikatoren und keine visuelle Evidenz.
+    ``folder_name`` ist der Kapitelort — ein Identifikationshinweis, kein Beweis.
+    ``media_name`` bleibt absichtlich draußen: Dateinamen sind keine visuelle Evidenz.
     """
-    del media_name, folder_name
+    del media_name
+    chapter = _chapter_location_hint(folder_name)
+    location_line = (
+        f"Kapitelort (Hinweis, kein Beweis): {chapter}\n"
+        if chapter
+        else "Kapitelort: nicht angegeben.\n"
+    )
     return (
-        "Du analysierst ausschließlich die bereitgestellten Frames einer Mediendatei. "
-        f"Sprache für Freitext: {language}.\n\n"
-        "WICHTIG — Keine Metadaten als Inhalt:\n"
-        "- Dateiname, Ordnername, Projektname und Pfad sind keine visuelle Evidenz.\n"
-        "- Niemals Ort, Motiv, Person, Ereignis oder Inhalt aus solchen Identifikatoren "
-        "ableiten.\n"
-        "- Nur beschreiben, was in den Frames sichtbar ist.\n"
-        "- Ortsnamen nur nennen, wenn sie im Bild selbst lesbar sind oder ein visuell "
-        "unverwechselbares Wahrzeichen mit hoher Sicherheit erkannt wird.\n"
-        "- Bei Unsicherheit generisch bleiben (z. B. Berglandschaft, historisches Dorf, "
-        "Sumpflandschaft).\n\n"
+        "Du analysierst die bereitgestellten Frames einer Mediendatei. "
+        f"Sprache für Freitext: {language}.\n"
+        f"{location_line}\n"
+        "WICHTIG — Frames zuerst, Kapitelort als Identifikationshilfe:\n"
+        "- Beschreibe nur, was in den Frames sichtbar ist.\n"
+        "- Dateiname und Pfad sind keine visuelle Evidenz. Niemals Motiv, Person, "
+        "Ereignis oder Inhalt aus dem Dateinamen ableiten.\n"
+        "- Der Kapitelort ist Kontext: nutze ihn, um sichtbare Orte, Bauwerke und "
+        "Wahrzeichen mit dem gebräuchlichen Eigennamen zu benennen, wenn die Frames "
+        "dazu passen.\n"
+        "- Mehrere ähnliche Motive am selben Ort unterscheiden (welche Festung, "
+        "welcher Tempel, welches Schloss). Nicht jedes passende Motiv auf das "
+        "berühmteste Wahrzeichen des Kapitels legen.\n"
+        "- Wenn die Frames kein bestimmtes Wahrzeichen stützen: visuell genau "
+        "beschreiben und den Kapitelort nur als Lage nennen — keinen berühmten "
+        "Namen raten.\n"
+        "- Nichts erfinden, was nicht sichtbar ist.\n\n"
         "Antworte NUR mit einem JSON-Objekt in exakt dieser Struktur.\n"
         "Die Platzhalter <string>, <int_0_100>, <float_0_1>, <enum_...> und null sind "
         "Formhinweise — keine Beispielwerte zum Kopieren und keine Score-Anker:\n\n"
@@ -323,14 +339,16 @@ def build_asset_frame_analysis_prompt(
         "schwersten defects-Eintrag.\n\n"
         "Freitextfelder (unterschiedliche Aufgaben):\n"
         "- description: 2–3 sachliche Sätze zu räumlichem Aufbau, zentralen Motiven, "
-        "Licht, Atmosphäre und sichtbarer Handlung. Keine Taglisten wiederholen, "
-        "keine spekulativen Orte.\n"
-        "- caption: ein kurzer Retrieval-Satz, maximal 180 Zeichen; primäres Motiv + "
-        "Perspektive + wichtigste sichtbare Handlung; keine Werbesprache, keine "
-        "Dateimetadaten.\n"
-        "- content_tags: 3–8 kurze Suchbegriffe; keine vollständigen Sätze; keine "
-        "Ortsnamen ohne sichtbaren Beleg; keine redundanten Singular-/Plural- oder "
-        "Synonymvarianten; keine Qualitätsurteile (schön, hochwertig, cinematisch).\n\n"
+        "Licht, Atmosphäre und sichtbarer Handlung. Eigennamen von Ort und Wahrzeichen "
+        "nennen, wenn Kapitelort und Frames sie stützen. Keine Taglisten wiederholen, "
+        "keine unsichtbaren Details erfinden.\n"
+        "- caption: ein kurzer Retrieval-Satz, maximal 180 Zeichen; primäres Motiv mit "
+        "spezifischer Identität (welches Bauwerk, welcher Ort) + Perspektive + "
+        "wichtigste sichtbare Handlung; keine Werbesprache, keine Dateimetadaten.\n"
+        "- content_tags: 3–8 kurze Suchbegriffe; keine vollständigen Sätze; "
+        "Orts- und Wahrzeichennamen erlaubt, wenn Kapitelort und Frames sie stützen; "
+        "keine redundanten Singular-/Plural- oder Synonymvarianten; keine "
+        "Qualitätsurteile (schön, hochwertig, cinematisch).\n\n"
         "framing.type = Perspektive / dominanter Aufnahmetyp "
         "(close|medium|wide|aerial|pov):\n"
         "- aerial: eindeutig erhöhte Luft-/Drohnenperspektive\n"
