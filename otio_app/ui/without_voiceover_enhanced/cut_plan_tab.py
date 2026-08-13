@@ -416,17 +416,17 @@ def _render_lightweight_funnel_monitor(project) -> None:
 
     if state.cancel_requested:
         st.warning(
-            "Abbruch angefordert. Der aktuelle Gemini-/Download-Schritt "
-            "(oft Thumbnail-Batch mit bis zu 10 Bildern) wird noch beendet — "
-            "danach stoppt der Funnel. Bereits erfüllte Gaps bleiben."
+            "Abbruch angefordert. Der aktuelle Gemini-Schritt (Thumbnail-Batch "
+            "mit bis zu 10 Bildern, Timeout 120 s) wird noch beendet — danach "
+            "stoppt der Funnel. Bereits erfüllte Gaps bleiben."
         )
     else:
         st.caption(
             "Abbrechen wirkt nach dem laufenden LLM-/Download-Schritt, "
-            "nicht mitten im API-Call."
+            "nicht mitten im API-Call. Wenn Gemini hängt: UI trotzdem freigeben."
         )
 
-    cols = st.columns(2)
+    cols = st.columns(3)
     with cols[0]:
         if st.button(
             "⏹ Funnel abbrechen",
@@ -437,6 +437,13 @@ def _render_lightweight_funnel_monitor(project) -> None:
             mgr.request_cancel(project.id)
             st.rerun()
     with cols[1]:
+        if st.button(
+            "UI trotzdem freigeben",
+            key=f"enh_funnel_force_reset_lite_{project.id}",
+        ):
+            mgr.force_reset(project.id)
+            st.rerun()
+    with cols[2]:
         if st.button(
             "🔄 Aktualisieren",
             key=f"enh_funnel_refresh_lite_{project.id}",
@@ -2670,14 +2677,23 @@ def _render_section_funnel(project) -> None:
                     "Abbruch angefordert — aktueller LLM-/Download-Schritt "
                     "wird noch beendet, danach stoppt der Funnel."
                 )
-            if st.button(
-                "⏹ Funnel abbrechen",
-                key=f"enh_funnel_cancel_{project.id}",
-                disabled=state.cancel_requested,
-                type="primary",
-            ):
-                funnel_job_mgr.request_cancel(project.id)
-                st.rerun()
+            stop_cols = st.columns(2)
+            with stop_cols[0]:
+                if st.button(
+                    "⏹ Funnel abbrechen",
+                    key=f"enh_funnel_cancel_{project.id}",
+                    disabled=state.cancel_requested,
+                    type="primary",
+                ):
+                    funnel_job_mgr.request_cancel(project.id)
+                    st.rerun()
+            with stop_cols[1]:
+                if st.button(
+                    "UI trotzdem freigeben",
+                    key=f"enh_funnel_force_reset_{project.id}",
+                ):
+                    funnel_job_mgr.force_reset(project.id)
+                    st.rerun()
             return
 
         if state.status == FunnelJobStatus.CANCELLED:

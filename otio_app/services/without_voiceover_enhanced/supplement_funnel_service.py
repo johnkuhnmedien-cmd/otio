@@ -1251,6 +1251,27 @@ def run_supplement_funnel_for_gaps(
                     vision_llm=vision_llm,
                 )
             except FunnelRankError as exc:
+                if should_stop and should_stop():
+                    report.stopped = True
+                    preview_bytes.clear()
+                    gap_report.candidates = records
+                    gap_report.message = "Abgebrochen während Thumbnailprüfung."
+                    if gap.gap_id not in report.open_gap_ids:
+                        report.open_gap_ids.append(gap.gap_id)
+                    _upsert_gap_report(report, gap_report)
+                    _emit(
+                        progress_callback,
+                        FunnelProgressEvent(
+                            phase="stopped",
+                            gap_id=gap.gap_id,
+                            gap_index=gap_index,
+                            gap_total=total,
+                            message=f"Gap {gap_index}/{total} · Abbruch…",
+                            fraction=gap_index / max(1, total),
+                        ),
+                    )
+                    batches = []
+                    break
                 preview_bytes.clear()
                 _mark_gap_open_or_generic_fallback(
                     project,
@@ -1262,6 +1283,26 @@ def run_supplement_funnel_for_gaps(
                 )
                 _upsert_gap_report(report, gap_report)
                 batches = []
+                break
+            if should_stop and should_stop():
+                report.stopped = True
+                preview_bytes.clear()
+                gap_report.candidates = records
+                gap_report.message = "Abgebrochen während Thumbnailprüfung."
+                if gap.gap_id not in report.open_gap_ids:
+                    report.open_gap_ids.append(gap.gap_id)
+                _upsert_gap_report(report, gap_report)
+                _emit(
+                    progress_callback,
+                    FunnelProgressEvent(
+                        phase="stopped",
+                        gap_id=gap.gap_id,
+                        gap_index=gap_index,
+                        gap_total=total,
+                        message=f"Gap {gap_index}/{total} · Abbruch…",
+                        fraction=gap_index / max(1, total),
+                    ),
+                )
                 break
             for cid, scores in thumb_scores.items():
                 record = record_by_id[cid]

@@ -47,6 +47,7 @@ class SupplementFunnelJobState:
     cancel_requested: bool = False
     error: str | None = None
     report: SupplementFunnelReport | None = None
+    run_id: int = 0
 
 
 class SupplementFunnelJobManager:
@@ -55,6 +56,7 @@ class SupplementFunnelJobManager:
         self._jobs: dict[str, SupplementFunnelJobState] = {}
         self._cancel_events: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
+        self._run_seq = 0
 
     def reconcile_stuck_job(self, project_id: str) -> None:
         with self._lock:
@@ -100,6 +102,12 @@ class SupplementFunnelJobManager:
         return True
 
     def force_reset(self, project_id: str) -> None:
+        """Gibt die UI frei, auch wenn Gemini noch hängt.
+
+        Das Cancel-Event und die Cancel-Datei bleiben gesetzt, damit der
+        blockierte Thread nach dem API-Timeout kooperativ aussteigt und
+        keinen neuen Lauf überschreibt.
+        """
         with self._lock:
             event = self._cancel_events.get(project_id)
             if event is not None:
@@ -108,12 +116,9 @@ class SupplementFunnelJobManager:
             if job is not None and job.status == JobStatus.RUNNING:
                 job.status = JobStatus.CANCELLED
                 job.cancel_requested = True
+                job.message = "Abgebrochen (UI freigegeben)."
                 job.error = job.error or "Manuell zurückgesetzt"
-            self._cancel_events.pop(project_id, None)
             self._threads.pop(project_id, None)
-        project = get_project_by_id(project_id)
-        if project is not None:
-            clear_cancel_flag(project, JOB_KIND)
 
     def thread_alive(self, project_id: str) -> bool | None:
         with self._lock:
@@ -147,6 +152,8 @@ class SupplementFunnelJobManager:
                 existing.status = JobStatus.FAILED
                 existing.error = "Vorheriger Job hing fest — wird neu gestartet"
             cancel_event = threading.Event()
+            self._run_seq += 1
+            run_id = self._run_seq
             self._cancel_events[project.id] = cancel_event
             self._jobs[project.id] = SupplementFunnelJobState(
                 project_id=project.id,
@@ -154,14 +161,20 @@ class SupplementFunnelJobManager:
                 gap_ids=list(gap_ids),
                 model=(model or "").strip(),
                 message="Funnel startet…",
+                run_id=run_id,
             )
 
         clear_cancel_flag(project, JOB_KIND)
 
         def _run() -> None:
             project_id = project.id
+            owned_run_id = run_id
             # Snapshot für Runs ohne DB-Eintrag (z. B. UI-Smoke); sonst frisches DB-Objekt.
             current = get_project_by_id(project_id) or project
+
+            def _owns_job(job: SupplementFunnelJobState | None) -> bool:
+                return job is not None and job.run_id == owned_run_id
+
             try:
                 should_cancel = make_should_cancel(
                     current,
@@ -173,7 +186,7 @@ class SupplementFunnelJobManager:
                     label = event.message or event.phase
                     with self._lock:
                         job = self._jobs.get(project_id)
-                        if job is None:
+                        if not _owns_job(job):
                             return
                         job.phase = event.phase
                         job.message = label
@@ -200,9 +213,12 @@ class SupplementFunnelJobManager:
                 )
                 with self._lock:
                     job = self._jobs.get(project_id)
-                    if job is None:
+                    if not _owns_job(job):
                         return
-                    job.report = report
+                    if job.report is None:
+                        job.report = report
+                    if job.status != JobStatus.RUNNING:
+                        return
                     job.message = report.message
                     job.fraction = 1.0
                     if report.stopped or should_cancel():
@@ -213,20 +229,26 @@ class SupplementFunnelJobManager:
             except SupplementFunnelError as exc:
                 with self._lock:
                     job = self._jobs.get(project_id)
-                    if job is not None:
+                    if _owns_job(job) and job.status == JobStatus.RUNNING:
                         job.status = JobStatus.FAILED
                         job.error = str(exc)
             except Exception as exc:  # noqa: BLE001
                 with self._lock:
                     job = self._jobs.get(project_id)
-                    if job is not None:
+                    if _owns_job(job) and job.status == JobStatus.RUNNING:
                         job.status = JobStatus.FAILED
                         job.error = str(exc)
             finally:
-                clear_cancel_flag(project, JOB_KIND)
                 with self._lock:
-                    self._cancel_events.pop(project_id, None)
-                    self._threads.pop(project_id, None)
+                    job = self._jobs.get(project_id)
+                    ours = _owns_job(job)
+                    if ours:
+                        if self._cancel_events.get(project_id) is cancel_event:
+                            self._cancel_events.pop(project_id, None)
+                        if self._threads.get(project_id) is threading.current_thread():
+                            self._threads.pop(project_id, None)
+                if ours:
+                    clear_cancel_flag(project, JOB_KIND)
 
         thread = threading.Thread(
             target=_run,

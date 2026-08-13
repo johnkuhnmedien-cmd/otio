@@ -36,6 +36,8 @@ DEFAULT_FUNNEL_MODEL = "gemini-3.5-flash"
 THUMBNAIL_BATCH_SIZE = 10
 FINALISTS_PER_BATCH = 3
 MAX_FINALISTS = 6
+# Vision-Batches (bis 10 Bilder) dürfen die UI nicht endlos blockieren.
+FUNNEL_GEMINI_TIMEOUT_MS = 120_000
 
 TextLlmCallable = Callable[[str], str]
 VisionLlmCallable = Callable[[str, list[tuple[str, bytes]]], str]
@@ -717,13 +719,20 @@ def order_by_final_scores(
 def default_funnel_text_llm(prompt: str, *, model: str = DEFAULT_FUNNEL_MODEL) -> str:
     if not is_api_key_set("GEMINI_API_KEY"):
         raise FunnelRankError("GEMINI_API_KEY fehlt.")
-    client = _get_client()
+    client = _get_client(timeout_ms=FUNNEL_GEMINI_TIMEOUT_MS)
     from google.genai import types
 
-    response = client.models.generate_content(
-        model=resolve_gemini_model(model),
-        contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
-    )
+    try:
+        response = client.models.generate_content(
+            model=resolve_gemini_model(model),
+            contents=[
+                types.Content(role="user", parts=[types.Part.from_text(text=prompt)])
+            ],
+        )
+    except FunnelRankError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — Timeout/API in FunnelRankError
+        raise FunnelRankError(f"Funnel-Text-LLM: {exc}") from exc
     return (response.text or "").strip()
 
 
@@ -735,16 +744,21 @@ def default_funnel_vision_llm(
 ) -> str:
     if not is_api_key_set("GEMINI_API_KEY"):
         raise FunnelRankError("GEMINI_API_KEY fehlt.")
-    client = _get_client()
+    client = _get_client(timeout_ms=FUNNEL_GEMINI_TIMEOUT_MS)
     from google.genai import types
 
     parts: list = [types.Part.from_text(text=prompt)]
     for _label, data in images:
         parts.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
-    response = client.models.generate_content(
-        model=resolve_gemini_model(model),
-        contents=[types.Content(role="user", parts=parts)],
-    )
+    try:
+        response = client.models.generate_content(
+            model=resolve_gemini_model(model),
+            contents=[types.Content(role="user", parts=parts)],
+        )
+    except FunnelRankError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — Timeout/API in FunnelRankError
+        raise FunnelRankError(f"Funnel-Vision-LLM: {exc}") from exc
     return (response.text or "").strip()
 
 
@@ -913,7 +927,9 @@ def run_thumbnail_batch(
     )
     raw = llm(prompt, images)
     payload = _parse_json_with_repair(
-        raw, repair_callable=lambda p: llm(p, images)
+        raw,
+        # Repair nur als Text — die Preview-Bilder nicht ein zweites Mal senden.
+        repair_callable=lambda p: default_funnel_text_llm(p),
     )
     return validate_thumbnail_batch_payload(
         payload, expected_ids=[c.candidate_id for c in candidates]
@@ -957,7 +973,8 @@ def run_final_comparison(
     )
     raw = llm(prompt, images)
     payload = _parse_json_with_repair(
-        raw, repair_callable=lambda p: llm(p, images)
+        raw,
+        repair_callable=lambda p: default_funnel_text_llm(p),
     )
     return validate_finalists_payload(
         payload,

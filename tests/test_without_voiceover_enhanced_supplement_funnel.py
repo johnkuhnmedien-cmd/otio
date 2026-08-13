@@ -785,6 +785,9 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     # Leichte Monitor-Seite während Job (Abbrechen ohne schweren Rerun)
     assert "_render_lightweight_funnel_monitor" in source
     assert "enh_funnel_cancel_lite_" in source
+    assert "enh_funnel_force_reset_lite_" in source
+    assert "force_reset" in source
+    assert "UI trotzdem freigeben" in source
     # Session-State erst vor Pills bereinigen (nicht nach Widget)
     assert "enh_funnel_pending_deselect_" in source
     # Kein Query-Parameter als Produktionsauslöser
@@ -2249,6 +2252,69 @@ def test_funnel_job_cancel_stops_between_gaps(tmp_path: Path, monkeypatch) -> No
     assert started_gaps == ["gap_1"]
     assert state.report is not None
     assert state.report.stopped is True
+
+
+def test_funnel_force_reset_releases_ui_while_llm_blocks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import threading
+    import time
+
+    import otio_app.services.without_voiceover_enhanced.supplement_funnel_service as funnel_svc
+    from otio_app.services.without_voiceover_enhanced.models import (
+        SupplementFunnelReport,
+    )
+    from otio_app.services.without_voiceover_enhanced.supplement_funnel_job import (
+        JobStatus,
+        SupplementFunnelJobManager,
+    )
+
+    project = _project(tmp_path)
+    manager = SupplementFunnelJobManager()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fake_run(project_arg, **kwargs):
+        del project_arg
+        entered.set()
+        release.wait(timeout=2)
+        should_stop = kwargs.get("should_stop")
+        report = SupplementFunnelReport(
+            run_id="force_reset_test",
+            script_version="script-v1",
+            requested_gap_ids=list(kwargs.get("gap_ids") or []),
+        )
+        report.stopped = bool(should_stop and should_stop())
+        report.message = "late return"
+        return report
+
+    monkeypatch.setattr(funnel_svc, "run_supplement_funnel_for_gaps", fake_run)
+    assert manager.start(project, gap_ids=["gap_1"], model="gemini-1.5-flash")
+    assert entered.wait(timeout=2)
+    assert manager.request_cancel(project.id)
+    manager.force_reset(project.id)
+
+    state = manager.get_state(project.id)
+    assert state is not None
+    assert state.status == JobStatus.CANCELLED
+    assert manager.is_running(project.id) is False
+
+    release.set()
+    time.sleep(0.2)
+    # Der späte Thread darf den Job nicht wieder auf COMPLETED setzen.
+    state = manager.get_state(project.id)
+    assert state is not None
+    assert state.status == JobStatus.CANCELLED
+
+
+def test_funnel_vision_uses_http_timeout() -> None:
+    source = Path(
+        "otio_app/services/without_voiceover_enhanced/"
+        "supplement_thumbnail_rank_service.py"
+    ).read_text(encoding="utf-8")
+    assert "FUNNEL_GEMINI_TIMEOUT_MS" in source
+    assert "timeout_ms=FUNNEL_GEMINI_TIMEOUT_MS" in source
+    assert "repair_callable=lambda p: default_funnel_text_llm(p)" in source
 
 
 def test_funnel_records_selected_llm_model(tmp_path: Path) -> None:
