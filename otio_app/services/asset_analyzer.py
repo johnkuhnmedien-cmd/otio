@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -27,6 +28,7 @@ from otio_app.services.gemini_client import (
     ASSET_DESCRIPTION_PROMPT_VERSION,
     GeminiNotConfiguredError,
     analyze_media_from_frames,
+    is_transient_api_error,
     resolve_gemini_model,
 )
 from otio_app.services.inventory_loader import (
@@ -204,12 +206,13 @@ def _analyze_single_media(
         raise AnalysisCancelledError()
     if use_api:
         try:
-            analysis = analyze_media_from_frames(
-                resolved_path.name,
+            analysis = _analyze_frames_with_retry(
+                project,
                 folder_name,
+                resolved_path.name,
                 frames,
-                project.language,
-                model=resolved_model,
+                resolved_model=resolved_model,
+                should_cancel=should_cancel,
             )
             entry.description_model_requested = requested_model
             entry.description_model_resolved = resolved_model
@@ -343,6 +346,68 @@ def _build_folder_assets(
         else:
             assets.append(AssetMediaAnalysis(path=str(media_path)))
     return assets
+
+
+#: Ein vorübergehender Serverfehler darf keinen Ordner entwerten.
+ASSET_ANALYSIS_MAX_ATTEMPTS = 3
+ASSET_ANALYSIS_RETRY_SECONDS = (4.0, 12.0)
+
+
+def _sleep_cancellable(seconds: float, should_cancel: ShouldCancel | None) -> None:
+    """Warten in kleinen Scheiben, damit Stop nicht blockiert wird."""
+    remaining = seconds
+    while remaining > 0:
+        if _is_cancelled(should_cancel):
+            return
+        step = min(0.5, remaining)
+        time.sleep(step)
+        remaining -= step
+
+
+def _analyze_frames_with_retry(
+    project: Project,
+    folder_name: str,
+    media_name: str,
+    frames: list[Path],
+    *,
+    resolved_model: str,
+    should_cancel: ShouldCancel | None,
+):
+    """Frame-Analyse mit begrenzten Wiederholungen bei transienten Fehlern.
+
+    Ohne Wiederholung macht ein einzelner 503 den Ordner unvollständig und sein
+    Inventar wird beim folgenden Sync entfernt — ein teurer Nebeneffekt für ein
+    Problem, das beim zweiten Versuch meist weg ist.
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, ASSET_ANALYSIS_MAX_ATTEMPTS + 1):
+        try:
+            return analyze_media_from_frames(
+                media_name,
+                folder_name,
+                frames,
+                project.language,
+                model=resolved_model,
+            )
+        except GeminiNotConfiguredError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if not is_transient_api_error(exc):
+                raise
+            if attempt >= ASSET_ANALYSIS_MAX_ATTEMPTS or _is_cancelled(should_cancel):
+                raise
+            wait = ASSET_ANALYSIS_RETRY_SECONDS[
+                min(attempt - 1, len(ASSET_ANALYSIS_RETRY_SECONDS) - 1)
+            ]
+            _log(
+                project,
+                f"RETRY {attempt}/{ASSET_ANALYSIS_MAX_ATTEMPTS - 1} "
+                f"{folder_name}/{media_name} nach {wait:.0f}s: {exc}",
+            )
+            _sleep_cancellable(wait, should_cancel)
+    assert last_error is not None
+    raise last_error
 
 
 def _count_open_supplements(

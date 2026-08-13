@@ -283,6 +283,30 @@ sie liegen im eigenen Cache-Scope und tragen bereits eine aktuelle Signatur.
 nur das Original geht erneut an Gemini, die Supplement-Zeile behält Signatur,
 Tags und Beschaffungsnotiz.
 
+## 3.7b Ein 503 darf keinen Ordner entwerten
+
+Aus einem echten Lauf: 39 von 40 Assets analysiert, eines scheiterte an
+`503 UNAVAILABLE — Deadline expired before operation could complete`. Folge:
+`folder_is_fully_analyzed` False → `sync_folder_inventory_with_status` löscht die
+Inventar-JSON des Ordners. Zwanzig bezahlte Analysen lagen im Cache, aber das
+Kapitel hatte kein Inventar mehr.
+
+Die Analyse hatte keinerlei Wiederholung: ein transienter Serverfehler landete
+als dauerhafter Analysefehler im Cache. `gemini_client.is_transient_api_error`
+unterscheidet jetzt (HTTP 408/429/500/502/503/504, Status `UNAVAILABLE`,
+`RESOURCE_EXHAUSTED`, `DEADLINE_EXCEEDED`, `INTERNAL`, `ABORTED`, dazu Timeouts
+und Verbindungsfehler), und `_analyze_frames_with_retry` versucht es bis zu
+dreimal mit 4 s und 12 s Abstand. Gewartet wird in halben Sekunden, damit Stop
+nicht blockiert. Echte Fehler — etwa `400 INVALID_ARGUMENT` — werden nicht
+wiederholt.
+
+Die Löschregel selbst bleibt: ein nicht grüner Ordner hat kein Inventar, damit
+Schnittplan und Edit-Plan nie einen Teilstand lesen. Beschaffte Assets gehen
+dabei nicht verloren — der Supplement-Cache hält sie, und der nächste
+erfolgreiche Lauf stellt die Zeile mit Herkunft, Beschaffungsnotiz und Signatur
+wieder her, ohne neuen LLM-Aufruf.
+`tests/test_asset_analysis_transient_retry.py` deckt alle drei Fälle ab.
+
 ## 3.8 Was ein neuer LLM-Cut mit den Gaps macht
 
 Teilweise automatisch, aber nicht vollständig:

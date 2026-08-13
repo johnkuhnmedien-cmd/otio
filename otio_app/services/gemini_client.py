@@ -64,6 +64,40 @@ class GeminiNotConfiguredError(RuntimeError):
     """GEMINI_API_KEY fehlt."""
 
 
+#: Vorübergehende Serverzustände — ein erneuter Versuch ist sinnvoll.
+_TRANSIENT_HTTP_CODES = frozenset({408, 429, 500, 502, 503, 504})
+_TRANSIENT_STATUS_NAMES = frozenset(
+    {
+        "UNAVAILABLE",
+        "RESOURCE_EXHAUSTED",
+        "DEADLINE_EXCEEDED",
+        "INTERNAL",
+        "ABORTED",
+    }
+)
+
+
+def is_transient_api_error(exc: BaseException) -> bool:
+    """True bei Fehlern, die ein Wiederholen rechtfertigen.
+
+    Ein 503 „Deadline expired" ist kein Befund über die Mediendatei. Ohne diese
+    Unterscheidung landet er als dauerhafter Analysefehler im Cache, der Ordner
+    gilt nicht mehr als vollständig — und sein Inventar wird entfernt.
+    """
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and code in _TRANSIENT_HTTP_CODES:
+        return True
+    status = str(getattr(exc, "status", "") or "").strip().upper()
+    if status in _TRANSIENT_STATUS_NAMES:
+        return True
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    text = str(exc).upper()
+    if any(name in text for name in _TRANSIENT_STATUS_NAMES):
+        return True
+    return any(f" {http_code} " in f" {text} " for http_code in ("429", "503", "504"))
+
+
 def resolve_gemini_model(model: Optional[str] = None) -> str:
     """Ermittelt das zu nutzende Modell (UI-Auswahl > .env > Standard)."""
     if model and model.strip() in GEMINI_MODEL_CHOICES:
