@@ -114,11 +114,15 @@ DEFAULT_INTRO_VOICEOVER_PREROLL_SEC = 4.0
 DEFAULT_INTRO_VOICEOVER_POSTROLL_SEC = 6.5
 DEFAULT_INTRO_VOICEOVER_POSTROLL_MIN_SEC = 5.0
 DEFAULT_INTRO_VOICEOVER_POSTROLL_MAX_SEC = 8.0
-CUT_PLAN_OPTIONS_SCHEMA_VERSION = "1.11"
+CUT_PLAN_OPTIONS_SCHEMA_VERSION = "1.12"
 DEFAULT_MAX_SFX_PER_CHAPTER = 3
 MAX_SFX_PER_CHAPTER_MIN = 0
 MAX_SFX_PER_CHAPTER_MAX = 5
 DEFAULT_SFX_PLANNER_MODEL = "openai:gpt-5.6-sol"
+# ElevenLabs Music: total pieces including Intro. 4 = Intro + first 3 body chapters.
+DEFAULT_ELEVENLABS_MUSIC_COUNT = 4
+ELEVENLABS_MUSIC_COUNT_MIN = 1
+ELEVENLABS_MUSIC_COUNT_MAX = 40
 
 
 class CutPlanOptions(BaseModel):
@@ -140,6 +144,13 @@ class CutPlanOptions(BaseModel):
         default=DEFAULT_MAX_SFX_PER_CHAPTER,
         ge=MAX_SFX_PER_CHAPTER_MIN,
         le=MAX_SFX_PER_CHAPTER_MAX,
+    )
+    # ElevenLabs Music pieces to generate: Intro counts as 1, then body chapters
+    # in film order. 4 = Intro + first 3 chapters. 1 = Intro only.
+    elevenlabs_music_count: int = Field(
+        default=DEFAULT_ELEVENLABS_MUSIC_COUNT,
+        ge=ELEVENLABS_MUSIC_COUNT_MIN,
+        le=ELEVENLABS_MUSIC_COUNT_MAX,
     )
     include_middle_frames: bool = False
     max_middle_frames_per_chapter: int = Field(
@@ -447,6 +458,12 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             default=defaults.max_sfx_per_chapter,
             lo=MAX_SFX_PER_CHAPTER_MIN,
             hi=MAX_SFX_PER_CHAPTER_MAX,
+        ),
+        elevenlabs_music_count=_clamp_int(
+            raw.get("elevenlabs_music_count", defaults.elevenlabs_music_count),
+            default=defaults.elevenlabs_music_count,
+            lo=ELEVENLABS_MUSIC_COUNT_MIN,
+            hi=ELEVENLABS_MUSIC_COUNT_MAX,
         ),
         include_middle_frames=bool(
             raw.get("include_middle_frames", defaults.include_middle_frames)

@@ -13,6 +13,10 @@ import pytest
 
 from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
 from otio_app.models import Project, ProjectMode
+from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    CutPlanOptions,
+    save_cut_plan_options,
+)
 from otio_app.services.without_voiceover_enhanced.elevenlabs_music_client import (
     MUSIC_MODEL_ID,
     ElevenLabsMusicError,
@@ -20,12 +24,17 @@ from otio_app.services.without_voiceover_enhanced.elevenlabs_music_client import
     compose_music,
 )
 from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service import (
+    MUSIC_MVP_MAX_BODY_CHAPTERS,
     MusicServiceError,
     convert_and_normalize_to_wav,
+    generate_music_for_allowed_targets,
     generate_music_for_chapter,
     generate_music_for_intro,
     is_music_mvp_chapter_allowed,
+    list_music_generation_targets,
+    music_bulk_button_label,
     music_length_ms_from_seconds,
+    music_out_of_scope_message,
     music_ui_status_chapter,
     music_ui_status_intro,
     resolve_chapter_narration_end_seconds,
@@ -521,6 +530,81 @@ def test_g_only_first_three_chapters_and_intro(tmp_path: Path) -> None:
         # Intro allowed
         generate_music_for_intro(project, compose_callable=_compose)
         assert called["n"] == 1
+
+
+def test_g_settings_count_allows_more_body_chapters(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    names = ["Yosemite", "Caddo", "Zion", "Bryce"]
+    assert MUSIC_MVP_MAX_BODY_CHAPTERS == 3
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.list_body_chapter_names",
+        return_value=names,
+    ):
+        assert list_music_generation_targets(project) == [
+            ("intro", ""),
+            ("chapter", "Yosemite"),
+            ("chapter", "Caddo"),
+            ("chapter", "Zion"),
+        ]
+        assert "erste 3 Kapitel" in music_bulk_button_label(project)
+        assert "1–3" in music_out_of_scope_message(project)
+        save_cut_plan_options(project, CutPlanOptions(elevenlabs_music_count=5))
+        assert is_music_mvp_chapter_allowed(project, "Bryce")
+        assert list_music_generation_targets(project)[-1] == ("chapter", "Bryce")
+        assert "erste 4 Kapitel" in music_bulk_button_label(project)
+        save_cut_plan_options(project, CutPlanOptions(elevenlabs_music_count=1))
+        assert not is_music_mvp_chapter_allowed(project, "Yosemite")
+        assert list_music_generation_targets(project) == [("intro", "")]
+        ui = music_ui_status_chapter(project, "Yosemite")
+        assert ui["enabled"] is False
+        assert "nur Intro" in ui["message"]
+
+
+def test_g_bulk_skips_completed_and_out_of_scope(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    names = ["Yosemite", "Caddo", "Zion", "Bryce"]
+    called: list[str] = []
+
+    def _fake_intro(project, *, compose_callable=None):
+        called.append("intro")
+        return SimpleNamespace(status="completed", message="ok")
+
+    def _fake_chapter(project, folder, *, compose_callable=None):
+        called.append(folder)
+        return SimpleNamespace(status="completed", message="ok")
+
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.list_body_chapter_names",
+            return_value=names,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.music_ui_status_intro",
+            return_value={"status": "completed"},
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.music_ui_status_chapter",
+            side_effect=lambda _project, folder, status=None: {
+                "status": "completed" if folder == "Yosemite" else "missing"
+            },
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.generate_music_for_intro",
+            side_effect=_fake_intro,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.generate_music_for_chapter",
+            side_effect=_fake_chapter,
+        ),
+    ):
+        batch = generate_music_for_allowed_targets(project, skip_completed=True)
+    assert called == ["Caddo", "Zion"]
+    assert [item["label"] for item in batch["generated"]] == ["Caddo", "Zion"]
+    skipped_labels = [item["label"] for item in batch["skipped"]]
+    assert "Intro" in skipped_labels
+    assert "Yosemite" in skipped_labels
+    assert "Bryce" not in called
+    assert batch["target_count"] == 4
 
 
 # --- H/I/J WAV contract ----------------------------------------------------

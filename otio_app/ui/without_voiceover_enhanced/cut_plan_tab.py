@@ -29,8 +29,12 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     CUT_PLAN_MODE_CHOICES,
     CUT_PLAN_MODE_LEGACY,
     CUT_PLAN_MODE_UNIFIED,
+    CUT_PLAN_OPTIONS_SCHEMA_VERSION,
+    DEFAULT_ELEVENLABS_MUSIC_COUNT,
     DEFAULT_MAX_SFX_PER_CHAPTER,
     DEFAULT_SFX_PLANNER_MODEL,
+    ELEVENLABS_MUSIC_COUNT_MAX,
+    ELEVENLABS_MUSIC_COUNT_MIN,
     MAX_SFX_PER_CHAPTER_MAX,
     MAX_SFX_PER_CHAPTER_MIN,
     STILL_BACKGROUND_CHOICES,
@@ -143,8 +147,10 @@ from otio_app.services.without_voiceover_enhanced.otio_export_service import (
 )
 from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service import (
     MusicServiceError,
+    generate_music_for_allowed_targets,
     generate_music_for_chapter,
     generate_music_for_intro,
+    music_bulk_button_label,
     music_ui_status_chapter,
     music_ui_status_intro,
 )
@@ -710,6 +716,23 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 "Planner soll möglichst weniger verwenden. Default 3."
             ),
         )
+        st.markdown("##### ElevenLabs Music")
+        elevenlabs_music_count = st.number_input(
+            "Anzahl Music-Stücke (inkl. Intro)",
+            min_value=ELEVENLABS_MUSIC_COUNT_MIN,
+            max_value=ELEVENLABS_MUSIC_COUNT_MAX,
+            value=int(
+                current.elevenlabs_music_count or DEFAULT_ELEVENLABS_MUSIC_COUNT
+            ),
+            step=1,
+            key=f"enh_opt_el_music_count_{project.id}",
+            help=(
+                "Wie viele ElevenLabs-Music-Stücke erzeugt werden dürfen. "
+                "Intro zählt als erstes Stück, danach die Körper-Kapitel in "
+                "Filmreihenfolge. 4 = Intro + erste 3 Kapitel. 1 = nur Intro. "
+                "Gilt nach Speichern der Cut Plan Settings."
+            ),
+        )
         col1, col2, col3 = st.columns(3)
         with col1:
             shot_min_sec = st.number_input(
@@ -1100,7 +1123,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             )
 
         draft = CutPlanOptions(
-            schema_version="1.11",
+            schema_version=CUT_PLAN_OPTIONS_SCHEMA_VERSION,
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
             unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
             keyword_flow_allow_onset_overflow=bool(
@@ -1110,6 +1133,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             unified_mini_repair_threshold=float(unified_mini_repair_threshold),
             sfx_planner_model=str(sfx_planner_model),
             max_sfx_per_chapter=int(max_sfx_per_chapter),
+            elevenlabs_music_count=int(elevenlabs_music_count),
             include_middle_frames=bool(include_middle_frames),
             max_middle_frames_per_chapter=int(max_middle_frames_per_chapter),
             max_candidates_per_gap=int(max_candidates_per_gap),
@@ -1181,6 +1205,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             style_note += (
                 f" · SFX planner={saved.sfx_planner_model} "
                 f"· max SFX={saved.max_sfx_per_chapter}"
+                f" · Music={saved.elevenlabs_music_count}"
             )
             st.success(
                 f"Gespeichert: mode={saved.cut_plan_mode} · "
@@ -1273,8 +1298,8 @@ def _music_button_label(ui_status: dict) -> str:
         return "⚠ Music veraltet"
     if status == "unavailable":
         msg = str(ui_status.get("message") or "")
-        if "Kapitel 1–3" in msg or "Kapitel 1-3" in msg:
-            return "Music MVP: nur Kapitel 1–3"
+        if "nur Intro" in msg or "Kapitel 1" in msg:
+            return msg
         return "Music nicht verfügbar"
     return "ElevenLabs Music"
 
@@ -2023,6 +2048,26 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             ),
         )
 
+    col_music, col_music_help, _col_music_spacer = st.columns(3)
+    with col_music:
+        run_music_scope = st.button(
+            music_bulk_button_label(project),
+            key="enh_unified_cut_music_scope",
+            use_container_width=True,
+            help=(
+                "ElevenLabs Music für Intro und die ersten Körper-Kapitel "
+                "laut Cut Plan Settings (Anzahl inkl. Intro). "
+                "Fertige, nicht veraltete WAVs werden übersprungen "
+                "(kein Re-Billing)."
+            ),
+        )
+    with col_music_help:
+        st.caption(
+            "Anzahl in Cut Plan Settings → ElevenLabs Music speichern. "
+            "Default 4 = Intro + erste 3 Kapitel. "
+            "Fertige Music-WAVs werden übersprungen."
+        )
+
     batch_flash_key = f"_enh_llm_batch_flash_{project.id}"
     flash = st.session_state.pop(batch_flash_key, None)
     if isinstance(flash, dict):
@@ -2165,6 +2210,63 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             st.error(f"OTIO-Fehler: {exc}")
+
+    if run_music_scope:
+        progress = st.empty()
+
+        def _music_progress(label: str, index: int, total: int) -> None:
+            progress.info(
+                f"ElevenLabs Music {index}/{total}: „{label}“ — sequenziell…"
+            )
+
+        try:
+            batch = generate_music_for_allowed_targets(
+                project,
+                skip_completed=True,
+                on_progress=_music_progress,
+            )
+            n_ok = len(batch.get("generated") or [])
+            n_skip = len(batch.get("skipped") or [])
+            n_fail = len(batch.get("failed") or [])
+            fail_bits = [
+                f"{item.get('label')}: {item.get('reason')}"
+                for item in (batch.get("failed") or [])
+            ]
+            skip_preview = ", ".join(
+                str(item.get("label") or "")
+                for item in (batch.get("skipped") or [])[:6]
+            )
+            parts = [f"{n_ok} erzeugt"]
+            if n_skip:
+                extra = f" ({skip_preview})" if skip_preview else ""
+                parts.append(f"{n_skip} übersprungen{extra}")
+            if n_fail:
+                parts.append(f"{n_fail} fehlgeschlagen")
+            text = "ElevenLabs Music: " + " · ".join(parts) + "."
+            if fail_bits:
+                text += " " + "; ".join(fail_bits[:4])
+            if n_fail and n_ok == 0:
+                level = "error"
+            elif n_fail:
+                level = "warning"
+            else:
+                level = "success"
+            st.session_state[batch_flash_key] = {"level": level, "text": text}
+            st.rerun()
+        except MusicServiceError as exc:
+            st.session_state[batch_flash_key] = {
+                "level": "warning",
+                "text": f"ElevenLabs Music: {exc}",
+            }
+            st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            st.session_state[batch_flash_key] = {
+                "level": "error",
+                "text": f"ElevenLabs Music-Fehler: {exc}",
+            }
+            st.rerun()
+        finally:
+            progress.empty()
 
     _render_chapter_cut_rows(
         project,
