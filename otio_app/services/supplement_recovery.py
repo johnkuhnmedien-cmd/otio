@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from otio_app.analysis_models import CleanMediaManifest, is_supplement_asset
 from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
@@ -57,6 +57,13 @@ _LEDGER_SOURCE_PREFIX = "accepted"
 _CLEAN_SOURCE = "clean_manifest"
 _DOWNLOAD_SOURCE = "stock_download"
 
+ShouldCancel = Callable[[], bool]
+ProgressCallback = Callable[[str, dict], None]
+
+
+def _noop_progress(_event: str, _payload: dict) -> None:
+    return None
+
 
 @dataclass(frozen=True)
 class RecoverableSupplement:
@@ -71,10 +78,13 @@ class RecoverableSupplement:
 @dataclass
 class SupplementRecoveryReport:
     scanned: int = 0
+    #: Für diesen Durchlauf eingeplante Assets (nach ``limit``).
+    pending: int = 0
     recovered: int = 0
     analyzed: int = 0
     already_complete: int = 0
     failed: int = 0
+    cancelled: bool = False
     unresolved: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
     recovered_by_folder: dict[str, int] = field(default_factory=dict)
@@ -440,6 +450,27 @@ def scan_recoverable_supplements(
     return items, report
 
 
+def _paths_needing_analysis(
+    project: Project,
+    items: list[RecoverableSupplement],
+    *,
+    model: Optional[str],
+) -> set[str]:
+    """Pfade ohne aktuelle v3-Analyse — Fehlende zählen immer dazu."""
+    from otio_app.services.supplement_inventory import list_supplement_assets
+
+    open_paths = {str(item.media_path) for item in items if not item.in_inventory}
+    for folder in {item.folder_name for item in items}:
+        try:
+            statuses = list_supplement_assets(project, folder, model=model)
+        except Exception:  # noqa: BLE001
+            continue
+        open_paths.update(
+            str(status.media_path) for status in statuses if status.needs_analysis
+        )
+    return open_paths
+
+
 def recover_supplements_into_inventory(
     project: Project,
     *,
@@ -447,13 +478,52 @@ def recover_supplements_into_inventory(
     use_api: bool = True,
     model: Optional[str] = None,
     dry_run: bool = False,
+    limit: int | None = None,
+    on_progress: ProgressCallback = _noop_progress,
+    should_cancel: ShouldCancel | None = None,
 ) -> SupplementRecoveryReport:
-    """Trägt gefundene Assets nach und analysiert sie wie Originale."""
+    """Trägt gefundene Assets nach und analysiert sie wie Originale.
+
+    Jedes Asset wird einzeln übernommen und sofort geschrieben. Ein Abbruch
+    verliert deshalb nur das laufende Asset, nie die bereits erledigten.
+
+    Args:
+        limit: Höchstzahl Assets pro Durchlauf (für Läufe in Etappen).
+        on_progress: ``(event, payload)`` mit ``start`` | ``item_start`` |
+            ``item_done`` | ``complete``.
+        should_cancel: Kooperativer Abbruch zwischen zwei Assets.
+    """
     items, report = scan_recoverable_supplements(project, folder_names=folder_names)
-    if dry_run or not items:
+    # Echte Arbeit zuerst: eine Etappe soll keinen Platz an Assets verlieren,
+    # die bereits eine aktuelle Analyse haben.
+    open_paths = _paths_needing_analysis(project, items, model=model)
+    pending = sorted(
+        items,
+        key=lambda item: (
+            0 if str(item.media_path) in open_paths else 1,
+            str(item.media_path),
+        ),
+    )
+    if limit is not None and limit > 0:
+        pending = pending[:limit]
+    report.pending = len(pending)
+    if dry_run or not pending:
         return report
 
-    for item in items:
+    on_progress("start", {"total": len(pending)})
+    for index, item in enumerate(pending, start=1):
+        if should_cancel is not None and should_cancel():
+            report.cancelled = True
+            break
+        on_progress(
+            "item_start",
+            {
+                "index": index,
+                "total": len(pending),
+                "media_name": item.media_path.name,
+                "folder": item.folder_name,
+            },
+        )
         try:
             result = ingest_supplement_asset(
                 project,
@@ -466,6 +536,15 @@ def recover_supplements_into_inventory(
         except Exception as exc:  # noqa: BLE001
             report.failed += 1
             report.failures.append(f"{item.media_path.name}: {exc}")
+            on_progress(
+                "item_done",
+                {
+                    "index": index,
+                    "total": len(pending),
+                    "media_name": item.media_path.name,
+                    "outcome": "fehler",
+                },
+            )
             continue
 
         report.recovered += 1
@@ -482,4 +561,18 @@ def recover_supplements_into_inventory(
                 f"{item.media_path.name}: ohne Analyse übernommen"
                 + (f" ({result.error})" if result.error else "")
             )
+        on_progress(
+            "item_done",
+            {
+                "index": index,
+                "total": len(pending),
+                "media_name": item.media_path.name,
+                "outcome": result.status,
+            },
+        )
+
+    on_progress(
+        "complete",
+        {"total": len(pending), "recovered": report.recovered, "failed": report.failed},
+    )
     return report

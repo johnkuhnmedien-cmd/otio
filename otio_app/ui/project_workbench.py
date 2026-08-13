@@ -388,9 +388,16 @@ def _render_analysis_actions(
     selected_model: str,
 ) -> None:
     folder_state_key = f"workbench_folders_{project.id}"
+    from otio_app.services.supplement_recovery_job import (
+        get_supplement_recovery_job_manager,
+    )
+
     asset_job_running = get_asset_analysis_job_manager().is_running(project.id)
     voice_job_running = get_voice_analysis_job_manager().is_running(project.id)
-    any_job_running = asset_job_running or voice_job_running
+    recovery_job_running = get_supplement_recovery_job_manager().is_running(project.id)
+    # Eine laufende Bestandsaufnahme analysiert bereits — parallele Läufe würden
+    # sich um denselben Cache und dieselben Inventar-JSONs streiten.
+    any_job_running = asset_job_running or voice_job_running or recovery_job_running
     without_voiceover = bool(
         getattr(project, "is_without_voiceover_pipeline", False)
         or getattr(project, "is_without_voiceover", False)
@@ -590,12 +597,17 @@ def _render_supplement_recovery(
     Dateien liegen noch da — Acceptance-Listen aller Sprachen, Clean-Manifeste
     und Stock-Downloads sind die Quellen, aus denen sie zurückkommen.
     """
-    from otio_app.services.supplement_recovery import (
-        recover_supplements_into_inventory,
-        scan_recoverable_supplements,
+    from otio_app.services.supplement_recovery import scan_recoverable_supplements
+    from otio_app.services.supplement_recovery_job import (
+        get_supplement_recovery_job_manager,
     )
 
+    manager = get_supplement_recovery_job_manager()
     scan_key = f"supplement_recovery_scan_{project.id}"
+
+    if _render_recovery_job_progress(project, manager):
+        return
+
     with st.expander("Bestand beschaffter Assets prüfen", expanded=False):
         st.caption(
             "Sucht bereits beschaffte Assets, die nicht im geteilten Inventar "
@@ -647,6 +659,28 @@ def _render_supplement_recovery(
                 "lassen sich im Schnittplan-Tab manuell einem Gap zuweisen."
             )
 
+        if missing:
+            st.caption(
+                f"Jedes Asset bekommt einmal die reguläre Analyse: "
+                f"{len(missing)} Frame-Extraktion(en) und "
+                f"{len(missing)} Gemini-Aufruf(e). Danach liegt das Ergebnis im "
+                "Cache — ein weiterer Lauf kostet nichts."
+            )
+            batch = st.number_input(
+                "Assets pro Durchlauf (0 = alle)",
+                min_value=0,
+                max_value=max(len(missing), 1),
+                value=0,
+                step=10,
+                key=f"recovery_batch_{project.id}",
+                help=(
+                    "Für Läufe in Etappen. Der Job läuft im Hintergrund und "
+                    "schreibt jedes Asset sofort — ein Stop verliert nichts."
+                ),
+            )
+        else:
+            batch = 0
+
         if st.button(
             "📥 Fehlende Assets nachtragen & analysieren",
             key=f"run_recovery_{project.id}",
@@ -656,26 +690,30 @@ def _render_supplement_recovery(
                 st.error(
                     "GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** oder in `.env`."
                 )
-            else:
-                with st.spinner("Trage beschaffte Assets nach …"):
-                    result = recover_supplements_into_inventory(
-                        project,
-                        folder_names=selected_folders or None,
-                        model=selected_model,
-                    )
-                if result.recovered:
-                    details = ", ".join(
-                        f"{folder}: {count}"
-                        for folder, count in sorted(result.recovered_by_folder.items())
-                    )
-                    st.success(
-                        f"{result.recovered} Asset(s) nachgetragen "
-                        f"({result.analyzed} neu analysiert) — {details}."
-                    )
-                for failure in result.failures[:20]:
-                    st.caption(f"⚠️ {failure}")
+            elif manager.start(
+                project,
+                folder_names=list(selected_folders) if selected_folders else None,
+                model=selected_model,
+                limit=int(batch) or None,
+            ):
                 st.session_state.pop(scan_key, None)
                 st.rerun()
+            else:
+                st.warning("Es läuft bereits eine Bestandsaufnahme.")
+
+
+def _render_recovery_job_progress(project, manager) -> bool:
+    """True, solange ein Job läuft — Fortschritt und Bericht zeigt der Monitor oben."""
+    if not manager.is_running(project.id):
+        return False
+    state = manager.get_state(project.id)
+    done = getattr(state, "done", 0)
+    total = getattr(state, "total", 0) or "?"
+    st.info(
+        f"📥 Bestandsaufnahme läuft im Hintergrund — {done}/{total} beschaffte "
+        "Assets analysiert. Fortschritt und Stop stehen oben auf dieser Seite."
+    )
+    return True
 
 
 def _render_supplement_analysis_status(

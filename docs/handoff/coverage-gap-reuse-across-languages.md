@@ -10,6 +10,7 @@ Dieses Dokument hält den Befund und die umgesetzte Lösung fest. Tests:
 `tests/test_supplement_inventory_gate.py` (Vertrag des Eingangstors),
 `tests/test_supplement_recovery.py` und
 `tests/test_recover_supplement_inventory_script.py` (Bestandsprojekte),
+`tests/test_supplement_recovery_job.py` (Hintergrund-Job),
 `tests/test_gap_reset_service.py` (Räumen vor einem neuen Cut).
 
 Für ein bereits laufendes Projekt ist Abschnitt 3.7 der Einstieg, für einen
@@ -215,6 +216,27 @@ dem Cache übernommen statt neu bezahlt. Die Sprache, aus der man den Lauf
 startet, ist gleichgültig — die Acceptance-Listen aller Sprachen werden gelesen
 und das Ziel ist das geteilte Inventar.
 
+### Kosten und Laufzeit
+
+Jedes beschaffte Asset kostet **einmal** Frame-Extraktion plus einen
+Gemini-Aufruf — hundert Bestands-Assets sind also hundert Aufrufe. Danach liegt
+das Ergebnis mit Signatur im Supplement-Cache; jeder weitere Lauf ist ein
+Cache-Treffer und kostet nichts. Der Analysen-Tab nennt die Zahl vor dem Start.
+
+Weil das dauert, läuft die Bestandsaufnahme als Hintergrund-Job
+(`services/supplement_recovery_job.py`) im selben Muster wie die Asset-Analyse:
+Fortschrittsbalken mit Datei und Zähler, Stop-Knopf, globales Banner auf anderen
+Seiten. Zwei Eigenschaften machen den Stop unkritisch:
+
+- Jedes Asset wird sofort ins Inventar und in den Supplement-Cache geschrieben.
+  Ein Abbruch verliert nur das laufende Asset.
+- Ein neuer Lauf macht dort weiter, wo der alte endete, weil er nach
+  Analysebedarf sortiert.
+
+Für Etappen gibt es „Assets pro Durchlauf". Der Job nimmt dabei immer erst die
+Assets ohne aktuelle Analyse, damit eine Etappe keinen Platz an bereits fertige
+verliert.
+
 ## 3.8 Was ein neuer LLM-Cut mit den Gaps macht
 
 Teilweise automatisch, aber nicht vollständig:
@@ -296,6 +318,8 @@ einen Rebuild. Das ist korrekt — das Inventar hat sich inhaltlich geändert.
 | `analysis_models` | `is_supplement_asset`, `supplement_asset_paths`, zwei Herkunftsfelder |
 | `services/supplement_inventory` | neu: Eingangstor, Statusliste, Nachanalyse |
 | `services/supplement_recovery` | neu: Bestandsaufnahme für Altprojekte |
+| `services/supplement_recovery_job` | neu: Hintergrund-Job mit Fortschritt und Stop |
+| `ui/analysis_jobs_ui` | Bestandsaufnahme im Job-Monitor und im globalen Banner |
 | `services/without_voiceover_enhanced/gap_reset_service` | neu: offene Gaps vor einem neuen Cut räumen |
 | `scripts/recover_supplement_inventory.py` | neu: Wiederherstellung im Terminal |
 | `ui/without_voiceover_enhanced/cut_plan_tab` | Reset-Abschnitt in der Gap-Übersicht |

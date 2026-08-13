@@ -297,6 +297,103 @@ def test_stock_download_without_clean_copy_is_recovered(tmp_path, analysis_stub)
     assert str(download) in paths
 
 
+def _three_recoverable_assets(tmp_path: Path) -> Project:
+    de = _project(tmp_path, "de")
+    _green_folder(de)
+    supplements = []
+    for index in (1, 2, 3):
+        media = _clean_file(de, f"pexels_{index}.mp4")
+        supplements.append(
+            {
+                "candidate_id": f"pexels_video_{index}",
+                "provider": "pexels",
+                "provider_asset_id": str(index),
+                "media_type": "video",
+                "gap_id": f"Cliffs_of_Moher_gap_slot_00{index}",
+                "local_media_path": str(media),
+                "media_validation_status": "export_ready",
+            }
+        )
+    _write_accepted_ledger(de, "DE", supplements)
+    return de
+
+
+def test_progress_reports_every_asset(tmp_path, analysis_stub):
+    de = _three_recoverable_assets(tmp_path)
+    events: list[tuple[str, dict]] = []
+
+    report = recover_supplements_into_inventory(
+        de, on_progress=lambda event, payload: events.append((event, payload))
+    )
+
+    assert report.recovered == 3
+    assert [event for event, _payload in events] == [
+        "start",
+        "item_start",
+        "item_done",
+        "item_start",
+        "item_done",
+        "item_start",
+        "item_done",
+        "complete",
+    ]
+    start_payload = events[0][1]
+    assert start_payload["total"] == 3
+    assert events[1][1]["media_name"] == "pexels_1.mp4"
+    assert events[1][1]["folder"] == FOLDER
+
+
+def test_limit_runs_in_batches(tmp_path, analysis_stub):
+    de = _three_recoverable_assets(tmp_path)
+
+    first = recover_supplements_into_inventory(de, limit=2)
+    assert first.pending == 2
+    assert first.recovered == 2
+
+    second = recover_supplements_into_inventory(de, limit=2)
+    # Der offene Rest kommt zuerst; fertige Assets kosten nur einen Cache-Treffer.
+    assert second.analyzed == 1
+    assert second.already_complete == 1
+
+    inventory_ids = {
+        asset.asset_id
+        for asset in load_folder_inventory(de, FOLDER).assets
+        if asset.asset_origin == "pexels"
+    }
+    assert inventory_ids == {
+        "pexels_video_1",
+        "pexels_video_2",
+        "pexels_video_3",
+    }
+
+
+def test_cancel_keeps_finished_assets(tmp_path, analysis_stub):
+    de = _three_recoverable_assets(tmp_path)
+    seen: list[str] = []
+
+    def should_cancel() -> bool:
+        # Nach dem ersten fertigen Asset abbrechen.
+        return len(seen) >= 1
+
+    def on_progress(event: str, payload: dict) -> None:
+        if event == "item_done":
+            seen.append(str(payload.get("media_name", "")))
+
+    report = recover_supplements_into_inventory(
+        de, on_progress=on_progress, should_cancel=should_cancel
+    )
+
+    assert report.cancelled is True
+    assert report.recovered == 1
+    supplements = [
+        asset
+        for asset in load_folder_inventory(de, FOLDER).assets
+        if asset.asset_origin == "pexels"
+    ]
+    assert len(supplements) == 1
+    assert supplements[0].analysis_schema_version == "asset-analysis-v3"
+
+
 def test_unresolvable_folder_is_reported_not_guessed(tmp_path):
     """Ohne Ordnerbezug wird gemeldet statt falsch einsortiert."""
     de = _project(tmp_path, "de")
