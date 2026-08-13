@@ -431,15 +431,61 @@ def load_prior_chapter_plans(
     return prior
 
 
+def chapter_gap_ids(plan: UnifiedCutPlanDocument | None) -> list[str]:
+    """Gap-IDs, die zu diesem Kapitelplan gehören.
+
+    Aus den Slots gelesen statt aus dem Namen abgeleitet: der Merge vergibt
+    keine Kapitel-Prefixe an Slot-IDs, ein Namensmuster wäre also nicht
+    verlässlich.
+    """
+    out: list[str] = []
+    for slot in getattr(plan, "slots", None) or []:
+        gap_id = str(getattr(slot, "coverage_gap_id", "") or "").strip()
+        if gap_id and gap_id not in out:
+            out.append(gap_id)
+    return out
+
+
+def reset_open_gaps_for_chapter(project: Project, folder_name: str) -> list[str]:
+    """Räumt offene Gaps des Kapitels, bevor ein neuer Cut sie ersetzt.
+
+    Ein neuer Cut schreibt die Gap-Liste ohnehin neu, lässt aber Suchtreffer,
+    Funnel-Einträge und die Bindung fertiger Fills an wiederkehrende Gap-IDs
+    stehen. Weil Gap-IDs deterministisch aus den Slot-IDs entstehen, erbte ein
+    neuer Gap an Slot 3 sonst den Kandidaten des alten Slot 3.
+
+    Erfüllte Gaps bleiben unangetastet — dahinter steht beschafftes Material.
+    Andere Kapitel ebenfalls: der Reset gilt nur für die Gap-IDs dieses Plans.
+    """
+    from otio_app.services.without_voiceover_enhanced.gap_reset_service import (
+        reset_open_coverage_gaps,
+    )
+
+    previous = load_chapter_unified_plan(project, folder_name)
+    gap_ids = chapter_gap_ids(previous)
+    if not gap_ids:
+        return []
+    report = reset_open_coverage_gaps(project, gap_ids=gap_ids)
+    return report.removed_gap_ids
+
+
 def persist_chapter_unified_plan(
     project: Project,
     folder_name: str,
     plan: UnifiedCutPlanDocument,
     *,
     refresh_merged: bool = True,
+    reset_open_gaps: bool = True,
 ) -> UnifiedCutPlanDocument:
-    """Schreibt Kapitel-Plan und optional den globalen Merge neu."""
+    """Schreibt Kapitel-Plan und optional den globalen Merge neu.
+
+    ``reset_open_gaps`` räumt vorher die offenen Gaps des Vorlaufs für dieses
+    Kapitel weg, damit der neue Cut nicht deren Such- und Funnel-Zustand erbt.
+    """
     assert_enhanced_work_root(project)
+    if reset_open_gaps:
+        # Vor dem Überschreiben: der alte Plan nennt die Gap-IDs des Kapitels.
+        reset_open_gaps_for_chapter(project, folder_name)
     write_json(chapter_unified_cut_plan_path(project, folder_name), plan)
     invalidate_chapter_resolved_timeline(project, folder_name)
     if refresh_merged:

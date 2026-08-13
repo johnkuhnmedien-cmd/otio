@@ -2338,15 +2338,14 @@ def _render_section_rough(project) -> None:
                     f"{gap.gap_id}: {gap.needed_visual or gap.subject} · "
                     f"Status: {status} · queries={queries}"
                 )
-        _render_open_gap_reset(project)
 
 
 def _render_open_gap_reset(project) -> None:
-    """Offene Gaps und ihren Funnel-Zustand vor einem neuen LLM-Cut räumen.
+    """Manueller Reset über alle Kapitel — ohne neuen LLM-Cut.
 
-    Ein neuer Cut schreibt die Gap-Liste ohnehin neu. Was er nicht aufräumt:
-    Suchtreffer, Funnel-Report und die Bindung fertiger Fills an wiederkehrende
-    Gap-IDs (``gap_{slot_id}`` ist über Läufe hinweg dieselbe ID).
+    Der Regelfall läuft automatisch: ein neuer Kapitel-Cut räumt die offenen
+    Gaps dieses Kapitels selbst. Dieser Weg bleibt für den Fall, dass man den
+    Zustand loswerden will, ohne neu zu schneiden.
     """
     from otio_app.services.without_voiceover_enhanced.gap_reset_service import (
         preview_open_gap_reset,
@@ -2354,12 +2353,12 @@ def _render_open_gap_reset(project) -> None:
     )
 
     preview_key = f"enh_gap_reset_preview_{project.id}"
-    with st.expander("Offene Coverage Gaps zurücksetzen", expanded=False):
+    with st.expander(
+        "Offene Coverage Gaps manuell zurücksetzen (alle Kapitel)", expanded=False
+    ):
         st.caption(
-            "Ein neuer LLM-Cut erzeugt die Gap-Liste komplett neu. Suchtreffer, "
-            "Funnel-Report und die Bindung fertiger Fills an wiederkehrende "
-            "Gap-IDs bleiben aber bestehen — vor einem bewusst frischen Cut "
-            "(z. B. nachdem neues Material ins Inventar kam) hier räumen."
+            "Nur nötig, wenn du den Zustand ohne neuen Cut loswerden willst — "
+            "ein neuer Kapitel-Cut räumt die offenen Gaps seines Kapitels selbst."
         )
         st.caption(
             "Beschaffte Dateien werden nie gelöscht: Downloads, Clean-Fassungen "
@@ -2540,6 +2539,12 @@ def _render_section_funnel(project) -> None:
     )
     if gap_status.message:
         st.caption(gap_status.message)
+    st.caption(
+        "Ein neuer LLM Cut setzt die **offenen** Gaps des jeweiligen Kapitels "
+        "automatisch zurück (Suchtreffer, Funnel-Einträge, vorgemerkte "
+        "Kandidaten). Erfüllte Gaps und beschaffte Dateien bleiben."
+    )
+    _render_open_gap_reset(project)
 
     funnel_settings = load_model_settings(project)
     funnel_role = funnel_settings.enhanced_supplement_funnel

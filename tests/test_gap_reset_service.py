@@ -322,6 +322,63 @@ def test_unbound_fill_is_not_rebound_by_a_new_cut(project_with_gaps):
     assert kept.cut_plan_run_id == ""
 
 
+def test_reset_scoped_to_gap_ids_leaves_other_chapters_alone(project_with_gaps):
+    """Kapitel-Reset: nur die übergebenen Gap-IDs werden geräumt."""
+    project = project_with_gaps
+
+    report = reset_open_coverage_gaps(project, gap_ids=[FILLED_GAP])
+
+    # FILLED_GAP ist nicht offen → nichts zu tun, OPEN_GAP bleibt unberührt.
+    assert report.removed_gap_ids == []
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    assert [gap.gap_id for gap in coverage.gaps] == [OPEN_GAP, FILLED_GAP]
+    search = load_model(stock_search_results_path(project), StockSearchResultsDocument)
+    assert len(search.candidates) == 3
+
+
+def test_reset_scoped_to_the_open_gap_removes_only_its_state(project_with_gaps):
+    project = project_with_gaps
+
+    report = reset_open_coverage_gaps(project, gap_ids=[OPEN_GAP, "fremdes_kapitel_gap"])
+
+    assert report.removed_gap_ids == [OPEN_GAP]
+    search = load_model(stock_search_results_path(project), StockSearchResultsDocument)
+    assert [c.candidate_id for c in search.candidates] == ["c_filled"]
+
+
+def test_chapter_gap_ids_reads_the_slots(tmp_path):
+    """Kapitelzugehörigkeit kommt aus den Slots, nicht aus dem Namensmuster."""
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        chapter_gap_ids,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import (
+        CutBoundary,
+        CutSlot,
+        UnifiedCutPlanDocument,
+    )
+
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            CutBoundary(
+                cut_id=f"cut_{index:03d}",
+                sentence_id=f"s{index}",
+                offset_seconds=float(index),
+            )
+            for index in range(1, 6)
+        ],
+        slots=[
+            CutSlot(slot_id="slot_001", asset_fit="strong"),
+            CutSlot(slot_id="slot_002", asset_fit="none", coverage_gap_id="gap_slot_002"),
+            CutSlot(slot_id="slot_003", asset_fit="weak", coverage_gap_id="gap_slot_003"),
+            CutSlot(slot_id="slot_004", asset_fit="weak", coverage_gap_id="gap_slot_003"),
+        ],
+    )
+
+    assert chapter_gap_ids(plan) == ["gap_slot_002", "gap_slot_003"]
+    assert chapter_gap_ids(None) == []
+
+
 def test_preview_on_project_without_gaps(tmp_path):
     project = _project(tmp_path)
 

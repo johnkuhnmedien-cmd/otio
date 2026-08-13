@@ -325,7 +325,22 @@ Position erbt deshalb den alten Kandidaten, obwohl es redaktionell um etwas
 anderes gehen kann. `tests/test_gap_reset_service.py::test_new_cut_rebinds_fill_to_recurring_gap_id`
 hält das fest.
 
-`gap_reset_service.reset_open_coverage_gaps` räumt daher gezielt:
+**Der Regelfall läuft automatisch.** `persist_chapter_unified_plan` räumt vor dem
+Überschreiben die offenen Gaps genau dieses Kapitels — das deckt beide
+UI-Wege ab (einzelner „LLM Cut" und „Alle LLM Cuts", beide über
+`generate_chapter_unified_cut`) und ebenso den Intro-Cut über
+`persist_intro_unified_plan`.
+
+Die Kapitelzugehörigkeit kommt aus `chapter_gap_ids(alter_kapitelplan)`, also aus
+den `coverage_gap_id`-Feldern der Slots. Ein Namensmuster wäre unbrauchbar: der
+Merge vergibt keine Kapitel-Prefixe an Slot-IDs, `gap_slot_003` kann in mehreren
+Kapiteln vorkommen. Der alte Kapitelplan ist die einzige verlässliche Quelle
+dafür, welche Gaps dieses Kapitel im Vorlauf erzeugt hat.
+
+Erfüllte Gaps und andere Kapitel bleiben unberührt. Über
+`reset_open_gaps=False` lässt sich das Räumen abschalten.
+
+`gap_reset_service.reset_open_coverage_gaps` räumt gezielt:
 
 - offene Gaps aus `coverage_gaps.json` (External-Spiegel bleibt synchron),
 - deren Kandidaten aus `search_results.json`,
@@ -342,8 +357,12 @@ bleiben. Danach muss der neue Cut jede Zuweisung neu aus dem Inventar verdienen.
 Das ist genau dann richtig, wenn das Material inzwischen regulär im Inventar
 steht — vorher wäre es ein Verlust an Zuordnung ohne Ersatz.
 
-UI: Schnittplan-Tab → Gap-Übersicht → „Offene Coverage Gaps zurücksetzen",
-erst prüfen, dann räumen.
+Der Parameter `gap_ids` begrenzt den Reset auf eine ID-Menge; ohne ihn gilt er
+für alle offenen Gaps.
+
+UI: Der manuelle Weg liegt im Schnittplan-Tab bei „Coverage Gaps automatisch
+auflösen", also dort, wo die Gap-Zähler stehen — als Ausweg für „Zustand
+loswerden, ohne neu zu schneiden". Erst prüfen, dann räumen.
 
 ---
 

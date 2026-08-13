@@ -26,6 +26,7 @@ Dieses Modul räumt deshalb gezielt auf. Zwei Regeln:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Iterable
 
 from otio_app.models import Project
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
@@ -148,6 +149,7 @@ def reset_open_coverage_gaps(
     project: Project,
     *,
     unbind_filled: bool = False,
+    gap_ids: Iterable[str] | None = None,
 ) -> GapResetReport:
     """Entfernt offene Gaps und ihren Such-/Funnel-Zustand.
 
@@ -157,6 +159,9 @@ def reset_open_coverage_gaps(
             Lizenz bleiben erhalten — das Material ist über das geteilte Inventar
             weiterhin zuweisbar. Sinnvoll, wenn der neue Cut jede Zuordnung neu
             verdienen soll.
+        gap_ids: Beschränkt den Reset auf diese Gap-IDs. Für den Kapitel-Reset
+            beim neuen LLM-Cut: nur die Gaps des betroffenen Kapitels, damit
+            fertige Kapitel unberührt bleiben.
     """
     from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
         persist_coverage_gaps,
@@ -168,6 +173,10 @@ def reset_open_coverage_gaps(
         return report
 
     open_ids, _filled_ids = _open_and_filled(project)
+    scope: set[str] = set()
+    if gap_ids is not None:
+        scope = {str(gid).strip() for gid in gap_ids if str(gid).strip()}
+        open_ids = open_ids & scope
     if not open_ids and not unbind_filled:
         report.kept_gap_ids = [
             str(gap.gap_id or "") for gap in coverage.gaps if gap.gap_id
@@ -249,7 +258,8 @@ def reset_open_coverage_gaps(
                 # Kein fertiges Medium dahinter — reiner Zustand des Vorlaufs.
                 report.removed_accepted_pending += 1
                 continue
-            if ready and unbind_filled and (gap_id or candidate.cut_plan_run_id):
+            in_scope = gap_ids is None or gap_id in scope
+            if ready and unbind_filled and in_scope and (gap_id or candidate.cut_plan_run_id):
                 candidate = candidate.model_copy(
                     update={"gap_id": "", "cut_plan_run_id": ""}
                 )
