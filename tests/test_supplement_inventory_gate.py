@@ -379,6 +379,41 @@ def test_reanalyzing_legacy_originals_keeps_supplements_untouched(tmp_path, monk
     assert kept.supplement_intake_note == supplement_before.supplement_intake_note
 
 
+def test_status_yardstick_follows_the_selected_model(tmp_path, analysis_stub):
+    """Ein anderes Modell macht eine Analyse veraltet — die Zählung muss das sehen.
+
+    Vorschau und Analyselauf müssen dasselbe Modell zugrunde legen, sonst
+    meldet die UI offene Assets, die der Lauf überspringt (oder umgekehrt).
+    """
+    from otio_app.services.gemini_client import (
+        GEMINI_MODEL_CHOICES,
+        resolve_gemini_model,
+    )
+    from otio_app.services.supplement_inventory import (
+        count_supplements_needing_analysis,
+    )
+
+    project = _project(tmp_path)
+    _green_folder(project)
+    media = _supplement_file(project, "pexels_999.mp4")
+    ingest_supplement_asset(
+        project,
+        folder_name=FOLDER,
+        media_path=media,
+        provenance=_provenance("pexels_video_999"),
+    )
+
+    default_model = resolve_gemini_model(None)
+    assert count_supplements_needing_analysis(project, [FOLDER]) == 0
+
+    other = next(m for m in GEMINI_MODEL_CHOICES if m != default_model)
+    assert count_supplements_needing_analysis(project, [FOLDER], model=other) == 1
+    status = next(
+        item for item in list_supplement_assets(project, FOLDER, model=other)
+    )
+    assert "model_mismatch" in status.cache_status.reasons
+
+
 def test_supplement_cache_is_separate_from_primary_cache(tmp_path, analysis_stub):
     project = _project(tmp_path)
     _green_folder(project)
