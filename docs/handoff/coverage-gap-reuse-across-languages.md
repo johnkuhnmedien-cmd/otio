@@ -6,8 +6,12 @@ Werden die im DE-Lauf beschafften Assets überhaupt genutzt, und wie wird das
 nachhaltig?
 
 Dieses Dokument hält den Befund und die umgesetzte Lösung fest. Tests:
-`tests/test_crosslang_gapfill_reuse.py` (DE/EN-Szenario) und
-`tests/test_supplement_inventory_gate.py` (Vertrag des Eingangstors).
+`tests/test_crosslang_gapfill_reuse.py` (DE/EN-Szenario),
+`tests/test_supplement_inventory_gate.py` (Vertrag des Eingangstors),
+`tests/test_supplement_recovery.py` und
+`tests/test_recover_supplement_inventory_script.py` (Bestandsprojekte).
+
+Für ein bereits laufendes Projekt ist Abschnitt 3.7 der Einstieg.
 
 ---
 
@@ -173,6 +177,44 @@ Inventar — sonst greifen `max_asset_usage` und der Reuse-Abstand nicht.
 
 ---
 
+## 3.7 Bestandsprojekte: verlorene Zeilen zurückholen
+
+Projekte, die vor dieser Änderung liefen, haben ihre Supplement-Zeilen bereits
+verloren. Die Dateien liegen aber noch da, und drei Quellen hat der alte Sync
+nie angefasst:
+
+| Quelle | Pfad | Metadatenqualität |
+|---|---|---|
+| Acceptance-Listen aller Sprachen | `{LANG}/voiceover_generation/stock/accepted_supplements.json` | vollständig: Provider, Provider-Asset-ID, Lizenz, Gap, Pfad |
+| Clean-Media-Manifeste | `clean_media/{Ordner}.json` | Ordner exakt; Provider aus dem Dateinamen |
+| Stock-Downloads | `{LANG}/voiceover_generation/stock/downloads/{gap}/{candidate}/` | Ordner aus dem Gap-Prefix |
+
+`services/supplement_recovery.py` liest alle drei, bestimmt den Ordner und
+schickt jeden Fund durch dasselbe Eingangstor. Die Ordnerbestimmung läuft in
+dieser Reihenfolge: Pfad unter `clean/{Ordner-Slug}/`, dann Clean-Manifest, dann
+Kapitel-Prefix der `gap_id` (`Yellowstone_gap_003` → `Yellowstone`). Lässt sich
+kein Ordner bestimmen, wird gemeldet statt geraten — eine falsch einsortierte
+Datei wäre schlimmer als eine gemeldete.
+
+Wichtig: Die Analysen der **Originale** waren nie betroffen. `inventory/` und
+`cache/inventory/` liegen sprachneutral im geteilten Arbeitsverzeichnis; es gibt
+also nichts zu kopieren. Verloren waren ausschließlich die Zeilen beschafften
+Materials.
+
+Zwei Wege:
+
+- **UI:** Analysen-Tab → „Beschaffte Assets" → „Bestand beschaffter Assets
+  prüfen". Erst prüfen (ändert nichts), dann nachtragen.
+- **Terminal:** `scripts/recover_supplement_inventory.py --list`, dann
+  `--project-root <Pfad> --dry-run`, dann ohne `--dry-run`.
+
+Beide Wege sind idempotent: liegt schon eine aktuelle Analyse vor, wird sie aus
+dem Cache übernommen statt neu bezahlt. Die Sprache, aus der man den Lauf
+startet, ist gleichgültig — die Acceptance-Listen aller Sprachen werden gelesen
+und das Ziel ist das geteilte Inventar.
+
+---
+
 ## 4. Was das für das EN-Projekt bedeutet
 
 Nach einem Analysedurchlauf im EN-Projekt stehen alle im DE-Lauf beschafften
@@ -213,6 +255,8 @@ einen Rebuild. Das ist korrekt — das Inventar hat sich inhaltlich geändert.
 |---|---|
 | `analysis_models` | `is_supplement_asset`, `supplement_asset_paths`, zwei Herkunftsfelder |
 | `services/supplement_inventory` | neu: Eingangstor, Statusliste, Nachanalyse |
+| `services/supplement_recovery` | neu: Bestandsaufnahme für Altprojekte |
+| `scripts/recover_supplement_inventory.py` | neu: Wiederherstellung im Terminal |
 | `services/asset_analyzer` | Scope-Parameter, `analyze_supplement_media`, Supplements im Lauf |
 | `services/media_inventory_cache` | Cache-Scopes, Supplement-Scan, Phantom-Schutz |
 | `services/inventory_loader` | Erhalt über Herkunft, Wiederherstellung aus dem Cache |

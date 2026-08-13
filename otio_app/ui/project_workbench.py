@@ -577,6 +577,107 @@ def _render_analysis_actions(
                 st.rerun()
 
 
+def _render_supplement_recovery(
+    project,
+    *,
+    selected_folders: list[str],
+    selected_model: str | None,
+    any_job_running: bool,
+) -> None:
+    """Bestandsaufnahme für Projekte aus der Zeit vor dem gemeinsamen Eingangstor.
+
+    Damals entfernte ein Ordner-Sync die Inventarzeilen beschaffter Assets. Die
+    Dateien liegen noch da — Acceptance-Listen aller Sprachen, Clean-Manifeste
+    und Stock-Downloads sind die Quellen, aus denen sie zurückkommen.
+    """
+    from otio_app.services.supplement_recovery import (
+        recover_supplements_into_inventory,
+        scan_recoverable_supplements,
+    )
+
+    scan_key = f"supplement_recovery_scan_{project.id}"
+    with st.expander("Bestand beschaffter Assets prüfen", expanded=False):
+        st.caption(
+            "Sucht bereits beschaffte Assets, die nicht im geteilten Inventar "
+            "stehen — etwa weil ein früherer Ordner-Sync sie entfernt hat. "
+            "Liest die Acceptance-Listen aller Sprachen dieses Medienordners."
+        )
+        if st.button(
+            "🔍 Bestand prüfen (ohne Änderung)",
+            key=f"scan_recovery_{project.id}",
+            disabled=any_job_running,
+        ):
+            with st.spinner("Prüfe Bestand …"):
+                st.session_state[scan_key] = scan_recoverable_supplements(
+                    project, folder_names=selected_folders or None
+                )
+
+        scanned = st.session_state.get(scan_key)
+        if scanned is None:
+            return
+
+        items, report = scanned
+        missing = [item for item in items if not item.in_inventory]
+        if not items and not report.unresolved:
+            st.success("Kein beschafftes Asset gefunden, das im Inventar fehlt.")
+            return
+
+        if missing:
+            st.warning(
+                f"{len(missing)} beschaffte(s) Asset(s) fehlen im Inventar. "
+                "Nachtragen analysiert sie wie Originale."
+            )
+            for item in missing[:15]:
+                st.caption(
+                    f"`{item.media_path.name}` → **{item.folder_name}** "
+                    f"(Quelle: {item.source})"
+                )
+            if len(missing) > 15:
+                st.caption(f"… und {len(missing) - 15} weitere")
+        else:
+            st.success(
+                f"Alle {len(items)} gefundenen beschafften Assets stehen im Inventar."
+            )
+
+        for note in report.unresolved[:10]:
+            st.caption(f"⚠️ {note}")
+        if report.unresolved:
+            st.caption(
+                "Nicht zuordenbare Dateien werden bewusst nicht geraten — sie "
+                "lassen sich im Schnittplan-Tab manuell einem Gap zuweisen."
+            )
+
+        if st.button(
+            "📥 Fehlende Assets nachtragen & analysieren",
+            key=f"run_recovery_{project.id}",
+            disabled=any_job_running or not missing,
+        ):
+            if not is_gemini_configured():
+                st.error(
+                    "GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** oder in `.env`."
+                )
+            else:
+                with st.spinner("Trage beschaffte Assets nach …"):
+                    result = recover_supplements_into_inventory(
+                        project,
+                        folder_names=selected_folders or None,
+                        model=selected_model,
+                    )
+                if result.recovered:
+                    details = ", ".join(
+                        f"{folder}: {count}"
+                        for folder, count in sorted(result.recovered_by_folder.items())
+                    )
+                    st.success(
+                        f"{result.recovered} Asset(s) nachgetragen "
+                        f"({result.analyzed} neu analysiert) — {details}."
+                    )
+                for failure in result.failures[:20]:
+                    st.caption(f"⚠️ {failure}")
+                st.session_state.pop(scan_key, None)
+                st.rerun()
+
+
 def _render_supplement_analysis_status(
     project,
     *,
@@ -611,8 +712,14 @@ def _render_supplement_analysis_status(
 
     st.divider()
     st.markdown("**Beschaffte Assets** — Analyse wie bei Originalen.")
+    _render_supplement_recovery(
+        project,
+        selected_folders=folders,
+        selected_model=selected_model,
+        any_job_running=any_job_running,
+    )
     if not total:
-        st.caption("Keine beschafften Assets in der aktuellen Ordnerauswahl.")
+        st.caption("Keine beschafften Assets im Inventar dieser Ordnerauswahl.")
         return
 
     open_count = sum(len(items) for items in open_by_folder.values())
