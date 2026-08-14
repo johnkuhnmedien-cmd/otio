@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from otio_app.defaults import INTRO_HOOK_CANDIDATE_COUNT
+from otio_app.defaults import INTRO_HOOK_CANDIDATE_COUNT, intro_word_window
 from otio_app.models import Project
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.intro_hook_service import (
@@ -138,19 +138,14 @@ def _render_settings_editor(project: Project) -> None:
             "Ziel-Wortanzahl", min_value=0, step=5, value=settings.target_words,
             key=f"vo_intro_target_words_{project.id}",
         )
-        min_words = st.number_input(
-            "Min. Wörter", min_value=0, step=5, value=settings.min_words,
-            key=f"vo_intro_min_words_{project.id}",
-        )
-        max_words = st.number_input(
-            "Max. Wörter", min_value=0, step=5, value=settings.max_words,
-            key=f"vo_intro_max_words_{project.id}",
-        )
-    with col2:
         tolerance = st.number_input(
             "Toleranz (%)", min_value=0, max_value=100, step=5,
             value=settings.word_tolerance_percent, key=f"vo_intro_tolerance_{project.id}",
+            help="Min/Max-Wörter = Ziel ± diese Prozentzahl. Kein separates Min/Max-Feld.",
         )
+        window_min, window_max = intro_word_window(int(target_words), int(tolerance))
+        st.caption(f"Wortfenster: **{window_min}–{window_max}** (Ziel ± {int(tolerance)}%).")
+    with col2:
         tone = st.text_input("Tonalität", value=settings.tone, key=f"vo_intro_tone_{project.id}")
         allow_questions = st.checkbox(
             "Fragen erlaubt", value=settings.allow_questions, key=f"vo_intro_allow_q_{project.id}"
@@ -193,8 +188,6 @@ def _render_settings_editor(project: Project) -> None:
             updated = settings.model_copy(
                 update={
                     "target_words": int(target_words),
-                    "min_words": int(min_words),
-                    "max_words": int(max_words),
                     "word_tolerance_percent": int(tolerance),
                     "tone": tone,
                     "freeform_rule_for_llm": freeform_rule,

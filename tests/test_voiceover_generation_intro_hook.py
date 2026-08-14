@@ -554,14 +554,14 @@ def test_no_edit_plan_documents_created(tmp_path: Path) -> None:
 def test_intro_settings_used_for_language_and_word_counts(tmp_path: Path) -> None:
     project = _make_project_with_confirmed_folder_voiceovers(tmp_path)
     settings = load_intro_hook_settings(project)
-    save_intro_hook_settings(project, settings.model_copy(update={"target_words": 55, "min_words": 45, "max_words": 65}))
+    save_intro_hook_settings(project, settings.model_copy(update={"target_words": 55, "word_tolerance_percent": 20}))
 
     with patch(f"{_INTRO_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
         result = build_intro_hook_candidates(project, provider="anthropic", model="claude-sonnet-5")
 
     assert result.document.target_words == 55
-    assert result.document.min_words == 45
-    assert result.document.max_words == 65
+    assert result.document.min_words == 44
+    assert result.document.max_words == 66
 
 
 def test_no_api_key_leak_in_trace_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

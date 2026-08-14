@@ -549,8 +549,20 @@ VO_ERROR_TYPES_ALL = VO_ERROR_TYPES_DETERMINISTIC + VO_ERROR_TYPES_LLM_REVIEW
 # --- Intro Hook (Phase 5) ---
 INTRO_HOOK_SETTINGS_FILENAME = "intro_hook_settings.json"
 INTRO_HOOK_DEFAULT_TARGET_WORDS = 70
-INTRO_HOOK_DEFAULT_MIN_WORDS = 60
-INTRO_HOOK_DEFAULT_MAX_WORDS = 80
+
+
+def intro_word_window(target_words: int, tolerance_percent: int) -> tuple[int, int]:
+    """Min/Max-Wörter aus Ziel ± Toleranz in Prozent."""
+    target = max(0, int(target_words or 0))
+    pct = max(0, min(100, int(tolerance_percent or 0)))
+    delta = int(round(target * pct / 100.0))
+    return max(0, target - delta), target + delta
+
+
+INTRO_HOOK_DEFAULT_MIN_WORDS, INTRO_HOOK_DEFAULT_MAX_WORDS = intro_word_window(
+    INTRO_HOOK_DEFAULT_TARGET_WORDS,
+    VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
+)
 INTRO_HOOK_CANDIDATE_COUNT = 3
 INTRO_HOOK_TYPE_MYSTERY = "mystery"
 INTRO_HOOK_TYPE_CONTRAST = "contrast"

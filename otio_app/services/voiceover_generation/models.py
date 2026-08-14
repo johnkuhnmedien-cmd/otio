@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from otio_app.defaults import (
     BRIEF_LANGUAGE_CHOICES,
@@ -39,6 +39,7 @@ from otio_app.defaults import (
     INTRO_HOOK_STATUS_CONFIRMED,
     INTRO_HOOK_STATUS_DRAFT,
     INTRO_HOOK_TYPE_CINEMATIC_PROMISE,
+    intro_word_window,
     ITEM_READINESS_MISSING_AUDIO,
     MAX_VOICEOVER_REVIEW_ATTEMPTS,
     PLAN_STATUS_TEXT_READY,
@@ -670,6 +671,15 @@ class IntroHookSettings(BaseModel):
     allow_tease_multiple_places: bool = True
     must_include: list[str] = Field(default_factory=list)
     must_avoid: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _derive_word_window(self) -> IntroHookSettings:
+        min_words, max_words = intro_word_window(
+            self.target_words, self.word_tolerance_percent
+        )
+        self.min_words = min_words
+        self.max_words = max_words
+        return self
 
 
 class IntroHookVisualBeat(BaseModel):
