@@ -1352,6 +1352,18 @@ def _render_intro_cut_section(
         value=f"{project.name}_intro",
         key=f"enh_intro_otio_basename_{project.id}",
     )
+    intro_timing_flash_key = f"_enh_intro_timing_flash_{project.id}"
+    intro_flash = st.session_state.pop(intro_timing_flash_key, None)
+    if isinstance(intro_flash, dict):
+        success_text = str(intro_flash.get("success") or "")
+        if success_text:
+            st.success(success_text)
+        for line in intro_flash.get("captions") or []:
+            text = str(line or "").strip()
+            if text:
+                st.caption(text)
+    # Status nach Timing-Rerun neu lesen — sonst bleibt Music/SFX auf dem
+    # Stand vor dem Klick (Streamlit rendert die Knöpfe vor dem Handler).
     music_ui = music_ui_status_intro(project)
     sfx_ui = sfx_ui_status_intro(project)
     done_css_keys = []
@@ -1453,7 +1465,7 @@ def _render_intro_cut_section(
                 else ""
             )
             n_vo = len(intro_plan_now.slots) if intro_plan_now is not None else 0
-            st.success(
+            success_text = (
                 f"Intro-Timing: {resolved.total_duration_seconds:.2f}s · "
                 f"{n_vo} VO-Slots (LLM) + Opener/Closing-Hülle "
                 f"(LLM-Assets, von Python nur zeitlich platziert) = "
@@ -1461,8 +1473,9 @@ def _render_intro_cut_section(
                 f"{len(resolved.audio_segments)} Audio "
                 "(ohne shot_min · Gesamt-Timeline unverändert)."
             )
+            captions: list[str] = []
             if opener_id or closing_id:
-                st.caption(
+                captions.append(
                     f"LLM-Hüllen-Assets: Opener=`{opener_id or '—'}` · "
                     f"Closing=`{closing_id or '—'}` "
                     "(nicht First/Last-VO-Kopie)."
@@ -1474,16 +1487,21 @@ def _render_intro_cut_section(
                     role = " · Vorlauf (LLM opener)"
                 elif ef == "technical_chapter_postroll":
                     role = " · Nachlauf (LLM closing)"
-                st.caption(
+                captions.append(
                     f"Intro-Video {shot.shot_id}{role}: "
                     f"{shot.timeline_start_seconds:.2f}–{shot.timeline_end_seconds:.2f}"
                     f" · asset=`{shot.asset_id}`"
                 )
             for audio in resolved.audio_segments[:6]:
-                st.caption(
+                captions.append(
                     f"Intro-Audio {audio.segment_id}: "
                     f"{audio.timeline_start_seconds:.2f}–{audio.timeline_end_seconds:.2f}"
                 )
+            st.session_state[intro_timing_flash_key] = {
+                "success": success_text,
+                "captions": captions,
+            }
+            st.rerun()
         except IntroCutError as exc:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001

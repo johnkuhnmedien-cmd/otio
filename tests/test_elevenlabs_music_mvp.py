@@ -1194,6 +1194,81 @@ def test_r_ui_helpers_disabled_without_timing(tmp_path: Path) -> None:
     assert ch_ui["enabled"] is False
 
 
+def test_r_intro_music_enabled_after_timing_with_opener_closing(
+    tmp_path: Path,
+) -> None:
+    """Opener/Closing are envelope shots — they must not block Intro Music."""
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        intro_resolved_matches_plan,
+    )
+
+    project = _project(tmp_path)
+    _write_locked(project)
+    plan = _plan("Intro")
+    write_json(intro_unified_cut_plan_path(project), plan)
+    resolved = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=12.0,
+        shots=[
+            ResolvedShot(
+                shot_id="Intro_preroll",
+                asset_id="opener",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=4.0,
+                source_start_seconds=0.0,
+                source_end_seconds=4.0,
+                folder_name="Intro",
+                chapter_id="Intro",
+                editorial_function="technical_chapter_preroll",
+            ),
+            ResolvedShot(
+                shot_id="Intro_slot_001",
+                asset_id="a1",
+                timeline_start_seconds=4.0,
+                timeline_end_seconds=9.0,
+                source_start_seconds=0.0,
+                source_end_seconds=5.0,
+                folder_name="Intro",
+                chapter_id="Intro",
+            ),
+            ResolvedShot(
+                shot_id="Intro_postroll",
+                asset_id="closer",
+                timeline_start_seconds=9.0,
+                timeline_end_seconds=12.0,
+                source_start_seconds=0.0,
+                source_end_seconds=3.0,
+                folder_name="Intro",
+                chapter_id="Intro",
+                editorial_function="technical_chapter_postroll",
+            ),
+        ],
+        chapters=[
+            ResolvedChapterEnvelope(
+                chapter_id="Intro",
+                folder_name="Intro",
+                chapter_video_start=0.0,
+                chapter_audio_start=4.0,
+                chapter_audio_end=9.0,
+                chapter_video_end=12.0,
+                first_shot_id="Intro_preroll",
+                last_shot_id="Intro_postroll",
+                segment_ids=["intro_1"],
+            )
+        ],
+    )
+    write_json(intro_resolved_timeline_path(project), resolved)
+    assert intro_resolved_matches_plan(plan, resolved, project=project) is True
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.is_elevenlabs_music_configured",
+        return_value=True,
+    ):
+        ui = music_ui_status_intro(project)
+    assert ui["enabled"] is True
+    assert ui.get("help") != "Zuerst aktuelles Intro: Python Timing."
+
+
 # --- R2: chapter outro only after narration ---------------------------------
 
 
