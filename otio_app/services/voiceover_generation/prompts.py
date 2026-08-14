@@ -1442,11 +1442,25 @@ Use ONLY these chapter headings as content signal. There are no full voice-over 
 ## Output rules
 - Derive title, description and hashtags from the chapter titles / locations and working title.
 - Keep description SEO-friendly but natural — no keyword stuffing.
+- Also produce the on-screen series title (not the YouTube SEO title). It ALWAYS has
+  this exact two-line structure, translated into {display}:
+  Line 1 = the formula "Die Wunder von" in {display} (natural grammar / preposition).
+  Line 2 = the country or region of THIS video, in {display}.
+  Infer the place from the working title and chapter headings (e.g. Greece, USA,
+  Peloponnese). Use a region when the video is clearly regional, otherwise the country.
+  Do NOT add place counts, "27 lieux", clickbait, or a third line.
+  Examples:
+  - German + Greece → formula "Die Wunder von", place "Griechenland"
+  - English + Greece → formula "The Wonders of", place "Greece"
+  - French + Greece → formula "Les merveilles de", place "la Grèce"
+  - Spanish + USA → formula "Las maravillas de", place "Estados Unidos"
 - Return JSON ONLY, no markdown fences.
 
 ## JSON schema
 {{
   "title": "optional refined YouTube title in {display}",
+  "wonders_title_formula": "translated 'Die Wunder von' only, in {display}",
+  "wonders_title_place": "country or region name only, in {display}",
   "description_body": "description without chapter list",
   "hashtags": "tag1, tag2, tag3"
 }}

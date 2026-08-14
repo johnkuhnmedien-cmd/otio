@@ -22,6 +22,7 @@ from otio_app.services.youtube_publish_service import (
     _append_chapters_to_description,
     _normalize_hashtags,
     _parse_quizzes,
+    _parse_wonders_title,
     _prompt_from_context,
     build_youtube_publish_context,
     format_youtube_timestamp,
@@ -243,6 +244,8 @@ def test_generate_metadata_preserves_existing_quizzes(tmp_path: Path) -> None:
     class _Resp:
         raw_text = """{
           "title": "Antelope Canyon Guide",
+          "wonders_title_formula": "Die Wunder von",
+          "wonders_title_place": "den USA",
           "description_body": "Ein Film über enge Schluchten und Licht.",
           "hashtags": "#AntelopeCanyon, #USA, #Travel",
           "quizzes": [{"question": "soll ignoriert werden"}]
@@ -266,6 +269,9 @@ def test_generate_metadata_preserves_existing_quizzes(tmp_path: Path) -> None:
     assert result.status == "PASS"
     assert result.document is not None
     assert result.document.title == "Antelope Canyon Guide"
+    assert result.document.wonders_title_formula == "Die Wunder von"
+    assert result.document.wonders_title_place == "den USA"
+    assert result.document.formatted_wonders_title() == "Die Wunder von\nden USA"
     assert "Antelope Canyon - 00:00" in result.document.description
     assert "AntelopeCanyon" in result.document.hashtags
     assert "#" not in result.document.hashtags
@@ -299,6 +305,8 @@ def test_generate_quizzes_separately(tmp_path: Path) -> None:
         YouTubeMetadataDocument(
             project_id=project.id,
             title="Bestehender Titel",
+            wonders_title_formula="Die Wunder von",
+            wonders_title_place="den USA",
             description_body="Bestehende Beschreibung",
             description="Bestehende Beschreibung\n\nAntelope Canyon - 00:00",
             hashtags="usa, canyon",
@@ -374,6 +382,8 @@ def test_generate_quizzes_separately(tmp_path: Path) -> None:
     assert result.status == "PASS"
     assert result.document is not None
     assert result.document.title == "Bestehender Titel"
+    assert result.document.wonders_title_formula == "Die Wunder von"
+    assert result.document.wonders_title_place == "den USA"
     assert result.document.hashtags == "usa, canyon"
     assert len(result.document.quizzes) == 2
     assert result.document.quizzes[0].insert_timestamp == "05:20"
@@ -396,7 +406,9 @@ def test_youtube_publish_prompt_chapters_only_no_scripts() -> None:
     assert "Antelope Canyon" in prompt
     assert "Hook that must be ignored" not in prompt
     assert "Full script that must be ignored" not in prompt
-    assert "quiz" not in prompt.lower() or "Do NOT invent quizzes" in prompt
+    assert "Do NOT invent quizzes" in prompt
+    assert "wonders_title_formula" in prompt
+    assert "Die Wunder von" in prompt
     assert "EXACTLY 2 quiz" not in prompt
 
 
@@ -435,6 +447,28 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.title == "T"
     assert loaded.chapters[0].display_title == "Intro"
+
+
+def test_parse_wonders_title_two_fields_and_newline_fallback() -> None:
+    formula, place = _parse_wonders_title(
+        {
+            "wonders_title_formula": "Les merveilles de",
+            "wonders_title_place": "la Grèce",
+        }
+    )
+    assert formula == "Les merveilles de"
+    assert place == "la Grèce"
+    formula, place = _parse_wonders_title(
+        {"on_screen_title": "The Wonders of\nGreece"}
+    )
+    assert formula == "The Wonders of"
+    assert place == "Greece"
+    doc = YouTubeMetadataDocument(
+        project_id="x",
+        wonders_title_formula="Die Wunder von",
+        wonders_title_place="Griechenland",
+    )
+    assert doc.formatted_wonders_title() == "Die Wunder von\nGriechenland"
 
 
 def test_parse_quizzes_fills_missing_correct_flag() -> None:

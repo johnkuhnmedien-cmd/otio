@@ -156,7 +156,9 @@ LLM_INPUT_INFO = {
     ),
     "youtube_publish": (
         "Sprache · Titel · Dauer · Kapitelüberschriften + Timestamps "
-        "(keine Folder-Skripte) → getrennte Buttons: Metadaten bzw. Quiz."
+        "(keine Folder-Skripte) → YouTube-Titel, Videotitel "
+        "(Die Wunder von + Land/Region in der Videosprache), "
+        "Beschreibung/Hashtags bzw. Quiz."
     ),
     "analysis_assets": (
         "Frame-Bilder des jeweiligen Mediums + kurzer Kontext "

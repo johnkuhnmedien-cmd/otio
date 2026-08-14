@@ -86,6 +86,17 @@ def _render_copyable_results(
         document.title,
         key=f"{key_prefix}_yt_title_{project_id}_{run}",
     )
+    wonders = document.formatted_wonders_title()
+    if wonders:
+        _copyable_text(
+            "Videotitel (Die Wunder von …)",
+            wonders,
+            key=f"{key_prefix}_yt_wonders_{project_id}_{run}",
+        )
+        st.caption(
+            "Zweizeilige Titelkarte in der Videosprache: "
+            "Zeile 1 = Formel, Zeile 2 = Land/Region."
+        )
     _copyable_text(
         f"Beschreibung ({len(document.description)}/{YOUTUBE_DESCRIPTION_MAX_CHARS}, "
         f"Textkörper ≤{YOUTUBE_DESCRIPTION_BODY_MAX_CHARS})",
@@ -145,7 +156,8 @@ def render_youtube_publish_block(
     st.markdown("---")
     st.markdown("**📺 YouTube Publish**")
     st.caption(
-        "Zwei getrennte Schritte: **Metadaten** (Titel/Beschreibung/Hashtags) und **Quiz**. "
+        "Zwei getrennte Schritte: **Metadaten** (YouTube-Titel, Videotitel "
+        "„Die Wunder von …“, Beschreibung/Hashtags) und **Quiz**. "
         "Das LLM erhält nur Kapitelüberschriften + Timestamps — keine Folder-Skripte. "
         "Kapitelzeiten kommen aus dem Timeline-Merge."
     )
@@ -166,6 +178,10 @@ def render_youtube_publish_block(
     existing = load_youtube_metadata(project)
     if existing is not None and existing.title:
         st.write(f"**Titel:** {existing.title}")
+        wonders = existing.formatted_wonders_title()
+        if wonders:
+            st.markdown("**Videotitel:**")
+            st.code(wonders, language=None)
     else:
         st.caption("Titel erscheint nach der Metadaten-Generierung.")
 
@@ -176,7 +192,7 @@ def render_youtube_publish_block(
             key=f"{key_prefix}_yt_publish_generate_{project.id}",
             type="primary",
             use_container_width=True,
-            help="Titel, Beschreibung und Hashtags aus Kapitelüberschriften.",
+            help="YouTube-Titel, Videotitel (Wunder von …), Beschreibung und Hashtags.",
         )
     with col_quiz:
         quiz_clicked = st.button(
@@ -270,7 +286,8 @@ def render_enhanced_youtube_publish_block(
     """YouTube Publish für Enhanced: Kontext aus Resolved Timeline (Kapitelüberschriften)."""
     st.markdown("**📺 YouTube Publish**")
     st.caption(
-        "Zwei getrennte Schritte: **Metadaten** (Titel/Beschreibung/Hashtags) und **Quiz**. "
+        "Zwei getrennte Schritte: **Metadaten** (YouTube-Titel, Videotitel "
+        "„Die Wunder von …“, Beschreibung/Hashtags) und **Quiz**. "
         "Das LLM erhält nur Kapitelüberschriften + Timestamps aus der aufgelösten Timeline — "
         "keine Folder-Skripte."
     )
@@ -291,6 +308,10 @@ def render_enhanced_youtube_publish_block(
     existing = load_youtube_metadata(project)
     if existing is not None and existing.title:
         st.write(f"**Titel:** {existing.title}")
+        wonders = existing.formatted_wonders_title()
+        if wonders:
+            st.markdown("**Videotitel:**")
+            st.code(wonders, language=None)
     else:
         st.caption(
             "Titel erscheint nach der Metadaten-Generierung "
@@ -304,7 +325,7 @@ def render_enhanced_youtube_publish_block(
             key=f"{key_prefix}_yt_publish_generate_{project.id}",
             type="primary",
             use_container_width=True,
-            help="Titel, Beschreibung und Hashtags aus Kapitelüberschriften.",
+            help="YouTube-Titel, Videotitel (Wunder von …), Beschreibung und Hashtags.",
         )
     with col_quiz:
         quiz_clicked = st.button(

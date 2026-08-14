@@ -322,6 +322,29 @@ def _normalize_hashtags(raw: str) -> str:
     return _clamp_text(", ".join(parts), YOUTUBE_HASHTAGS_MAX_CHARS)
 
 
+def _parse_wonders_title(payload: dict) -> tuple[str, str]:
+    """Zweizeiliger On-Screen-Titel: Formel + Land/Region."""
+    if not isinstance(payload, dict):
+        return "", ""
+    formula = str(payload.get("wonders_title_formula") or "").strip()
+    place = str(payload.get("wonders_title_place") or "").strip()
+    if formula and place:
+        formula = formula.splitlines()[0].strip()
+        place = place.splitlines()[0].strip()
+        return formula, place
+    combined = str(
+        payload.get("on_screen_title") or payload.get("wonders_title") or ""
+    ).strip()
+    if not combined:
+        return formula, place
+    lines = [line.strip() for line in combined.splitlines() if line.strip()]
+    if len(lines) >= 2:
+        return lines[0], lines[1]
+    if len(lines) == 1 and not formula:
+        return "", lines[0]
+    return formula, place or (lines[0] if lines else "")
+
+
 def _parse_quizzes(
     payload: dict,
     *,
@@ -587,6 +610,7 @@ def generate_youtube_publish_metadata_from_context(
 
     payload = ok.payload
     title = str(payload.get("title") or context.title).strip() or context.title
+    wonders_formula, wonders_place = _parse_wonders_title(payload)
     description_body = _clamp_text(
         str(payload.get("description_body") or ""),
         YOUTUBE_DESCRIPTION_BODY_MAX_CHARS,
@@ -602,6 +626,8 @@ def generate_youtube_publish_metadata_from_context(
         project_id=project.id,
         language=context.language,
         title=title,
+        wonders_title_formula=wonders_formula,
+        wonders_title_place=wonders_place,
         description=description,
         description_body=description_body,
         hashtags=hashtags,

@@ -41,6 +41,9 @@ class YouTubeMetadataDocument(BaseModel):
     generated_at: datetime = Field(default_factory=_utcnow)
     language: str = "DE"
     title: str = ""
+    # On-screen card: translated "Die Wunder von" + country/region (two lines).
+    wonders_title_formula: str = ""
+    wonders_title_place: str = ""
     description: str = ""
     description_body: str = ""
     hashtags: str = ""
@@ -54,6 +57,13 @@ class YouTubeMetadataDocument(BaseModel):
     llm_run_id: str = ""
     status: str = "PASS"
     error: str = ""
+
+    def formatted_wonders_title(self) -> str:
+        formula = (self.wonders_title_formula or "").strip()
+        place = (self.wonders_title_place or "").strip()
+        if formula and place:
+            return f"{formula}\n{place}"
+        return formula or place
 
 
 class YouTubePublishContext(BaseModel):
