@@ -13,6 +13,9 @@ from otio_app.defaults import (
     DRAMATURGY_PLANNING_MODE_DEFAULT,
     DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
     DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST,
+    VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+    VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
+    intro_word_window,
     PAUSE_AFTER_CHOICES,
     SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION,
     SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT,
@@ -328,6 +331,8 @@ def build_dramaturgy_prompt(
     model_settings: VoiceoverGenerationModelSettings | None = None,
     planning_mode: str | None = None,
     style_context_text: str | None = None,
+    target_words: int | None = None,
+    word_tolerance_percent: int | None = None,
 ) -> str:
     """Baut den Prompt zur Dramaturgieplanung über alle Ordner/Kapitel.
 
@@ -345,6 +350,17 @@ def build_dramaturgy_prompt(
     del model_settings
 
     resolved_mode = (planning_mode or DRAMATURGY_PLANNING_MODE_DEFAULT).strip().lower()
+    baseline = int(target_words or VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS)
+    if baseline <= 0:
+        baseline = VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    percent = int(
+        word_tolerance_percent
+        if word_tolerance_percent is not None
+        else VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
+    )
+    percent = max(0, min(100, percent))
+    band_min, band_max = intro_word_window(baseline, percent)
+    delta = max(0, band_max - baseline)
 
     tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
     active_negative_rules = _active_negative_rules_block(project_brief)
@@ -413,17 +429,17 @@ already creates variety.
 - Exactly one opener when possible; climax/resolution reserved for true peaks/ends.
 
 ### Voice-over length per chapter (IMPORTANT — decide freely, do not copy a grid)
-Baseline orientation: about 150 words per chapter, with a hard band of \
-120–180 words (±30 around the baseline).
+Baseline orientation: about {baseline} words per chapter, with a hard band of \
+{band_min}–{band_max} words (±{delta} / {percent}% around the baseline).
 YOU choose the exact target for each chapter based on narrative need:
-- richer story / higher interest / climax / opener with more to say → toward 160–180
-- thinner material / calmer bridge / less to report → toward 120–140
-- typical middle chapters → near 150
-Do NOT use rigid fixed pairs like only 115 or only 165. Vary targets across \
-chapters when the story justifies it. Then set:
-- recommended_word_count = your chosen target (integer in 120–180)
-- recommended_min_words = target − 30 (not below 120)
-- recommended_max_words = target + 30 (not above 180)
+- richer story / higher interest / climax / opener with more to say → toward the upper half
+- thinner material / calmer bridge / less to report → toward the lower half
+- typical middle chapters → near {baseline}
+Do NOT use rigid fixed pairs. Vary targets across chapters when the story \
+justifies it. Then set:
+- recommended_word_count = your chosen target (integer in {band_min}–{band_max})
+- recommended_min_words = target − {delta} (not below {band_min})
+- recommended_max_words = target + {delta} (not above {band_max})
 Asset counts are only weak capacity signals — they must NOT dictate word count.
 
 Do NOT output per-chapter transition/callback/contrast checkboxes, hint strings, \
@@ -451,9 +467,9 @@ this shape:
       "visual_strength_score": 0.0,
       "asset_diversity_score": 0.0,
       "hook_potential_score": 0.0,
-      "recommended_word_count": 150,
-      "recommended_min_words": 120,
-      "recommended_max_words": 180,
+      "recommended_word_count": {baseline},
+      "recommended_min_words": {band_min},
+      "recommended_max_words": {band_max},
       "risks": []
     }}
   ],

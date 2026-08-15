@@ -14,6 +14,7 @@ from otio_app.project_layout import (
     get_confirmed_voiceover_project_plan_path,
     get_dramaturgy_plan_confirmed_path,
     get_dramaturgy_plan_draft_path,
+    get_dramaturgy_settings_path,
     get_elevenlabs_settings_path,
     get_folder_inventory_path,
     get_folder_tts_runs_dir,
@@ -231,6 +232,7 @@ def test_voiceover_generation_artifact_paths(temp_project_layout: dict[str, Path
     assert get_voiceover_style_profile_path(work_dir) == base / "voiceover_style_profile.json"
     assert get_dramaturgy_plan_draft_path(work_dir) == base / "dramaturgy_plan.draft.json"
     assert get_dramaturgy_plan_confirmed_path(work_dir) == base / "dramaturgy_plan.confirmed.json"
+    assert get_dramaturgy_settings_path(work_dir) == base / "dramaturgy_settings.json"
     assert get_folder_voiceover_settings_path(work_dir) == base / "folder_voiceover_settings.json"
     assert get_folder_voiceovers_draft_path(work_dir) == base / "folder_voiceovers.draft.json"
     assert get_folder_voiceovers_confirmed_path(work_dir) == base / "folder_voiceovers.confirmed.json"

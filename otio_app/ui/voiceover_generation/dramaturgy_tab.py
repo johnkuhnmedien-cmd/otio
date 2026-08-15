@@ -9,9 +9,22 @@ from otio_app.defaults import (
     DRAMATURGY_PLANNING_MODE_LABELS,
     DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST,
     DRAMATURGY_PLANNING_MODE_VARIETY,
+    DRAMATURGY_TARGET_WORDS_INPUT_MAX,
+    VOICEOVER_GEN_MIN_FOLDER_WORDS,
+    intro_word_window,
 )
 from otio_app.services.voiceover_generation.dramaturgy_defaults_service import (
     auto_run_dramaturgy_planning_mode,
+    load_language_dramaturgy_word_defaults,
+    save_language_dramaturgy_word_defaults,
+)
+from otio_app.services.voiceover_generation.dramaturgy_settings_service import (
+    load_dramaturgy_settings,
+    save_dramaturgy_settings,
+)
+from otio_app.services.voiceover_generation.models import DramaturgySettings
+from otio_app.services.voiceover_generation.project_brief_defaults_service import (
+    normalize_brief_language,
 )
 from otio_app.models import Project
 from otio_app.project_layout import (
@@ -147,6 +160,102 @@ def _render_model_settings(project: Project) -> tuple[str, str]:
             save_model_settings(project, updated)
             st.success("Modell-Einstellung für Dramaturgie gespeichert.")
     return role_settings.provider, role_settings.model
+
+
+def _word_setting_keys(project_id: str) -> tuple[str, str]:
+    return f"vo_dram_target_{project_id}", f"vo_dram_tolerance_{project_id}"
+
+
+def _pending_word_settings_key(project_id: str) -> str:
+    return f"vo_dram_word_settings_pending_{project_id}"
+
+
+def _hydrate_word_settings(project: Project) -> None:
+    target_key, tolerance_key = _word_setting_keys(project.id)
+    pending = st.session_state.pop(_pending_word_settings_key(project.id), None)
+    if isinstance(pending, DramaturgySettings):
+        st.session_state[target_key] = pending.target_words
+        st.session_state[tolerance_key] = pending.word_tolerance_percent
+        return
+    if target_key not in st.session_state or tolerance_key not in st.session_state:
+        settings = load_dramaturgy_settings(project)
+        st.session_state[target_key] = settings.target_words
+        st.session_state[tolerance_key] = settings.word_tolerance_percent
+
+
+def _render_word_settings(project: Project) -> DramaturgySettings:
+    lang_key = normalize_brief_language(project.language)
+    has_language_default = load_language_dramaturgy_word_defaults(lang_key) is not None
+    _hydrate_word_settings(project)
+    target_key, tolerance_key = _word_setting_keys(project.id)
+
+    st.subheader("Settings")
+    col_target, col_tol = st.columns(2)
+    with col_target:
+        target_words = st.number_input(
+            "Ziel-Wortanzahl",
+            min_value=VOICEOVER_GEN_MIN_FOLDER_WORDS,
+            max_value=DRAMATURGY_TARGET_WORDS_INPUT_MAX,
+            step=5,
+            key=target_key,
+        )
+    with col_tol:
+        tolerance = st.number_input(
+            "Toleranz (%)",
+            min_value=0,
+            max_value=100,
+            step=5,
+            key=tolerance_key,
+            help="Min/Max-Wörter = Ziel ± diese Prozentzahl. Geht so an das LLM.",
+        )
+    window_min, window_max = intro_word_window(int(target_words), int(tolerance))
+    st.caption(
+        f"Wortfenster: **{window_min}–{window_max}** (Ziel ± {int(tolerance)}%). "
+        f"Projektsprache **{lang_key}**."
+    )
+
+    draft = DramaturgySettings(
+        project_id=project.id,
+        target_words=int(target_words),
+        word_tolerance_percent=int(tolerance),
+    )
+    col_save, col_lang, col_reset = st.columns(3)
+    with col_save:
+        if st.button("Settings speichern", key=f"vo_dram_settings_save_{project.id}"):
+            save_dramaturgy_settings(project, draft)
+            st.success("Dramaturgie-Settings für dieses Projekt gespeichert.")
+    with col_lang:
+        if st.button(
+            f"Als Standard für {lang_key} speichern",
+            key=f"vo_dram_settings_save_lang_{project.id}",
+            help=f"Ziel und Toleranz global für {lang_key}. Neue Projekte übernehmen sie.",
+        ):
+            save_language_dramaturgy_word_defaults(lang_key, draft)
+            save_dramaturgy_settings(project, draft)
+            st.success(f"Als globaler Standard für **{lang_key}** gespeichert.")
+            st.rerun()
+    with col_reset:
+        reset_label = (
+            f"Auf {lang_key}-Standard zurück"
+            if has_language_default
+            else "Auf Standard zurücksetzen"
+        )
+        if st.button(
+            reset_label,
+            key=f"vo_dram_settings_reset_{project.id}",
+            disabled=not has_language_default,
+        ):
+            language_defaults = load_language_dramaturgy_word_defaults(lang_key)
+            if language_defaults is not None:
+                reset = DramaturgySettings(
+                    project_id=project.id,
+                    target_words=language_defaults.target_words,
+                    word_tolerance_percent=language_defaults.word_tolerance_percent,
+                )
+                save_dramaturgy_settings(project, reset)
+                st.session_state[_pending_word_settings_key(project.id)] = reset
+                st.rerun()
+    return draft
 
 
 def _estimate_dramaturgy_input_tokens(project: Project) -> int:
@@ -306,6 +415,7 @@ def render_dramaturgy_page() -> None:
     can_plan = _render_prerequisites(project)
 
     provider, model = _render_model_settings(project)
+    word_settings = _render_word_settings(project)
 
     confirmed = load_confirmed_dramaturgy(project)
     draft = load_dramaturgy_draft(project)
@@ -385,6 +495,7 @@ def render_dramaturgy_page() -> None:
         }
 
     if build_kwargs is not None:
+        save_dramaturgy_settings(project, word_settings)
         if confirmed is not None:
             st.info(
                 "Es gibt bereits eine bestätigte Dramaturgie. Neuplanung erzeugt "

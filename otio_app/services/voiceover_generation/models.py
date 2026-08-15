@@ -19,6 +19,7 @@ from otio_app.defaults import (
     BRIEF_TONE_TAG_CHOICES,
     DEFAULT_NEGATIVE_RULE_FLAGS,
     DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST,
+    VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
     DRAMATURGY_ROLE_LABELS,
     DRAMATURGY_ROLES,
     DRAMATURGY_STATUS_CONFIRMED,
@@ -81,6 +82,8 @@ __all__ = [
     "DRAMATURGY_STATUS_CONFIRMED",
     "DRAMATURGY_STATUS_DRAFT",
     "DramaturgyDefaults",
+    "DramaturgyWordDefaults",
+    "DramaturgySettings",
     "ENERGY_CHOICES",
     "ENERGY_LABELS",
     "FACTUALITY_MODE_CHOICES",
@@ -456,10 +459,26 @@ class DramaturgyPlan(BaseModel):
     craft_flags_disabled: bool = False
 
 
+class DramaturgyWordDefaults(BaseModel):
+    """Zielwortzahl + Toleranz — Sprachstandard für die Dramaturgie."""
+
+    target_words: int = VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    word_tolerance_percent: int = VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
+
+
 class DramaturgyDefaults(BaseModel):
-    """Globaler Dramaturgie-Standard — gilt für den automatischen Durchlauf."""
+    """Dramaturgie-Standards: Planungsmodus global, Wortziele pro Sprache."""
 
     planning_mode: str = DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST
+    by_language: dict[str, DramaturgyWordDefaults] = Field(default_factory=dict)
+
+
+class DramaturgySettings(BaseModel):
+    """Projektspezifische Dramaturgie-Wortziele (Tab ③)."""
+
+    project_id: str
+    target_words: int = VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    word_tolerance_percent: int = VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
 
 
 # --- Phase 4: Folder Voice-overs ---

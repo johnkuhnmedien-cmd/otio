@@ -553,7 +553,13 @@ def test_dramaturgy_writes_no_edit_plan_documents(tmp_path: Path) -> None:
 
 
 
-def test_build_dramaturgy_plan_normalizes_word_targets_to_150_band(tmp_path: Path) -> None:
+def test_build_dramaturgy_plan_normalizes_word_targets_to_150_band(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "otio_app.services.voiceover_generation.dramaturgy_defaults_service.ensure_data_dir",
+        lambda: tmp_path / "data",
+    )
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
     payload = {
         "project_title": "USA",

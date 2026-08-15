@@ -104,6 +104,7 @@ VOICEOVER_STYLE_REFERENCES_FILENAME = "voiceover_style_references.json"
 VOICEOVER_STYLE_PROFILE_FILENAME = "voiceover_style_profile.json"
 DRAMATURGY_PLAN_DRAFT_FILENAME = "dramaturgy_plan.draft.json"
 DRAMATURGY_PLAN_CONFIRMED_FILENAME = "dramaturgy_plan.confirmed.json"
+DRAMATURGY_SETTINGS_FILENAME = "dramaturgy_settings.json"
 FOLDER_VOICEOVER_SETTINGS_FILENAME = "folder_voiceover_settings.json"
 FOLDER_VOICEOVERS_DRAFT_FILENAME = "folder_voiceovers.draft.json"
 FOLDER_VOICEOVER_VALIDATION_REPORT_FILENAME = "folder_voiceover_validation_report.json"
@@ -369,6 +370,8 @@ VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS = 150
 VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS = 120
 VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS = 180
 VOICEOVER_GEN_FOLDER_WORD_TOLERANCE = 30
+# Obergrenze für das Ziel-Eingabefeld in ③ Dramaturgie (Fenster kommt aus Ziel ± %).
+DRAMATURGY_TARGET_WORDS_INPUT_MAX = 400
 
 # --- Asset-bewusste Cut-Plan-Vorbereitung, Phase 2: reine Diagnose-Heuristik
 # für die Folder-Voice-over-Asset-Readiness (siehe
