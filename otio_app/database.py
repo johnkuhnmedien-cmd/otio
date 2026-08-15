@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS projects (
     project_mode        TEXT NOT NULL DEFAULT 'with_voiceover',
     voice_over_subdir   TEXT NOT NULL DEFAULT 'Voice over',
     language            TEXT NOT NULL DEFAULT 'de',
+    video_place         TEXT NOT NULL DEFAULT '',
     frames_per_shot     INTEGER NOT NULL DEFAULT 3,
     fps                 REAL NOT NULL DEFAULT 25.0,
     width               INTEGER NOT NULL DEFAULT 3840,
@@ -66,6 +67,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
                 # Diagnose-/Generierungsworkflow existierte zum Zeitpunkt ihrer Anlage nicht.
                 conn.execute(
                     "ALTER TABLE projects ADD COLUMN project_mode TEXT NOT NULL DEFAULT 'with_voiceover'"
+                )
+                column_names.add("project_mode")
+
+            if "video_place" not in column_names:
+                conn.execute(
+                    "ALTER TABLE projects ADD COLUMN video_place TEXT NOT NULL DEFAULT ''"
                 )
 
     # Ein DB-Projekt = eine Sprache + ein Modus.

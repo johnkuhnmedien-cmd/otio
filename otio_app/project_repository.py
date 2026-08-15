@@ -50,6 +50,7 @@ def _row_to_project(row: sqlite3.Row) -> Project:
         project_mode=project_mode,
         voice_over_subdir=row["voice_over_subdir"],
         language=row["language"],
+        video_place=str(row["video_place"] or "") if "video_place" in row_keys else "",
         frames_per_shot=row["frames_per_shot"],
         fps=row["fps"],
         width=row["width"],
@@ -186,10 +187,10 @@ def create_project(
             """
             INSERT INTO projects (
                 id, name, project_root, work_dir, project_mode, voice_over_subdir,
-                language, frames_per_shot, fps, width, height, aspect_ratio,
+                language, video_place, frames_per_shot, fps, width, height, aspect_ratio,
                 target_platform, status, asset_subdir_names,
                 selected_asset_subdirs, notes, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project.id,
@@ -199,6 +200,7 @@ def create_project(
                 project.project_mode.value,
                 project.voice_over_subdir,
                 project.language,
+                project.video_place,
                 project.frames_per_shot,
                 project.fps,
                 project.width,
@@ -303,6 +305,32 @@ def update_project_status(
         conn.execute(
             "UPDATE projects SET status = ?, updated_at = ? WHERE id = ?",
             (status.value, now, project_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    updated = get_project_by_id(project_id, db_path=db_path)
+    if updated is None:
+        raise ValueError(f"Projekt nicht gefunden: {project_id}")
+    return updated
+
+
+def update_project_video_place(
+    project_id: str,
+    video_place: str,
+    db_path: Path | None = None,
+) -> Project:
+    """Setzt Land/Region für den späteren Videotitel."""
+    from datetime import datetime, timezone
+
+    if get_project_by_id(project_id, db_path=db_path) is None:
+        raise ValueError(f"Projekt nicht gefunden: {project_id}")
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE projects SET video_place = ?, updated_at = ? WHERE id = ?",
+            ((video_place or "").strip(), now, project_id),
         )
         conn.commit()
     finally:

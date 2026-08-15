@@ -28,6 +28,7 @@ def test_schema_creates_projects_table(temp_db_path: Path) -> None:
             "project_mode",
             "voice_over_subdir",
             "language",
+            "video_place",
             "frames_per_shot",
             "fps",
             "width",
@@ -106,5 +107,55 @@ def test_migration_adds_project_mode_column_with_default(temp_db_path: Path) -> 
         ).fetchone()
         assert row is not None
         assert row["project_mode"] == "with_voiceover"
+    finally:
+        conn.close()
+
+
+def test_migration_adds_video_place_column(temp_db_path: Path) -> None:
+    legacy_conn = sqlite3.connect(temp_db_path)
+    try:
+        legacy_conn.execute(
+            """
+            CREATE TABLE projects (
+                id                  TEXT PRIMARY KEY,
+                name                TEXT NOT NULL,
+                project_root        TEXT NOT NULL,
+                work_dir            TEXT NOT NULL,
+                project_mode        TEXT NOT NULL DEFAULT 'with_voiceover',
+                voice_over_subdir   TEXT NOT NULL DEFAULT 'Voice over',
+                language            TEXT NOT NULL DEFAULT 'de',
+                frames_per_shot     INTEGER NOT NULL DEFAULT 3,
+                fps                 REAL NOT NULL DEFAULT 25.0,
+                width               INTEGER NOT NULL DEFAULT 3840,
+                height              INTEGER NOT NULL DEFAULT 2160,
+                aspect_ratio        TEXT NOT NULL DEFAULT '16:9',
+                target_platform     TEXT NOT NULL DEFAULT 'YouTube',
+                status              TEXT NOT NULL DEFAULT 'DRAFT',
+                asset_subdir_names  TEXT NOT NULL DEFAULT '[]',
+                selected_asset_subdirs TEXT NOT NULL DEFAULT '[]',
+                notes               TEXT,
+                created_at          TEXT NOT NULL,
+                updated_at          TEXT NOT NULL
+            )
+            """
+        )
+        legacy_conn.execute(
+            """
+            INSERT INTO projects (
+                id, name, project_root, work_dir, created_at, updated_at
+            ) VALUES ('old-place', 'Altes Projekt', '/tmp/old', '/tmp/old/_otio', 't', 't')
+            """
+        )
+        legacy_conn.commit()
+    finally:
+        legacy_conn.close()
+
+    conn = get_connection(temp_db_path)
+    try:
+        row = conn.execute(
+            "SELECT video_place FROM projects WHERE id = 'old-place'"
+        ).fetchone()
+        assert row is not None
+        assert row["video_place"] == ""
     finally:
         conn.close()

@@ -87,6 +87,7 @@ class ProjectCreate(BaseModel):
     project_mode: ProjectMode = ProjectMode.WITH_VOICEOVER
     voice_over_subdir: str = DEFAULT_VOICE_OVER_SUBDIR
     language: str = "de"
+    video_place: str = ""
     frames_per_shot: int = DEFAULT_FRAMES_PER_SHOT
     fps: float = 25.0
     width: int = 3840
@@ -110,6 +111,11 @@ class ProjectCreate(BaseModel):
         if not trimmed:
             raise ValueError("Feld darf nicht leer sein.")
         return trimmed
+
+    @field_validator("video_place")
+    @classmethod
+    def video_place_stripped(cls, value: str) -> str:
+        return (value or "").strip()
 
     @field_validator("fps")
     @classmethod
@@ -229,6 +235,7 @@ class Project(BaseModel):
     project_mode: ProjectMode = ProjectMode.WITH_VOICEOVER
     voice_over_subdir: str = DEFAULT_VOICE_OVER_SUBDIR
     language: str = "de"
+    video_place: str = ""
     frames_per_shot: int = DEFAULT_FRAMES_PER_SHOT
     fps: float = 25.0
     width: int = 3840
@@ -343,6 +350,7 @@ class Project(BaseModel):
             project_mode=data.project_mode,
             voice_over_subdir=data.voice_over_subdir,
             language=data.language,
+            video_place=data.video_place,
             frames_per_shot=data.frames_per_shot,
             fps=data.fps,
             width=data.width,

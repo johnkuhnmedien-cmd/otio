@@ -35,6 +35,7 @@ from otio_app.project_repository import (
     find_project_by_root_and_language,
     find_projects_by_root,
     list_projects,
+    update_project_video_place,
 )
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_NEW
 from otio_app.ui.routing import PENDING_SWITCH_URL_PATH_KEY, run_app_navigation
@@ -137,6 +138,7 @@ def _show_saved_project(saved) -> None:
         "id": saved.id,
         "project_mode": saved.project_mode.value,
         "language": saved.language,
+        "video_place": saved.video_place,
         "project_root": saved.project_root,
         "work_dir": saved.work_dir,
         "language_work_dir": str(saved.language_work_dir_path),
@@ -309,6 +311,15 @@ def render_new_project_page() -> None:
                     f"Editorial liegt unter `_otio/{'{LANG}'}/`)."
                 ),
             )
+            video_place = st.text_input(
+                "Land / Region *",
+                help=(
+                    "Land oder Region, um die es in diesem Video geht "
+                    "(z. B. Griechenland, Peloponnes, USA). "
+                    "Später erzeugt das LLM daraus den Videotitel im Project Brief."
+                ),
+                placeholder="Griechenland",
+            )
             fps = st.number_input("FPS", value=25.0, min_value=0.1, step=0.1)
             width = st.number_input("Breite (px)", value=3840, min_value=1, step=1)
             frames_per_shot = st.number_input(
@@ -334,6 +345,11 @@ def render_new_project_page() -> None:
             )
         elif not name.strip():
             st.error("Bitte einen **Projektname** eintragen.")
+        elif not video_place.strip():
+            st.error(
+                "Bitte **Land / Region** eintragen (z. B. Griechenland). "
+                "Das braucht der spätere Videotitel im Project Brief."
+            )
         else:
             try:
                 project_data = ProjectCreate(
@@ -343,6 +359,7 @@ def render_new_project_page() -> None:
                     project_mode=project_mode_value,
                     voice_over_subdir=voice_over_subdir,
                     language=language,
+                    video_place=video_place,
                     frames_per_shot=int(frames_per_shot),
                     fps=float(fps),
                     width=int(width),
@@ -650,10 +667,28 @@ def render_project_list_page() -> None:
                     f"`{voice_analysis_display}`"
                 )
                 st.write(
+                    f"**Land / Region:** {project.video_place or '—'}"
+                )
+                st.write(
                     f"**Vorgaben:** {project.language}, {project.frames_per_shot} Frames/Shot, "
                     f"{project.fps} fps, {project.width}×{project.height}, "
                     f"{project.aspect_ratio}, {project.target_platform}"
                 )
+                place_key = f"list_video_place_{project.id}"
+                if place_key not in st.session_state:
+                    st.session_state[place_key] = project.video_place
+                edited_place = st.text_input(
+                    "Land / Region nachtragen",
+                    key=place_key,
+                    help="Für bestehende Projekte, die noch kein Land/Region haben.",
+                )
+                if st.button("Land / Region speichern", key=f"save_video_place_{project.id}"):
+                    if not edited_place.strip():
+                        st.error("Land / Region darf nicht leer sein.")
+                    else:
+                        update_project_video_place(project.id, edited_place)
+                        st.success("Land / Region gespeichert.")
+                        st.rerun()
                 if project.notes:
                     st.write(f"**Notizen:** {project.notes}")
                 st.caption(
