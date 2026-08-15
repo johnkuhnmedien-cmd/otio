@@ -55,6 +55,17 @@ def test_ui_new_negative_rules_are_checked_by_default(tmp_path: Path, monkeypatc
     assert checkboxes_by_label["Voice-over darf nicht nach KI klingen"].value is True
 
 
+def test_ui_shows_title_reference_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    at = _run_repro(tmp_path, monkeypatch)
+    labels = {field.label for field in at.text_input}
+    assert "Referenz-Titel 1" in labels
+    assert "Referenz-Titel 2" in labels
+    assert "Referenz-Titel 3" in labels
+    button_labels = {button.label for button in at.button}
+    assert "Videotitel erzeugen" in button_labels
+    assert any("Als Standard für" in label for label in button_labels)
+
+
 def test_ui_shows_explanation_of_three_mechanisms(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     at = _run_repro(tmp_path, monkeypatch)
     combined_captions = " ".join(caption.value for caption in at.caption)

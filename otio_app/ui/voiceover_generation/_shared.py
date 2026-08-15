@@ -99,6 +99,10 @@ LLM_INPUT_INFO = {
         "Style · lokales Inventar · bestehender VO-Text/Sätze/Closing · "
         "Readiness-Issues — Text bleibt, nur Asset-Zuordnung wird repariert."
     ),
+    "project_brief": (
+        "Land/Region des Projekts · Sprache · drei Titel-Referenzen "
+        "(nur Inspiration, keine starre Vorlage) · optional Ton-Tags."
+    ),
     "intro": (
         "Intro-Settings · Brief/Negative Rules/Forbidden · Style "
         "(Raw Intro Text oder Style Profile als Struktur-Template) · "

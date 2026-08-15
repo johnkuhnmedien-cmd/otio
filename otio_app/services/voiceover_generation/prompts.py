@@ -1468,6 +1468,52 @@ Use ONLY these chapter headings as content signal. There are no full voice-over 
 """
 
 
+def build_video_title_prompt(
+    *,
+    language: str,
+    video_place: str,
+    title_references: list[str],
+    tone_tags: list[str] | None = None,
+) -> str:
+    """Prompt: einen Videotitel aus Land/Region + inspirierenden Referenzen."""
+    display = _language_display_name(language)
+    refs = [text.strip() for text in title_references if str(text).strip()]
+    if refs:
+        ref_block = "\n".join(f"{index}. {text}" for index, text in enumerate(refs, start=1))
+    else:
+        ref_block = "(none provided)"
+    tones = ", ".join(tag for tag in (tone_tags or []) if str(tag).strip()) or "(none)"
+    return f"""You invent ONE documentary / travel YouTube title for a new video.
+
+{native_speaker_language_block(language)}
+
+## Place (authoritative)
+The video is about this country or region: {video_place.strip() or "(unknown)"}
+The title must clearly belong to THIS place (name or unmistakable evocation)
+in natural {display} grammar.
+
+## Reference titles — inspiration only, NOT a template
+These titles show the series feel (length, promise, tone). Capture the spirit.
+Do NOT copy wording, word order, or a rigid formula. Do NOT just swap the
+place name into a reference. Invent a fresh title for this place.
+
+{ref_block}
+
+## Tone tags (optional)
+{tones}
+
+## Output rules
+- Return JSON ONLY, no markdown fences.
+- One title, no hashtags, no trailing slogan after a vertical bar.
+- Write the title in {display} only.
+
+## JSON schema
+{{
+  "title": "the new title in {display}"
+}}
+"""
+
+
 def build_youtube_quiz_prompt(
     *,
     language: str,

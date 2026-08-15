@@ -113,6 +113,9 @@ INTRO_HOOK_CONFIRMED_FILENAME = "intro_hook.confirmed.json"
 ELEVENLABS_SETTINGS_FILENAME = "elevenlabs_settings.json"
 # Globale Voice-Defaults pro Sprache unter data/ (nicht projektspezifisch).
 ELEVENLABS_VOICE_DEFAULTS_FILENAME = "elevenlabs_voice_defaults.json"
+# Globale Project-Brief-Defaults pro Sprache unter data/.
+PROJECT_BRIEF_DEFAULTS_FILENAME = "project_brief_defaults.json"
+PROJECT_BRIEF_TITLE_REFERENCE_SLOTS = 3
 VOICEOVER_AUDIO_MANIFEST_FILENAME = "voiceover_audio_manifest.json"
 VOICEOVER_AUDIO_QA_REPORT_FILENAME = "voiceover_audio_qa_report.json"
 CONFIRMED_VOICEOVER_PROJECT_PLAN_FILENAME = "confirmed_voiceover_project_plan.json"
@@ -153,6 +156,7 @@ VOICEOVER_GEN_ROLE_INTRO = "intro"
 # Kandidaten suchen“ im Cut-Plan-Tab erfolgt.
 VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY = "cut_plan_supplement_query"
 VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH = "youtube_publish"
+VOICEOVER_GEN_ROLE_PROJECT_BRIEF = "project_brief"
 VOICEOVER_GEN_ROLE_ENHANCED_ROUGH_CUT = "enhanced_rough_cut"
 VOICEOVER_GEN_ROLE_ENHANCED_FINAL_CUT = "enhanced_final_cut"
 VOICEOVER_GEN_ROLE_ENHANCED_SUPPLEMENT_FUNNEL = "enhanced_supplement_funnel"
@@ -164,6 +168,7 @@ VOICEOVER_GEN_ROLES = (
     VOICEOVER_GEN_ROLE_VOICEOVER_AUTHOR,
     VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW,
     VOICEOVER_GEN_ROLE_INTRO,
+    VOICEOVER_GEN_ROLE_PROJECT_BRIEF,
     VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY,
     VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH,
     VOICEOVER_GEN_ROLE_ENHANCED_ROUGH_CUT,
@@ -176,6 +181,7 @@ VOICEOVER_GEN_ROLE_LABELS = {
     VOICEOVER_GEN_ROLE_VOICEOVER_AUTHOR: "Voice-over Autor",
     VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW: "Voice-over Review",
     VOICEOVER_GEN_ROLE_INTRO: "Intro",
+    VOICEOVER_GEN_ROLE_PROJECT_BRIEF: "Project Brief / Videotitel",
     VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY: "Cut Plan Suchqueries",
     VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH: "YouTube Publish",
     VOICEOVER_GEN_ROLE_ENHANCED_ROUGH_CUT: "Enhanced Rough Cut (LLM 2)",

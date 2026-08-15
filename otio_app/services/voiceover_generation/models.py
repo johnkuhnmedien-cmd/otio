@@ -97,6 +97,8 @@ __all__ = [
     "VOICEOVER_GEN_ROLES",
     "WEAK_ASSET_MATCH_CONFIDENCE_THRESHOLD",
     "ProjectBrief",
+    "ProjectBriefLanguageDefaults",
+    "ProjectBriefDefaultsDocument",
     "VoiceoverStyleReferences",
     "VoiceoverStyleProfile",
     "StyleProfileLibraryEntry",
@@ -155,6 +157,23 @@ class ProjectBrief(BaseModel):
     negative_rules_freetext: str = ""
     forbidden_phrases: list[str] = Field(default_factory=list)
     global_extra_prompt: str = ""
+    # Drei Beispieltitel als Inspiration für den Titel-LLM — keine starre Vorlage.
+    title_references: list[str] = Field(default_factory=list)
+
+
+class ProjectBriefLanguageDefaults(BaseModel):
+    """Sprachstandard für den Project Brief — ohne projektspezifischen Titel."""
+
+    tone_tags: list[str] = Field(default_factory=list)
+    negative_rule_flags: dict[str, bool] = Field(default_factory=dict)
+    negative_rules_freetext: str = ""
+    forbidden_phrases: list[str] = Field(default_factory=list)
+    global_extra_prompt: str = ""
+    title_references: list[str] = Field(default_factory=list)
+
+
+class ProjectBriefDefaultsDocument(BaseModel):
+    by_language: dict[str, ProjectBriefLanguageDefaults] = Field(default_factory=dict)
 
 
 STYLE_MODE_PROFILE = "profile"
@@ -295,6 +314,7 @@ class VoiceoverGenerationModelSettings(BaseModel):
     voiceover_author: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     voiceover_review: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     intro: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
+    project_brief: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     cut_plan_supplement_query: LlmRoleSettings = Field(
         default_factory=_default_cut_plan_supplement_query_settings
     )
