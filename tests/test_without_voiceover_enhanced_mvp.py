@@ -96,6 +96,7 @@ from otio_app.services.without_voiceover_enhanced.script_author_service import (
     list_enabled_dramaturgy_folders,
     merge_folder_script_into_document,
     parse_enhanced_script_response,
+    revise_all_enhanced_scripts,
     revise_enhanced_script_for_folder,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
@@ -1145,6 +1146,81 @@ def test_revise_enhanced_script_for_folder_uses_only_freetext_and_script(
     assert float(canyon[0].author_pause_after_seconds) == 3.0
     assert "[pause" not in canyon[0].text
     assert chapter_display_text_for_folder(draft, "Canyon").count("[pause 3 seconds]") == 1
+
+
+def test_revise_all_enhanced_scripts_runs_present_folders_in_order(
+    tmp_path: Path,
+) -> None:
+    folders = ["Canyon", "Desert", "Harbor"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            segments=[
+                ScriptSegment(
+                    segment_id="c1",
+                    text="Old canyon.",
+                    sequence_index=1,
+                    folder_name="Canyon",
+                    folder_order_index=0,
+                ),
+                ScriptSegment(
+                    segment_id="d1",
+                    text="Old desert.",
+                    sequence_index=2,
+                    folder_name="Desert",
+                    folder_order_index=1,
+                ),
+            ]
+        ),
+    )
+
+    seen: list[str] = []
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        assert "make warmer" in prompt
+        if "Old canyon." in prompt:
+            seen.append("Canyon")
+            return "Warm canyon."
+        if "Old desert." in prompt:
+            seen.append("Desert")
+            return "Warm desert."
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    results = revise_all_enhanced_scripts(
+        project,
+        editor_instructions="make warmer",
+        llm_callable=fake_llm,
+    )
+    assert [result.folder_name for result in results] == ["Canyon", "Desert"]
+    assert all(result.status == "PASS" for result in results)
+    assert seen == ["Canyon", "Desert"]
+    draft = load_script_draft(project)
+    assert chapter_narration_text(draft, "Canyon") == "Warm canyon."
+    assert chapter_narration_text(draft, "Desert") == "Warm desert."
+    assert "Harbor" not in folders_present_in_script(draft)
+
+
+def test_revise_all_enhanced_scripts_skips_when_no_scripts(tmp_path: Path) -> None:
+    project = _project(tmp_path, folders=["Canyon"])
+    _confirm_dramaturgy(project, ["Canyon"])
+    called = False
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del prompt, model, max_output_tokens
+        nonlocal called
+        called = True
+        return "unused"
+
+    results = revise_all_enhanced_scripts(
+        project,
+        editor_instructions="make warmer",
+        llm_callable=fake_llm,
+    )
+    assert results == []
+    assert called is False
 
 
 def test_default_revision_instructions_mention_pause_tags() -> None:

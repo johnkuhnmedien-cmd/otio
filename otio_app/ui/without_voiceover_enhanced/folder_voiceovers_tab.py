@@ -53,6 +53,61 @@ _MAX_TOKENS_STEP = 4_096
 _MAX_TOKENS_DEFAULT = DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS
 
 
+def _revision_prompt_key(project) -> str:
+    return f"enh_revise_prompt_{project.id}"
+
+
+def _current_revision_instructions(project) -> str:
+    """Freitext aus der Nachbearbeiten-Box, sonst der gespeicherte Standard."""
+    key = _revision_prompt_key(project)
+    if key not in st.session_state:
+        st.session_state[key] = DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS
+    return str(st.session_state.get(key) or "").strip()
+
+
+def _run_all_script_revisions(
+    project,
+    *,
+    provider: str,
+    model: str,
+    max_tokens: int,
+    instructions: str | None = None,
+) -> None:
+    text = (
+        (instructions or "").strip()
+        if instructions is not None
+        else _current_revision_instructions(project)
+    )
+    if not text:
+        st.warning("Bitte zuerst eine Freitext-Anweisung eingeben.")
+        return
+    progress = st.empty()
+
+    def _progress(folder_name: str, index: int, total: int) -> None:
+        progress.info(f"Kapitel {index}/{total}: „{folder_name}“…")
+
+    with st.spinner("Alle Kapitel werden nacheinander nachbearbeitet…"):
+        results = revise_all_enhanced_scripts(
+            project,
+            editor_instructions=text,
+            provider=provider,
+            model=model,
+            max_output_tokens=max_tokens,
+            progress_callback=_progress,
+        )
+    progress.empty()
+    ok = [r for r in results if r.status == "PASS"]
+    fail = [r for r in results if r.status != "PASS"]
+    mark_audio_stale_for_changed_segments(project)
+    if not results:
+        st.info("Kein Kapitel-Skript zum Nachbearbeiten vorhanden.")
+        return
+    st.success(f"{len(ok)}/{len(results)} Kapitel nachbearbeitet.")
+    for result in fail:
+        st.error(f"„{result.folder_name}“: {result.error}")
+    st.rerun()
+
+
 def _render_model_and_tokens(project) -> tuple[str, str, int]:
     settings = load_model_settings(project)
     with st.expander("⚙️ Modell für Skripterzeugung", expanded=True):
@@ -156,6 +211,24 @@ def _render_generation_controls(
             for result in fail:
                 st.error(f"„{result.folder_name}“: {result.error}")
             st.rerun()
+
+    if present:
+        st.caption(
+            "Nachbearbeitung läuft sequenziell über alle vorhandenen Kapitel-Skripte "
+            "und nutzt deinen Freitext unter **Skript mit Freitext nachbearbeiten** "
+            "(Standard-Freitext, falls noch nicht geändert)."
+        )
+        if st.button(
+            "Alle Skripte mit Freitext nachbearbeiten",
+            type="primary",
+            key=f"enh_revise_all_after_gen_{project.id}",
+        ):
+            _run_all_script_revisions(
+                project,
+                provider=provider,
+                model=model,
+                max_tokens=max_tokens,
+            )
 
 
 def _word_count(text: str) -> int:
@@ -485,6 +558,16 @@ def render_enhanced_folder_voiceovers_page() -> None:
         if real:
             st.warning("Verbotene Phrasen: " + ", ".join(real))
 
+    if show.segments:
+        st.divider()
+        _render_script_revision_section(
+            project,
+            show,
+            provider=provider,
+            model=model,
+            max_tokens=max_tokens,
+        )
+
     _render_chapter_scripts(
         project,
         show,
@@ -504,15 +587,6 @@ def render_enhanced_folder_voiceovers_page() -> None:
                 "Arbeits- und Vertonungseinheit ist das einzelne Kapitel."
             )
             st.write(show.narration_full)
-
-        st.divider()
-        _render_script_revision_section(
-            project,
-            show,
-            provider=provider,
-            model=model,
-            max_tokens=max_tokens,
-        )
 
 
 def _render_script_revision_section(
@@ -553,7 +627,7 @@ def _render_script_revision_section(
         options=present,
         key=f"enh_revise_folder_{project.id}",
     )
-    prompt_key = f"enh_revise_prompt_{project.id}"
+    prompt_key = _revision_prompt_key(project)
     if prompt_key not in st.session_state:
         st.session_state[prompt_key] = DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS
     instructions = st.text_area(
@@ -562,7 +636,9 @@ def _render_script_revision_section(
         height=160,
         help=(
             "Nur dieser Text und das aktuelle Kapitel-Skript "
-            "(inkl. [pause N seconds]-Marker) gehen an das LLM."
+            "(inkl. [pause N seconds]-Marker) gehen an das LLM. "
+            "Denselben Freitext nutzt auch "
+            "„Alle Skripte mit Freitext nachbearbeiten“ oben."
         ),
     )
     preview = chapter_display_text_for_folder(document, selected)
@@ -599,28 +675,10 @@ def _render_script_revision_section(
             "Alle vorhandenen Kapitel nachbearbeiten",
             key=f"enh_revise_all_{project.id}",
         ):
-            if not (instructions or "").strip():
-                st.warning("Bitte zuerst eine Freitext-Anweisung eingeben.")
-            else:
-                progress = st.empty()
-
-                def _progress(folder_name: str, index: int, total: int) -> None:
-                    progress.info(f"Kapitel {index}/{total}: „{folder_name}“…")
-
-                with st.spinner("Alle Kapitel werden nacheinander nachbearbeitet…"):
-                    results = revise_all_enhanced_scripts(
-                        project,
-                        editor_instructions=instructions,
-                        provider=provider,
-                        model=model,
-                        max_output_tokens=max_tokens,
-                        progress_callback=_progress,
-                    )
-                progress.empty()
-                ok = [r for r in results if r.status == "PASS"]
-                fail = [r for r in results if r.status != "PASS"]
-                mark_audio_stale_for_changed_segments(project)
-                st.success(f"{len(ok)}/{len(results)} Kapitel nachbearbeitet.")
-                for result in fail:
-                    st.error(f"„{result.folder_name}“: {result.error}")
-                st.rerun()
+            _run_all_script_revisions(
+                project,
+                provider=provider,
+                model=model,
+                max_tokens=max_tokens,
+                instructions=instructions,
+            )
