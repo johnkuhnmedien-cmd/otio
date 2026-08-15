@@ -189,7 +189,7 @@ def _render_word_settings(project: Project) -> DramaturgySettings:
     _hydrate_word_settings(project)
     target_key, tolerance_key = _word_setting_keys(project.id)
 
-    st.subheader("Settings")
+    st.markdown("**Zielwortzahl für die Kapitel**")
     col_target, col_tol = st.columns(2)
     with col_target:
         target_words = st.number_input(
@@ -415,7 +415,6 @@ def render_dramaturgy_page() -> None:
     can_plan = _render_prerequisites(project)
 
     provider, model = _render_model_settings(project)
-    word_settings = _render_word_settings(project)
 
     confirmed = load_confirmed_dramaturgy(project)
     draft = load_dramaturgy_draft(project)
@@ -425,6 +424,8 @@ def render_dramaturgy_page() -> None:
         st.info(f"Es gibt bereits eine **bestätigte** Dramaturgie (bestätigt: {confirmed_at}).")
 
     st.subheader("Dramaturgie planen")
+    with st.expander("⚙️ Settings — Zielwortzahl / Toleranz", expanded=True):
+        word_settings = _render_word_settings(project)
     render_llm_input_info(LLM_INPUT_INFO["dramaturgy"])
     max_output_tokens = _render_max_tokens_slider(
         project, provider=provider, model=model

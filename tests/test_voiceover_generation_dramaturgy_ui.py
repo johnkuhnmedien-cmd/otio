@@ -86,6 +86,8 @@ def test_dramaturgy_page_has_both_plan_buttons(
     assert "Ziel-Wortanzahl" in number_labels
     assert "Toleranz (%)" in number_labels
     assert any("Als Standard für" in label for label in button_labels)
+    expander_labels = {expander.label for expander in at.expander}
+    assert any("Zielwortzahl" in label for label in expander_labels)
     slider_labels = [slider.label for slider in at.slider]
     assert "Max. Output-Tokens (Ceiling)" in slider_labels
     assert "Abwechslung" in captions
