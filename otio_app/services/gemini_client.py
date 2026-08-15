@@ -135,11 +135,23 @@ def _get_client(*, timeout_ms: int | None = None):
 
 
 def _extract_json(text: str) -> Any:
-    cleaned = text.strip()
+    """Parse JSON from an LLM reply.
+
+    Gemini often puts literal newlines/tabs inside long string fields
+    (YouTube descriptions). ``json.loads`` rejects those by default
+    (``Invalid control character``); ``strict=False`` keeps the text.
+    """
+    cleaned = (text or "").strip()
     fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL)
     if fence_match:
-        cleaned = fence_match.group(1)
-    return json.loads(cleaned)
+        cleaned = fence_match.group(1).strip()
+    try:
+        return json.loads(cleaned, strict=False)
+    except json.JSONDecodeError:
+        match = re.search(r"(\{.*\}|\[.*\])", cleaned, re.DOTALL)
+        if match is None:
+            raise
+        return json.loads(match.group(1), strict=False)
 
 
 @dataclass(frozen=True)

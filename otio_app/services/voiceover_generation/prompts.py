@@ -1455,6 +1455,7 @@ Use ONLY these chapter headings as content signal. There are no full voice-over 
   - French + Greece → formula "Les merveilles de", place "la Grèce"
   - Spanish + USA → formula "Las maravillas de", place "Estados Unidos"
 - Return JSON ONLY, no markdown fences.
+- JSON must be valid: put newlines inside strings as \\n, never as raw line breaks.
 
 ## JSON schema
 {{

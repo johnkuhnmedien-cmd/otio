@@ -282,6 +282,81 @@ def test_generate_metadata_preserves_existing_quizzes(tmp_path: Path) -> None:
     assert loaded.llm_run_id == result.llm_run_id
 
 
+def test_generate_metadata_accepts_literal_newlines_in_description(
+    tmp_path: Path,
+) -> None:
+    """Gemini schreibt oft echte Zeilenumbrüche in description_body — kein FAIL."""
+    project = _project(tmp_path)
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id,
+        project_title="Grecia",
+        language="IT",
+        folders=[
+            ConfirmedFolderPlanItem(
+                folder_name="Athens",
+                voiceover_text_full="Atene.",
+            )
+        ],
+    )
+    from otio_app.services.voiceover_generation.final_plan_service import (
+        save_confirmed_voiceover_project_plan,
+    )
+
+    save_confirmed_voiceover_project_plan(project, plan)
+    items = [
+        TimelineItem(
+            timeline_item_id="t1",
+            type="video_shot",
+            section_id="s1",
+            folder_name="Athens",
+            voice_file="/vo/a.mp3",
+            resolved_media_path="/a.mp4",
+            timeline_in_sec=0.0,
+            timeline_out_sec=120.0,
+            duration_sec=120.0,
+        )
+    ]
+    merged = MergedEditPlanResult(
+        timeline_items=items,
+        shots=[],
+        settings=EditPlanSettings(),
+        voiceovers=[VoiceoverPlan(path="/vo/a.mp3", duration_sec=100.0)],
+        included_folders=["Athens"],
+    )
+
+    class _Resp:
+        raw_text = (
+            "{\n"
+            '  "title": "Le meraviglie della Grecia",\n'
+            '  "wonders_title_formula": "Le meraviglie della",\n'
+            '  "wonders_title_place": "Grecia",\n'
+            '  "description_body": "' + ("Un viaggio. " * 80) + "\n"
+            'Secondo paragrafo della descrizione.",\n'
+            '  "hashtags": "Grecia, Viaggi, Natura"\n'
+            "}"
+        )
+        provider = "gemini"
+        model = "gemini-test"
+        latency_ms = 9
+        token_usage = {"input": 1, "output": 2}
+
+    with patch(
+        "otio_app.services.youtube_publish_service.generate_plan_text_with_metadata",
+        return_value=_Resp(),
+    ):
+        result = generate_youtube_publish_metadata(
+            project,
+            merged,
+            provider="gemini",
+            model="gemini-test",
+        )
+
+    assert result.status == "PASS", result.error
+    assert result.document is not None
+    assert "Secondo paragrafo" in result.document.description_body
+    assert result.error in (None, "")
+
+
 def test_generate_quizzes_separately(tmp_path: Path) -> None:
     project = _project(tmp_path)
     plan = ConfirmedVoiceoverProjectPlan(
@@ -409,6 +484,7 @@ def test_youtube_publish_prompt_chapters_only_no_scripts() -> None:
     assert "Do NOT invent quizzes" in prompt
     assert "wonders_title_formula" in prompt
     assert "Die Wunder von" in prompt
+    assert "never as raw line breaks" in prompt
     assert "EXACTLY 2 quiz" not in prompt
 
 
