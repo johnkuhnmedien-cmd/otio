@@ -110,6 +110,37 @@ def test_model_selectbox_options_are_curated_model_choices(
     assert style_profile_selectbox.value == "anthropic:claude-sonnet-5"
 
 
+def test_ui_shows_language_standard_buttons(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = _run_repro(tmp_path, monkeypatch)
+    button_labels = {button.label for button in at.button}
+    assert any("Als Standard für" in label for label in button_labels)
+    assert any("Standard zurück" in label for label in button_labels)
+    captions = " ".join(caption.value for caption in at.caption)
+    assert "Projektsprache" in captions
+
+
+def test_save_language_standard_from_ui_persists_references(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = _run_repro(tmp_path, monkeypatch)
+    intro = next(area for area in at.text_area if area.label == "Beispiel-Intro 1")
+    at = intro.set_value("Die Wunder von Italien").run()
+    assert not at.exception, at.exception
+    save_lang = next(button for button in at.button if "Als Standard für" in button.label)
+    at = save_lang.click().run()
+    assert not at.exception, at.exception
+
+    import otio_app.services.voiceover_generation.style_reference_defaults_service as defaults
+
+    defaults.ensure_data_dir = lambda: tmp_path / "global_data"
+    loaded = defaults.load_language_style_defaults("DE")
+    assert loaded is not None
+    assert loaded.intro_reference_texts == ["Die Wunder von Italien"]
+    assert loaded.style_mode == "profile"
+
+
 def test_style_profile_library_section_is_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

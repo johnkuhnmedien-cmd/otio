@@ -100,6 +100,8 @@ __all__ = [
     "ProjectBriefLanguageDefaults",
     "ProjectBriefDefaultsDocument",
     "VoiceoverStyleReferences",
+    "StyleReferenceLanguageDefaults",
+    "StyleReferenceDefaultsDocument",
     "VoiceoverStyleProfile",
     "StyleProfileLibraryEntry",
     "StyleProfileLibrary",
@@ -258,6 +260,23 @@ class StyleProfileLibrary(BaseModel):
     kann."""
 
     entries: list[StyleProfileLibraryEntry] = Field(default_factory=list)
+
+
+class StyleReferenceLanguageDefaults(BaseModel):
+    """Sprachstandard für Style References — ohne Uploads und project_id."""
+
+    style_mode: str = STYLE_MODE_PROFILE
+    raw_reference_text: str = ""
+    raw_intro_reference_text: str = ""
+    raw_library_name: str = ""
+    intro_reference_texts: list[str] = Field(default_factory=list)
+    segment_reference_texts: list[str] = Field(default_factory=list)
+    # Abgeleitetes Profile-Snapshot, nur im Profile-Modus relevant.
+    style_profile: VoiceoverStyleProfile | None = None
+
+
+class StyleReferenceDefaultsDocument(BaseModel):
+    by_language: dict[str, StyleReferenceLanguageDefaults] = Field(default_factory=dict)
 
 
 class LlmRoleSettings(BaseModel):

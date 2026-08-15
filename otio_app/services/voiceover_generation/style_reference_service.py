@@ -23,6 +23,10 @@ from otio_app.services.voiceover_generation.models import (
     VoiceoverStyleProfile,
     VoiceoverStyleReferences,
 )
+from otio_app.services.voiceover_generation.style_reference_defaults_service import (
+    apply_language_defaults_to_refs,
+    load_language_style_defaults,
+)
 
 ALLOWED_UPLOAD_EXTENSIONS = (".txt", ".md")
 MAX_UPLOAD_CHARS = 20_000
@@ -30,7 +34,32 @@ MAX_RAW_REFERENCE_CHARS = 40_000
 
 
 def default_style_references(project: Project) -> VoiceoverStyleReferences:
-    return VoiceoverStyleReferences(project_id=project.id)
+    """Ausgangswerte: Sprachstandard falls vorhanden, sonst leere Referenzen."""
+    refs = VoiceoverStyleReferences(project_id=project.id)
+    defaults = load_language_style_defaults(project.language)
+    if defaults is None:
+        return refs
+    return apply_language_defaults_to_refs(refs, defaults)
+
+
+def apply_language_style_defaults_to_project(project: Project) -> VoiceoverStyleReferences:
+    """Schreibt den Sprachstandard in das Projekt (Referenzen und ggf. Profile)."""
+    defaults = load_language_style_defaults(project.language)
+    refs = VoiceoverStyleReferences(project_id=project.id)
+    if defaults is not None:
+        refs = apply_language_defaults_to_refs(refs, defaults)
+    saved = save_style_references(project, refs)
+    if (
+        defaults is not None
+        and defaults.style_profile is not None
+        and not is_raw_style_mode(saved)
+    ):
+        from otio_app.services.voiceover_generation.style_profile_service import (
+            save_style_profile,
+        )
+
+        save_style_profile(project, defaults.style_profile)
+    return saved
 
 
 def normalize_style_mode(style_mode: str | None) -> str:

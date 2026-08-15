@@ -25,7 +25,14 @@ from otio_app.services.voiceover_generation.models import (
     VoiceoverGenerationModelSettings,
     VoiceoverStyleReferences,
 )
+from otio_app.services.voiceover_generation.project_brief_defaults_service import (
+    normalize_brief_language,
+)
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
+from otio_app.services.voiceover_generation.style_reference_defaults_service import (
+    load_language_style_defaults,
+    save_language_style_defaults,
+)
 from otio_app.services.voiceover_generation.raw_style_library_service import (
     delete_raw_from_library,
     get_raw_from_library,
@@ -46,6 +53,7 @@ from otio_app.services.voiceover_generation.style_profile_service import (
     save_style_profile,
 )
 from otio_app.services.voiceover_generation.style_reference_service import (
+    apply_language_style_defaults_to_project,
     is_allowed_upload_filename,
     is_raw_style_mode,
     load_style_references,
@@ -100,6 +108,38 @@ def _apply_refs_to_session(project_id: str, refs: VoiceoverStyleReferences) -> N
         st.session_state[_ref_key(project_id, "intro", index)] = text
     for index, text in enumerate(_padded(refs.segment_reference_texts)):
         st.session_state[_ref_key(project_id, "segment", index)] = text
+
+
+def _render_language_standard_buttons(
+    project: Project, lang_key: str, *, has_language_default: bool
+) -> tuple[bool, bool]:
+    col_lang, col_reset = st.columns(2)
+    with col_lang:
+        lang_save_clicked = st.button(
+            f"Als Standard für {lang_key} speichern",
+            key=f"vo_style_save_lang_{project.id}",
+            help=(
+                f"Modus, Referenzen und Raw-Texte global für {lang_key}. "
+                "Im Profile-Modus wird das aktuelle Style Profile mitgespeichert. "
+                "Uploads bleiben projektspezifisch."
+            ),
+        )
+    with col_reset:
+        reset_label = (
+            f"Auf {lang_key}-Standard zurück"
+            if has_language_default
+            else "Auf Standard zurücksetzen"
+        )
+        reset_clicked = st.button(
+            reset_label,
+            key=f"vo_style_reset_lang_{project.id}",
+            disabled=not has_language_default,
+            help=(
+                f"Lädt den globalen {lang_key}-Standard in dieses Projekt "
+                "(Referenzen und ggf. Style Profile)."
+            ),
+        )
+    return lang_save_clicked, reset_clicked
 
 
 def _schedule_refs_reload_from_disk(project_id: str) -> None:
@@ -385,6 +425,24 @@ def render_style_references_page() -> None:
         _apply_refs_to_session(project.id, load_style_references(project))
         st.session_state[loaded_key] = True
 
+    lang_key = normalize_brief_language(project.language)
+    language_defaults = load_language_style_defaults(lang_key)
+    has_language_default = language_defaults is not None
+    if has_language_default:
+        extra = (
+            " inkl. Style Profile"
+            if language_defaults.style_profile is not None
+            else ""
+        )
+        st.caption(
+            f"Projektsprache **{lang_key}**: ein Sprachstandard ist gespeichert{extra}."
+        )
+    else:
+        st.caption(
+            f"Projektsprache **{lang_key}**: noch kein Style-Standard. "
+            "Unten als Standard speichern, dann gilt er für neue Projekte dieser Sprache."
+        )
+
     st.subheader("Stil-Quelle")
     selected_mode = st.radio(
         "Wie soll der Stil an die späteren LLM-Schritte gehen?",
@@ -440,6 +498,9 @@ def render_style_references_page() -> None:
             key=f"vo_style_refs_save_{project.id}",
         )
         build_clicked = False
+        lang_save_clicked, reset_clicked = _render_language_standard_buttons(
+            project, lang_key, has_language_default=has_language_default
+        )
         _render_raw_style_library(
             project, raw_text=raw_text, raw_intro_text=raw_intro_text
         )
@@ -492,6 +553,9 @@ def render_style_references_page() -> None:
             render_llm_input_info(LLM_INPUT_INFO["style_profile"])
             if existing_profile_before_click is not None:
                 st.caption("Ersetzt das aktuell gespeicherte Style Profile dieses Projekts.")
+        lang_save_clicked, reset_clicked = _render_language_standard_buttons(
+            project, lang_key, has_language_default=has_language_default
+        )
 
     current_refs = VoiceoverStyleReferences(
         project_id=project.id,
@@ -519,6 +583,24 @@ def render_style_references_page() -> None:
         )
         with st.expander("JSON-Vorschau"):
             st.json(saved.model_dump(mode="json"))
+
+    if lang_save_clicked:
+        profile = None
+        if not is_raw_style_mode(current_refs):
+            profile = load_style_profile(project)
+        save_language_style_defaults(lang_key, current_refs, style_profile=profile)
+        save_style_references(project, current_refs)
+        extra = " und Style Profile" if profile is not None else ""
+        st.success(
+            f"Als globaler Standard für **{lang_key}** gespeichert "
+            f"(Referenzen{extra} — nicht die Uploads)."
+        )
+        st.rerun()
+
+    if reset_clicked:
+        apply_language_style_defaults_to_project(project)
+        _schedule_refs_reload_from_disk(project.id)
+        st.rerun()
 
     if build_clicked:
         # Aktuelle Formularwerte zuerst speichern, damit das Style Profile immer

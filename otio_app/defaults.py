@@ -116,6 +116,9 @@ ELEVENLABS_VOICE_DEFAULTS_FILENAME = "elevenlabs_voice_defaults.json"
 # Globale Project-Brief-Defaults pro Sprache unter data/.
 PROJECT_BRIEF_DEFAULTS_FILENAME = "project_brief_defaults.json"
 PROJECT_BRIEF_TITLE_REFERENCE_SLOTS = 3
+# Globale Style-Reference-Defaults pro Sprache unter data/.
+STYLE_REFERENCE_DEFAULTS_FILENAME = "style_reference_defaults.json"
+STYLE_REFERENCE_DEFAULT_SLOTS = 3
 VOICEOVER_AUDIO_MANIFEST_FILENAME = "voiceover_audio_manifest.json"
 VOICEOVER_AUDIO_QA_REPORT_FILENAME = "voiceover_audio_qa_report.json"
 CONFIRMED_VOICEOVER_PROJECT_PLAN_FILENAME = "confirmed_voiceover_project_plan.json"
