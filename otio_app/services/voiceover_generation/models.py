@@ -18,6 +18,7 @@ from otio_app.defaults import (
     BRIEF_NEGATIVE_RULE_LABELS,
     BRIEF_TONE_TAG_CHOICES,
     DEFAULT_NEGATIVE_RULE_FLAGS,
+    DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST,
     DRAMATURGY_ROLE_LABELS,
     DRAMATURGY_ROLES,
     DRAMATURGY_STATUS_CONFIRMED,
@@ -74,10 +75,12 @@ __all__ = [
     "BRIEF_NEGATIVE_RULE_LABELS",
     "BRIEF_TONE_TAG_CHOICES",
     "DEFAULT_NEGATIVE_RULE_FLAGS",
+    "DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST",
     "DRAMATURGY_ROLE_LABELS",
     "DRAMATURGY_ROLES",
     "DRAMATURGY_STATUS_CONFIRMED",
     "DRAMATURGY_STATUS_DRAFT",
+    "DramaturgyDefaults",
     "ENERGY_CHOICES",
     "ENERGY_LABELS",
     "FACTUALITY_MODE_CHOICES",
@@ -451,6 +454,12 @@ class DramaturgyPlan(BaseModel):
     # Wenn True: Craft-Flags (Übergang/Rückbezug/Kontrast/…) bleiben aus —
     # kein Legacy-Hint-Fallback in Folder-Voice-over-Settings.
     craft_flags_disabled: bool = False
+
+
+class DramaturgyDefaults(BaseModel):
+    """Globaler Dramaturgie-Standard — gilt für den automatischen Durchlauf."""
+
+    planning_mode: str = DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST
 
 
 # --- Phase 4: Folder Voice-overs ---

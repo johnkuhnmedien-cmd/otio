@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from otio_app.defaults import (
-    DRAMATURGY_PLANNING_MODE_VARIETY,
     DRAMATURGY_ROLE_CONTRAST,
     DRAMATURGY_ROLE_SETUP,
     DRAMATURGY_ROLES,
@@ -543,12 +542,17 @@ def build_dramaturgy_plan(
     planning_mode steuert die Prompt-Strategie:
     - geography: Reihenfolge primär nach Geographie / Reiseverlauf
     - variety: Reihenfolge primär nach Abwechslung / Kontrast
+    - spectacle_first: visuell stärkste Orte zuerst (Default / Auto-Lauf)
 
     max_output_tokens/disable_thinking erlauben es, für sehr umfangreiche
     Projekte (viele Ordner) das Output-Token-Limit gezielt zu erhöhen bzw. das
     interne "Thinking" des Modells abzuschalten, falls die Antwort sonst bei
     max_tokens abgeschnitten wird (siehe plan_llm_client.PlanLlmTruncatedResponseError)."""
-    resolved_mode = (planning_mode or DRAMATURGY_PLANNING_MODE_VARIETY).strip().lower()
+    from otio_app.services.voiceover_generation.dramaturgy_defaults_service import (
+        resolve_dramaturgy_planning_mode,
+    )
+
+    resolved_mode = resolve_dramaturgy_planning_mode(planning_mode)
 
     project_brief = load_project_brief(project)
     style_profile = load_style_profile(project)

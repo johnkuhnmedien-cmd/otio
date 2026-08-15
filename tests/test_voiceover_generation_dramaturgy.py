@@ -202,8 +202,14 @@ def test_build_dramaturgy_plan_passes_disable_thinking_through(tmp_path: Path) -
     assert mock_generate.call_args.kwargs["max_output_tokens"] is None
 
 
-def test_build_dramaturgy_plan_default_kwargs_unchanged(tmp_path: Path) -> None:
-    """Ohne explizite Parameter: variety-Mode, max_output_tokens=None, disable_thinking=False."""
+def test_build_dramaturgy_plan_default_kwargs_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ohne explizite Parameter: spectacle_first, max_output_tokens=None, disable_thinking=False."""
+    monkeypatch.setattr(
+        "otio_app.services.voiceover_generation.dramaturgy_defaults_service.ensure_data_dir",
+        lambda: tmp_path / "data",
+    )
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
     with (
         patch(
@@ -216,7 +222,7 @@ def test_build_dramaturgy_plan_default_kwargs_unchanged(tmp_path: Path) -> None:
 
     assert mock_generate.call_args.kwargs["max_output_tokens"] is None
     assert mock_generate.call_args.kwargs["disable_thinking"] is False
-    assert mock_prompt.call_args.kwargs["planning_mode"] == "variety"
+    assert mock_prompt.call_args.kwargs["planning_mode"] == "spectacle_first"
 
     loaded = load_dramaturgy_draft(project)
     assert loaded is not None

@@ -444,6 +444,10 @@ DRAMATURGY_PLANNING_MODE_LABELS = {
         "Visuell stärkste Orte zuerst planen"
     ),
 }
+# Automatischer Durchlauf und Aufrufe ohne expliziten Modus.
+DRAMATURGY_PLANNING_MODE_DEFAULT = DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST
+# Globaler Dramaturgie-Standard unter data/ (nicht pro Sprache).
+DRAMATURGY_DEFAULTS_FILENAME = "dramaturgy_defaults.json"
 
 # --- Folder Voice-overs (Phase 4) ---
 MAX_VOICEOVER_REVIEW_ATTEMPTS = 3

@@ -240,6 +240,16 @@ def test_dramaturgy_prompt_variety_mode_contains_variety_instructions() -> None:
     assert "narrative interest" in prompt
 
 
+def test_dramaturgy_prompt_default_mode_is_spectacle_first() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=_sample_folder_summaries(),
+    )
+    assert "SPECTACLE FIRST" in prompt
+    assert "MAXIMUM VARIETY" not in prompt
+
+
 def test_dramaturgy_prompt_spectacle_first_mode_contains_wow_instructions() -> None:
     prompt = build_dramaturgy_prompt(
         project_brief=_sample_brief(),

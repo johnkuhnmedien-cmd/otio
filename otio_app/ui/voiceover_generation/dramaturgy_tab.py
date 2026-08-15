@@ -10,6 +10,9 @@ from otio_app.defaults import (
     DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST,
     DRAMATURGY_PLANNING_MODE_VARIETY,
 )
+from otio_app.services.voiceover_generation.dramaturgy_defaults_service import (
+    auto_run_dramaturgy_planning_mode,
+)
 from otio_app.models import Project
 from otio_app.project_layout import (
     get_dramaturgy_plan_confirmed_path,
@@ -316,12 +319,19 @@ def render_dramaturgy_page() -> None:
     max_output_tokens = _render_max_tokens_slider(
         project, provider=provider, model=model
     )
+    auto_mode = auto_run_dramaturgy_planning_mode()
+    st.info(
+        "Automatischer Durchlauf nutzt **"
+        f"{DRAMATURGY_PLANNING_MODE_LABELS[auto_mode]}** "
+        "(globaler Standard)."
+    )
     col_geo, col_variety, col_spectacle = st.columns(3)
     with col_geo:
         geo_clicked = st.button(
             DRAMATURGY_PLANNING_MODE_LABELS[DRAMATURGY_PLANNING_MODE_GEOGRAPHY],
             disabled=not can_plan,
             key=f"vo_dramaturgy_plan_geography_{project.id}",
+            type="primary" if auto_mode == DRAMATURGY_PLANNING_MODE_GEOGRAPHY else "secondary",
         )
         st.caption(
             "Reihenfolge primär nach Geographie / sinnvollem Reiseverlauf. "
@@ -332,6 +342,7 @@ def render_dramaturgy_page() -> None:
             DRAMATURGY_PLANNING_MODE_LABELS[DRAMATURGY_PLANNING_MODE_VARIETY],
             disabled=not can_plan,
             key=f"vo_dramaturgy_plan_variety_{project.id}",
+            type="primary" if auto_mode == DRAMATURGY_PLANNING_MODE_VARIETY else "secondary",
         )
         st.caption(
             "Reihenfolge für maximale Abwechslung und Kontraste zwischen Kapiteln. "
@@ -342,10 +353,17 @@ def render_dramaturgy_page() -> None:
             DRAMATURGY_PLANNING_MODE_LABELS[DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST],
             disabled=not can_plan,
             key=f"vo_dramaturgy_plan_spectacle_{project.id}",
+            type="primary" if auto_mode == DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST else "secondary",
+        )
+        spectacle_note = (
+            "Globaler Standard für den automatischen Durchlauf. "
+            if auto_mode == DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST
+            else ""
         )
         st.caption(
             "Visuell schönste und spannendste Orte abwechslungsreich am Anfang; "
             "bekanntere, weniger verblüffende Orte zum Ende. "
+            f"{spectacle_note}"
             f"Aktuelles Limit: max_tokens={max_output_tokens:,}."
         )
 

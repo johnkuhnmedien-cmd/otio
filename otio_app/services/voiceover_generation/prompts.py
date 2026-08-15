@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from otio_app.defaults import (
     BRIEF_NEGATIVE_RULE_INSTRUCTIONS,
+    DRAMATURGY_PLANNING_MODE_DEFAULT,
     DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
     DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST,
-    DRAMATURGY_PLANNING_MODE_VARIETY,
     PAUSE_AFTER_CHOICES,
     SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION,
     SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT,
@@ -272,7 +272,7 @@ def _folder_summary_block(summary: FolderInventorySummary) -> str:
 
 
 def _dramaturgy_planning_mode_task_block(planning_mode: str) -> str:
-    mode = (planning_mode or DRAMATURGY_PLANNING_MODE_VARIETY).strip().lower()
+    mode = (planning_mode or DRAMATURGY_PLANNING_MODE_DEFAULT).strip().lower()
     if mode == DRAMATURGY_PLANNING_MODE_GEOGRAPHY:
         return """## Planning mode: GEOGRAPHY FIRST
 Order the chapters primarily by GEOGRAPHY and a coherent travel journey:
@@ -338,13 +338,13 @@ def build_dramaturgy_prompt(
     `planning_mode`: "geography" (Reise/Geographie zuerst), "variety"
     (Abwechslung/Kontrast zuerst) oder "spectacle_first" (visuell stärkste /
     überraschendste Orte früh, bekanntere weniger verblüffende Orte zum Ende).
-    Default: variety.
+    Default: spectacle_first (automatischer Durchlauf).
 
     `style_context_text`: optional vorformatierter Stilblock (z. B. Raw Text).
     """
     del model_settings
 
-    resolved_mode = (planning_mode or DRAMATURGY_PLANNING_MODE_VARIETY).strip().lower()
+    resolved_mode = (planning_mode or DRAMATURGY_PLANNING_MODE_DEFAULT).strip().lower()
 
     tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
     active_negative_rules = _active_negative_rules_block(project_brief)
