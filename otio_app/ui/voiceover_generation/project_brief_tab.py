@@ -55,6 +55,54 @@ def _ref_key(project_id: str, index: int) -> str:
     return _key(project_id, f"title_ref_{index}")
 
 
+def _pending_title_key(project_id: str) -> str:
+    return _key(project_id, "pending_title")
+
+
+def _pending_brief_key(project_id: str) -> str:
+    return _key(project_id, "pending_brief")
+
+
+def _flash_key(project_id: str) -> str:
+    return _key(project_id, "flash")
+
+
+def _queue_pending_title(project_id: str, title: str, *, flash: str | None = None) -> None:
+    """Queue a title write for the next run — never after the text_input exists."""
+    st.session_state[_pending_title_key(project_id)] = title
+    if flash:
+        st.session_state[_flash_key(project_id)] = ("success", flash)
+
+
+def _queue_pending_brief(project_id: str, brief: ProjectBrief) -> None:
+    st.session_state[_pending_brief_key(project_id)] = brief
+
+
+def _hydrate_brief_session(project: Project) -> None:
+    """Apply queued widget updates before any brief widgets are instantiated.
+
+    Streamlit forbids writing a widget-bound session_state key after that
+    widget exists in the same run (``Videotitel erzeugen``, Neu laden, Reset).
+    """
+    pending_brief = st.session_state.pop(_pending_brief_key(project.id), None)
+    if isinstance(pending_brief, ProjectBrief):
+        _apply_brief_to_session(project.id, pending_brief)
+    elif _key(project.id, "video_title") not in st.session_state:
+        _apply_brief_to_session(project.id, load_project_brief(project))
+
+    pending_title = st.session_state.pop(_pending_title_key(project.id), None)
+    if pending_title is not None:
+        st.session_state[_key(project.id, "video_title")] = str(pending_title)
+
+    flash = st.session_state.pop(_flash_key(project.id), None)
+    if flash:
+        level, text = flash if isinstance(flash, tuple) else ("success", flash)
+        if level == "error":
+            st.error(text)
+        else:
+            st.success(text)
+
+
 def _apply_brief_to_session(project_id: str, brief: ProjectBrief) -> None:
     st.session_state[_key(project_id, "video_title")] = brief.video_title
     st.session_state[_key(project_id, "language")] = brief.language
@@ -122,8 +170,7 @@ def render_project_brief_page() -> None:
         return
 
     title_key = _key(project.id, "video_title")
-    if title_key not in st.session_state:
-        _apply_brief_to_session(project.id, load_project_brief(project))
+    _hydrate_brief_session(project)
 
     video_place = (project.video_place or "").strip()
     if video_place:
@@ -186,8 +233,11 @@ def render_project_brief_page() -> None:
                 model=model,
             )
         if result.status == STATUS_PASS and result.title:
-            st.session_state[title_key] = result.title
-            st.success(f"Titel: {result.title}")
+            _queue_pending_title(
+                project.id,
+                result.title,
+                flash=f"Titel: {result.title}",
+            )
             st.rerun()
         else:
             st.error(result.error or "Titel-Erzeugung fehlgeschlagen.")
@@ -261,7 +311,7 @@ def render_project_brief_page() -> None:
         reset_clicked = st.button(reset_label, key=f"vo_brief_reset_{project.id}")
 
     if reload_clicked:
-        _apply_brief_to_session(project.id, load_project_brief(project))
+        _queue_pending_brief(project.id, load_project_brief(project))
         st.rerun()
 
     if reset_clicked:
@@ -275,7 +325,7 @@ def render_project_brief_page() -> None:
             reset_brief = apply_language_defaults_to_brief(
                 reset_brief, language_defaults, keep_title=True
             )
-        _apply_brief_to_session(project.id, reset_brief)
+        _queue_pending_brief(project.id, reset_brief)
         st.rerun()
 
     draft = _brief_from_widgets(

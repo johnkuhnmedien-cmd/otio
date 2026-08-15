@@ -10,8 +10,21 @@ import streamlit as st
 
 from otio_app.models import Project, ProjectMode
 from otio_app.services.voiceover_generation import project_brief_defaults_service
+from otio_app.services.voiceover_generation.llm_trace_service import STATUS_PASS
+from otio_app.services.voiceover_generation.video_title_service import (
+    VideoTitleGenerateResult,
+)
 from otio_app.ui import project_context
+from otio_app.ui.voiceover_generation import project_brief_tab
 from otio_app.ui.voiceover_generation.project_brief_tab import render_project_brief_page
+
+_fake_title = os.environ.get("REPRO_FAKE_TITLE", "").strip()
+if _fake_title:
+
+    def _fake_generate_video_title(*_args, **_kwargs):
+        return VideoTitleGenerateResult(status=STATUS_PASS, title=_fake_title)
+
+    project_brief_tab.generate_video_title = _fake_generate_video_title
 
 root = Path(os.environ["REPRO_ROOT"])
 _global_data = root / "global_data"

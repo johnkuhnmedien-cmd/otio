@@ -82,6 +82,22 @@ def test_ui_forbidden_phrases_and_freetext_have_help_text(tmp_path: Path, monkey
     assert text_areas_by_label["Globaler Zusatzprompt"].help
 
 
+def test_generate_title_fills_field_without_session_state_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REPRO_FAKE_TITLE", "As maravilhas da Grécia")
+    at = _run_repro(tmp_path, monkeypatch)
+    ref = next(field for field in at.text_input if field.label == "Referenz-Titel 1")
+    at = ref.set_value("As maravilhas de Itália").run()
+    assert not at.exception, at.exception
+    generate = next(button for button in at.button if button.label == "Videotitel erzeugen")
+    at = generate.click().run()
+    assert not at.exception, at.exception
+    title = next(field for field in at.text_input if field.label == "Video-Titel")
+    assert title.value == "As maravilhas da Grécia"
+    assert any("Titel: As maravilhas da Grécia" in str(item.value) for item in at.success)
+
+
 def test_save_persists_new_negative_rule_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from otio_app.models import Project, ProjectMode
     from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
