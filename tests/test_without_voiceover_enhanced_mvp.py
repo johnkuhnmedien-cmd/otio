@@ -1082,6 +1082,9 @@ def test_revision_prompt_contains_only_instructions_and_script() -> None:
     assert "The canyon glows red at dusk." in prompt
     assert "[pause 3 seconds]" in prompt
     assert "copy 1:1" in prompt.lower() or "Keep every such marker exactly" in prompt
+    assert "SPOKEN NUMBERS" in prompt
+    assert "Arabic digits" in prompt
+    assert "do not spell those out" in prompt
     assert "Antelope Canyon" in prompt
     assert "Project Brief" not in prompt
     assert "DRAMATURGY" not in prompt
@@ -1231,6 +1234,8 @@ def test_default_revision_instructions_mention_pause_tags() -> None:
     text = DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS
     assert "more human" in text
     assert "pause tags" in text
+    assert "Spell out every number" in text
+    assert "1879" in text
     assert "AI Detectors" in text
 
 
@@ -1259,6 +1264,8 @@ def test_folder_script_prompt_binds_to_dramaturgy_chapter() -> None:
     assert "silent orientation only" in prompt
     assert "transition to next: FORBIDDEN" in prompt
     assert "THIS CHAPTER DRAMATURGY:" in prompt
+    assert "SPOKEN NUMBERS" in prompt
+    assert "never Arabic digits" in prompt
     assert "LOCAL ASSETS" not in prompt
     assert "visual_intents" not in prompt
     for phrase in FORBIDDEN_PHRASES:

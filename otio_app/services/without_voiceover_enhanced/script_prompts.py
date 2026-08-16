@@ -190,6 +190,14 @@ RULES FOR SEGMENTS
 - Write spoken narration only — no shot lists, asset IDs, or visual editing plans.
 - Optional paragraph_break_after=true marks a natural factual/topic beat boundary (not a spoken pause label).
 - Timed pauses use author_pause_after_seconds (0..8). Never write [pause X seconds] into segment.text.
+
+SPOKEN NUMBERS
+- In spoken narration, write every number as words in LANGUAGE — never Arabic digits.
+- This includes years, quantities, ordinals, centuries, and measurements
+  (1879 → "eighteen seventy-nine" / "achtzehnhundertneunundsiebzig";
+   5 → "five" / "fünf"; 19th → "nineteenth" / "neunzehnten").
+- Do not write forms such as 1879, 5, or 19th in narration_full or segment.text.
+- JSON numeric fields (sequence_index, author_pause_after_seconds) stay numbers.
 """
 
 _DEFAULT_DOCUMENTARY_STYLE_RULES = """\
@@ -327,6 +335,8 @@ VERIFIED FACTS / METADATA (only these may be stated as facts):
 DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS = (
     "change the text so it sounds more human. "
     "Keep the structure and the pause tags in brackets. "
+    "Spell out every number in the spoken text as words in the script language "
+    "(years, counts, ordinals) — never leave digits such as 1879. "
     "It must not be detected by AI Detectors."
 )
 
@@ -359,6 +369,11 @@ PAUSE MARKERS — copy 1:1:
 - Do NOT write bare [pause] without a duration.
 - Do NOT invent new pause markers unless the editor instructions explicitly ask for them.
 - Only rewrite the spoken prose between those markers.
+
+SPOKEN NUMBERS (BINDING):
+- In the spoken prose between pause markers, write every number as words in LANGUAGE.
+- Never leave Arabic digits in the spoken lines (years, counts, ordinals, measurements).
+- Pause marker lines such as [pause 5 seconds] keep their digits exactly — do not spell those out.
 
 Return ONLY the revised narration as plain text, including the preserved [pause N seconds] lines.
 No JSON, no markdown code fences, no commentary, no bullet lists of notes.
