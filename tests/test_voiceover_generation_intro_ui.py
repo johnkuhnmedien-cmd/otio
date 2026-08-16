@@ -98,6 +98,89 @@ def test_page_guards_with_voiceover_project(
     assert not (project.language_work_dir_path / "voiceover_generation").exists()
 
 
+def test_intro_ui_shows_language_standard_buttons(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    data_dir = tmp_path / "global_data"
+    data_dir.mkdir()
+    monkeypatch.setattr(
+        "otio_app.services.voiceover_generation.intro_hook_defaults_service.ensure_data_dir",
+        lambda: data_dir,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.voiceover_generation.project_brief_defaults_service.ensure_data_dir",
+        lambda: data_dir,
+    )
+    monkeypatch.setenv("REPRO_ROOT", str(tmp_path))
+    monkeypatch.setenv("REPRO_PROJECT_ID", "intro-lang-std")
+    monkeypatch.setenv(
+        "REPRO_RENDER_FUNCTION",
+        "otio_app.ui.voiceover_generation.intro_tab:render_intro_page",
+    )
+    monkeypatch.setenv("REPRO_SETUP", "none")
+    monkeypatch.delenv("REPRO_STYLE_PROFILE_LIBRARY_NAME", raising=False)
+
+    at = AppTest.from_file(
+        str(Path(__file__).parent / "_apptest_scripts" / "voiceover_gen_model_settings_repro.py")
+    )
+    at.run()
+    assert not at.exception, at.exception
+    button_labels = {button.label for button in at.button}
+    assert any("Als Standard für" in label for label in button_labels)
+    assert any("Standard zurück" in label for label in button_labels)
+    captions = " ".join(caption.value for caption in at.caption)
+    assert "Projektsprache" in captions
+
+
+def test_save_language_standard_from_intro_ui(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    data_dir = tmp_path / "global_data"
+    data_dir.mkdir()
+    monkeypatch.setattr(
+        "otio_app.services.voiceover_generation.intro_hook_defaults_service.ensure_data_dir",
+        lambda: data_dir,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.voiceover_generation.project_brief_defaults_service.ensure_data_dir",
+        lambda: data_dir,
+    )
+    monkeypatch.setenv("REPRO_ROOT", str(tmp_path))
+    monkeypatch.setenv("REPRO_PROJECT_ID", "intro-lang-save")
+    monkeypatch.setenv(
+        "REPRO_RENDER_FUNCTION",
+        "otio_app.ui.voiceover_generation.intro_tab:render_intro_page",
+    )
+    monkeypatch.setenv("REPRO_SETUP", "none")
+    monkeypatch.delenv("REPRO_STYLE_PROFILE_LIBRARY_NAME", raising=False)
+
+    at = AppTest.from_file(
+        str(Path(__file__).parent / "_apptest_scripts" / "voiceover_gen_model_settings_repro.py")
+    )
+    at.run()
+    assert not at.exception, at.exception
+    freeform = next(
+        area for area in at.text_area if area.label == "Freitext-Regel für das LLM"
+    )
+    at = freeform.set_value("Números sempre por extenso.").run()
+    assert not at.exception, at.exception
+    save_lang = next(button for button in at.button if "Als Standard für" in button.label)
+    at = save_lang.click().run()
+    assert not at.exception, at.exception
+
+    from otio_app.services.voiceover_generation.intro_hook_defaults_service import (
+        load_language_intro_defaults,
+    )
+
+    loaded = load_language_intro_defaults("DE")
+    assert loaded is not None
+    assert loaded.freeform_rule_for_llm == "Números sempre por extenso."
+
+
 def test_page_renders_when_all_active_folders_confirmed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

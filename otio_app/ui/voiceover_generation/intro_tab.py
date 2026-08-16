@@ -23,17 +23,25 @@ from otio_app.services.voiceover_generation.intro_hook_service import (
 from otio_app.services.voiceover_generation.prompts import (
     DEFAULT_INTRO_HOOK_REVISION_INSTRUCTIONS,
 )
+from otio_app.services.voiceover_generation.intro_hook_defaults_service import (
+    apply_language_defaults_to_settings,
+    load_language_intro_defaults,
+    save_language_intro_defaults,
+)
 from otio_app.services.voiceover_generation.intro_hook_settings_service import (
     default_intro_hook_settings,
     load_intro_hook_settings,
     save_intro_hook_settings,
+)
+from otio_app.services.voiceover_generation.project_brief_defaults_service import (
+    normalize_brief_language,
 )
 from otio_app.services.voiceover_generation.llm_trace_service import STATUS_PASS
 from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
     save_model_settings,
 )
-from otio_app.services.voiceover_generation.models import IntroHookCandidate
+from otio_app.services.voiceover_generation.models import IntroHookCandidate, IntroHookSettings
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
 from otio_app.ui.project_context import render_project_selector
@@ -128,92 +136,208 @@ def _render_prerequisites(project: Project) -> bool:
     return True
 
 
+def _intro_settings_keys(project_id: str) -> dict[str, str]:
+    return {
+        "target_words": f"vo_intro_target_words_{project_id}",
+        "tolerance": f"vo_intro_tolerance_{project_id}",
+        "tone": f"vo_intro_tone_{project_id}",
+        "allow_questions": f"vo_intro_allow_q_{project_id}",
+        "allow_strong_claim": f"vo_intro_allow_claim_{project_id}",
+        "allow_direct_place_name": f"vo_intro_allow_place_{project_id}",
+        "allow_tease_multiple_places": f"vo_intro_allow_tease_{project_id}",
+        "freeform_rule": f"vo_intro_freeform_{project_id}",
+        "forbidden_phrases": f"vo_intro_forbidden_{project_id}",
+        "must_include": f"vo_intro_must_include_{project_id}",
+        "must_avoid": f"vo_intro_must_avoid_{project_id}",
+    }
+
+
+def _pending_intro_settings_key(project_id: str) -> str:
+    return f"vo_intro_settings_pending_{project_id}"
+
+
+def _split_csv(text: str) -> list[str]:
+    return [item.strip() for item in (text or "").split(",") if item.strip()]
+
+
+def _split_lines(text: str) -> list[str]:
+    return [line.strip() for line in (text or "").splitlines() if line.strip()]
+
+
+def apply_intro_settings_to_session(project_id: str, settings: IntroHookSettings) -> None:
+    """Nur aufrufen, BEVOR die zugehörigen Widgets in diesem Run instanziert werden."""
+    keys = _intro_settings_keys(project_id)
+    st.session_state[keys["target_words"]] = settings.target_words
+    st.session_state[keys["tolerance"]] = settings.word_tolerance_percent
+    st.session_state[keys["tone"]] = settings.tone
+    st.session_state[keys["allow_questions"]] = settings.allow_questions
+    st.session_state[keys["allow_strong_claim"]] = settings.allow_strong_claim
+    st.session_state[keys["allow_direct_place_name"]] = settings.allow_direct_place_name
+    st.session_state[keys["allow_tease_multiple_places"]] = settings.allow_tease_multiple_places
+    st.session_state[keys["freeform_rule"]] = settings.freeform_rule_for_llm
+    st.session_state[keys["forbidden_phrases"]] = "\n".join(settings.forbidden_phrases)
+    st.session_state[keys["must_include"]] = ", ".join(settings.must_include)
+    st.session_state[keys["must_avoid"]] = ", ".join(settings.must_avoid)
+
+
+def _hydrate_intro_settings(project: Project) -> None:
+    pending = st.session_state.pop(_pending_intro_settings_key(project.id), None)
+    if isinstance(pending, IntroHookSettings):
+        apply_intro_settings_to_session(project.id, pending)
+        return
+    keys = _intro_settings_keys(project.id)
+    if keys["target_words"] not in st.session_state:
+        apply_intro_settings_to_session(project.id, load_intro_hook_settings(project))
+
+
+def _settings_from_widgets(
+    project: Project,
+    *,
+    target_words: int,
+    tolerance: int,
+    tone: str,
+    freeform_rule: str,
+    forbidden_phrases_text: str,
+    allow_questions: bool,
+    allow_strong_claim: bool,
+    allow_direct_place_name: bool,
+    allow_tease_multiple_places: bool,
+    must_include_text: str,
+    must_avoid_text: str,
+) -> IntroHookSettings:
+    return IntroHookSettings(
+        project_id=project.id,
+        language=normalize_brief_language(project.language),
+        target_words=int(target_words),
+        word_tolerance_percent=int(tolerance),
+        tone=tone,
+        freeform_rule_for_llm=freeform_rule,
+        forbidden_phrases=_split_lines(forbidden_phrases_text),
+        allow_questions=allow_questions,
+        allow_strong_claim=allow_strong_claim,
+        allow_direct_place_name=allow_direct_place_name,
+        allow_tease_multiple_places=allow_tease_multiple_places,
+        must_include=_split_csv(must_include_text),
+        must_avoid=_split_csv(must_avoid_text),
+    )
+
+
 def _render_settings_editor(project: Project) -> None:
-    settings = load_intro_hook_settings(project)
+    lang_key = normalize_brief_language(project.language)
+    has_language_default = load_language_intro_defaults(lang_key) is not None
+    _hydrate_intro_settings(project)
+    keys = _intro_settings_keys(project.id)
+
     st.subheader("Intro Settings")
+    st.caption(f"Projektsprache **{lang_key}**.")
 
     col1, col2, col3 = st.columns(3)
     with col1:
         target_words = st.number_input(
-            "Ziel-Wortanzahl", min_value=0, step=5, value=settings.target_words,
-            key=f"vo_intro_target_words_{project.id}",
+            "Ziel-Wortanzahl",
+            min_value=0,
+            step=5,
+            key=keys["target_words"],
         )
         tolerance = st.number_input(
-            "Toleranz (%)", min_value=0, max_value=100, step=5,
-            value=settings.word_tolerance_percent, key=f"vo_intro_tolerance_{project.id}",
+            "Toleranz (%)",
+            min_value=0,
+            max_value=100,
+            step=5,
+            key=keys["tolerance"],
             help="Min/Max-Wörter = Ziel ± diese Prozentzahl. Kein separates Min/Max-Feld.",
         )
         window_min, window_max = intro_word_window(int(target_words), int(tolerance))
         st.caption(f"Wortfenster: **{window_min}–{window_max}** (Ziel ± {int(tolerance)}%).")
     with col2:
-        tone = st.text_input("Tonalität", value=settings.tone, key=f"vo_intro_tone_{project.id}")
-        allow_questions = st.checkbox(
-            "Fragen erlaubt", value=settings.allow_questions, key=f"vo_intro_allow_q_{project.id}"
-        )
+        tone = st.text_input("Tonalität", key=keys["tone"])
+        allow_questions = st.checkbox("Fragen erlaubt", key=keys["allow_questions"])
         allow_strong_claim = st.checkbox(
-            "Starke These erlaubt", value=settings.allow_strong_claim,
-            key=f"vo_intro_allow_claim_{project.id}",
+            "Starke These erlaubt", key=keys["allow_strong_claim"]
         )
     with col3:
         allow_direct_place_name = st.checkbox(
-            "Ortsname direkt nennen erlaubt", value=settings.allow_direct_place_name,
-            key=f"vo_intro_allow_place_{project.id}",
+            "Ortsname direkt nennen erlaubt", key=keys["allow_direct_place_name"]
         )
         allow_tease_multiple_places = st.checkbox(
-            "Mehrere Orte anteasern erlaubt", value=settings.allow_tease_multiple_places,
-            key=f"vo_intro_allow_tease_{project.id}",
+            "Mehrere Orte anteasern erlaubt", key=keys["allow_tease_multiple_places"]
         )
 
     freeform_rule = st.text_area(
-        "Freitext-Regel für das LLM", value=settings.freeform_rule_for_llm,
-        key=f"vo_intro_freeform_{project.id}",
+        "Freitext-Regel für das LLM",
+        key=keys["freeform_rule"],
     )
     forbidden_phrases_text = st.text_area(
         "Verbotene Begriffe (eine pro Zeile)",
-        value="\n".join(settings.forbidden_phrases),
-        key=f"vo_intro_forbidden_{project.id}",
+        key=keys["forbidden_phrases"],
     )
     must_include_text = st.text_input(
-        "Muss enthalten (Komma-getrennt)", value=", ".join(settings.must_include),
-        key=f"vo_intro_must_include_{project.id}",
+        "Muss enthalten (Komma-getrennt)",
+        key=keys["must_include"],
     )
     must_avoid_text = st.text_input(
-        "Muss vermeiden (Komma-getrennt)", value=", ".join(settings.must_avoid),
-        key=f"vo_intro_must_avoid_{project.id}",
+        "Muss vermeiden (Komma-getrennt)",
+        key=keys["must_avoid"],
     )
 
-    col_save, col_defaults = st.columns(2)
+    draft = _settings_from_widgets(
+        project,
+        target_words=int(target_words),
+        tolerance=int(tolerance),
+        tone=tone,
+        freeform_rule=freeform_rule,
+        forbidden_phrases_text=forbidden_phrases_text,
+        allow_questions=allow_questions,
+        allow_strong_claim=allow_strong_claim,
+        allow_direct_place_name=allow_direct_place_name,
+        allow_tease_multiple_places=allow_tease_multiple_places,
+        must_include_text=must_include_text,
+        must_avoid_text=must_avoid_text,
+    )
+
+    col_save, col_lang, col_reset = st.columns(3)
     with col_save:
         if st.button("Intro Settings speichern", key=f"vo_intro_settings_save_{project.id}"):
-            updated = settings.model_copy(
-                update={
-                    "target_words": int(target_words),
-                    "word_tolerance_percent": int(tolerance),
-                    "tone": tone,
-                    "freeform_rule_for_llm": freeform_rule,
-                    "forbidden_phrases": [
-                        line.strip() for line in forbidden_phrases_text.splitlines() if line.strip()
-                    ],
-                    "allow_questions": allow_questions,
-                    "allow_strong_claim": allow_strong_claim,
-                    "allow_direct_place_name": allow_direct_place_name,
-                    "allow_tease_multiple_places": allow_tease_multiple_places,
-                    "must_include": [
-                        item.strip() for item in must_include_text.split(",") if item.strip()
-                    ],
-                    "must_avoid": [
-                        item.strip() for item in must_avoid_text.split(",") if item.strip()
-                    ],
-                }
-            )
-            save_intro_hook_settings(project, updated)
+            save_intro_hook_settings(project, draft)
             st.success("Intro Settings gespeichert.")
             st.rerun()
-    with col_defaults:
-        if st.button("Defaults aus Project Brief laden", key=f"vo_intro_settings_defaults_{project.id}"):
-            save_intro_hook_settings(project, default_intro_hook_settings(project))
-            st.success("Defaults aus Project Brief übernommen.")
+    with col_lang:
+        if st.button(
+            f"Als Standard für {lang_key} speichern",
+            key=f"vo_intro_settings_save_lang_{project.id}",
+            help=(
+                f"Wortziel, Tonalität, Freitext-Regel und Flags global für {lang_key}. "
+                "Erzeugte Intro-Varianten bleiben projektspezifisch."
+            ),
+        ):
+            save_language_intro_defaults(lang_key, draft)
+            save_intro_hook_settings(project, draft)
+            st.success(f"Als globaler Standard für **{lang_key}** gespeichert.")
             st.rerun()
+    with col_reset:
+        reset_label = (
+            f"Auf {lang_key}-Standard zurück"
+            if has_language_default
+            else "Auf Standard zurücksetzen"
+        )
+        if st.button(
+            reset_label,
+            key=f"vo_intro_settings_reset_{project.id}",
+            disabled=not has_language_default,
+            help=(
+                f"Lädt den globalen {lang_key}-Standard in dieses Projekt."
+                if has_language_default
+                else "Noch kein Sprachstandard gespeichert."
+            ),
+        ):
+            language_defaults = load_language_intro_defaults(lang_key)
+            if language_defaults is not None:
+                reset = apply_language_defaults_to_settings(
+                    default_intro_hook_settings(project), language_defaults
+                )
+                save_intro_hook_settings(project, reset)
+                st.session_state[_pending_intro_settings_key(project.id)] = reset
+                st.rerun()
 
 
 def _render_model_settings(project: Project) -> tuple[str, str]:
@@ -348,10 +472,10 @@ def render_intro_page() -> None:
 
     st.subheader("Voraussetzungen")
     can_generate = _render_prerequisites(project)
+    _render_settings_editor(project)
     if not can_generate:
         return
 
-    _render_settings_editor(project)
     provider, model = _render_model_settings(project)
 
     confirmed_hook = load_confirmed_intro_hook(project)

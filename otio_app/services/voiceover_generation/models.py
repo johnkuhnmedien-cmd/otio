@@ -131,6 +131,8 @@ __all__ = [
     "FolderVoiceoverValidationReport",
     "FolderVoiceoverValidationReportsDocument",
     "IntroHookSettings",
+    "IntroHookLanguageDefaults",
+    "IntroHookDefaultsDocument",
     "IntroHookVisualBeat",
     "IntroHookCandidate",
     "IntroHookCandidatesDocument",
@@ -747,6 +749,26 @@ class IntroHookSettings(BaseModel):
         self.min_words = min_words
         self.max_words = max_words
         return self
+
+
+class IntroHookLanguageDefaults(BaseModel):
+    """Sprachstandard für Intro Settings — ohne Projekt-ID und generierte Texte."""
+
+    target_words: int = INTRO_HOOK_DEFAULT_TARGET_WORDS
+    word_tolerance_percent: int = VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
+    tone: str = "cinematic"
+    freeform_rule_for_llm: str = ""
+    forbidden_phrases: list[str] = Field(default_factory=list)
+    allow_questions: bool = True
+    allow_strong_claim: bool = True
+    allow_direct_place_name: bool = True
+    allow_tease_multiple_places: bool = True
+    must_include: list[str] = Field(default_factory=list)
+    must_avoid: list[str] = Field(default_factory=list)
+
+
+class IntroHookDefaultsDocument(BaseModel):
+    by_language: dict[str, IntroHookLanguageDefaults] = Field(default_factory=dict)
 
 
 class IntroHookVisualBeat(BaseModel):

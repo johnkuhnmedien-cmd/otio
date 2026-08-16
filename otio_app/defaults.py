@@ -564,6 +564,8 @@ VO_ERROR_TYPES_ALL = VO_ERROR_TYPES_DETERMINISTIC + VO_ERROR_TYPES_LLM_REVIEW
 
 # --- Intro Hook (Phase 5) ---
 INTRO_HOOK_SETTINGS_FILENAME = "intro_hook_settings.json"
+# Globale Intro-Settings-Defaults pro Sprache unter data/.
+INTRO_HOOK_DEFAULTS_FILENAME = "intro_hook_defaults.json"
 INTRO_HOOK_DEFAULT_TARGET_WORDS = 70
 
 
