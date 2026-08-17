@@ -36,6 +36,7 @@ from otio_app.ui.without_voiceover_enhanced.final_output_tab import (
     render_enhanced_final_output_page,
 )
 from otio_app.ui.without_voiceover_enhanced.auto_run_ui import (
+    render_enhanced_auto_run_page,
     render_enhanced_auto_run_page_panel,
     render_enhanced_auto_run_sidebar,
 )
@@ -71,6 +72,7 @@ def _wrap_page(
     *,
     show_jobs_banner: bool = False,
     purge_mapping_on_enter: bool = False,
+    show_auto_run_panel: bool = True,
 ) -> Callable[[], None]:
     def wrapped() -> None:
         previous_page = st.session_state.get(_CURRENT_PAGE_KEY)
@@ -84,7 +86,7 @@ def _wrap_page(
         project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
         if show_jobs_banner and project_id:
             render_analysis_jobs_banner(project_id)
-        if project_id:
+        if show_auto_run_panel and project_id:
             project = get_project_by_id(str(project_id))
             if (
                 project is not None
@@ -259,6 +261,7 @@ def _build_without_voiceover_enhanced_pages(
         PAGE_ADOBE_IMPORT,
         PAGE_API_KEYS,
         PAGE_AUDIO,
+        PAGE_AUTO_RUN,
         PAGE_CLEAN_MEDIA,
         PAGE_CUT_PLAN_ENHANCED,
         PAGE_DRAMATURGY,
@@ -294,6 +297,15 @@ def _build_without_voiceover_enhanced_pages(
             _wrap_page(PAGE_ANALYSIS, render_project_workbench),
             title=PAGE_ANALYSIS,
             url_path="analysen",
+        ),
+        st.Page(
+            _wrap_page(
+                PAGE_AUTO_RUN,
+                render_enhanced_auto_run_page,
+                show_auto_run_panel=False,
+            ),
+            title=PAGE_AUTO_RUN,
+            url_path="auto-lauf",
         ),
         st.Page(
             _wrap_page(PAGE_PROJECT_BRIEF, render_project_brief_page),
@@ -401,6 +413,7 @@ def _run_legacy_pages(
         NAVIGATION_OPTIONS,
         PAGE_ADOBE_IMPORT,
         PAGE_AUDIO,
+        PAGE_AUTO_RUN,
         PAGE_CLEAN_MEDIA,
         PAGE_CUT_PLAN,
         PAGE_CUT_PLAN_ENHANCED,
@@ -458,6 +471,12 @@ def _run_legacy_pages(
         _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, show_jobs_banner=True)()
     elif page == PAGE_ANALYSIS:
         _wrap_page(PAGE_ANALYSIS, render_project_workbench)()
+    elif page == PAGE_AUTO_RUN:
+        _wrap_page(
+            PAGE_AUTO_RUN,
+            render_enhanced_auto_run_page,
+            show_auto_run_panel=False,
+        )()
     elif page == PAGE_MAPPING:
         _wrap_page(PAGE_MAPPING, render_voice_folder_mapping, show_jobs_banner=True)()
     elif page == PAGE_SUPPLEMENT:

@@ -518,3 +518,25 @@ def test_auto_run_job_completes_in_background(
     assert state is not None
     assert state.status == JobStatus.COMPLETED
     manager.dismiss(project.id)
+
+
+def test_auto_run_ui_exports_page_and_banner() -> None:
+    """Regression: page_panel darf banner nicht umbenennen und dann undefiniert aufrufen."""
+    from otio_app.ui.without_voiceover_enhanced import auto_run_ui as module
+
+    assert callable(module.render_enhanced_auto_run_banner)
+    assert callable(module.render_enhanced_auto_run_page)
+    assert callable(module.render_enhanced_auto_run_page_panel)
+    assert callable(module.render_enhanced_auto_run_embedded)
+
+
+def test_enhanced_navigation_includes_auto_run_page() -> None:
+    from otio_app.ui.navigation import (
+        PAGE_AUTO_RUN,
+        VOICEOVER_GEN_ENHANCED_NAVIGATION_OPTIONS,
+        VOICEOVER_GEN_NAVIGATION_OPTIONS,
+    )
+
+    assert PAGE_AUTO_RUN == "▶ Auto-Lauf"
+    assert PAGE_AUTO_RUN in VOICEOVER_GEN_ENHANCED_NAVIGATION_OPTIONS
+    assert PAGE_AUTO_RUN not in VOICEOVER_GEN_NAVIGATION_OPTIONS

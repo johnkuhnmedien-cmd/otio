@@ -30,15 +30,42 @@ def render_enhanced_auto_run_sidebar() -> None:
     render_language_standards_expander()
 
 
+def render_enhanced_auto_run_embedded(project: Project, *, key_scope: str) -> None:
+    """Start-Button + Fortschritt — wiederverwendbar (Seite, Tab, Panel)."""
+    _render_auto_run_controls(project, key_scope=key_scope)
+    render_enhanced_auto_run_banner(str(project.id), key_scope=key_scope)
+
+
+def render_enhanced_auto_run_page() -> None:
+    """Eigene Sidebar-Seite — steht in der Navigationsliste zwischen Analysen und Brief."""
+    st.header("▶ Auto-Lauf")
+    st.write(
+        "Ein Klick startet **nacheinander** (nie parallel) alles ab Project Brief "
+        "bis zu den Kapitel-Cuts. **⓪ Clean Media** und **① Analysen** bleiben "
+        "manuell. Stoppt **vor** Funnel / Timing / Musik / Export."
+    )
+    from otio_app.ui.project_context import render_project_selector
+
+    project = render_project_selector()
+    if project is None:
+        return
+    if not project.is_without_voiceover_enhanced:
+        st.warning("Auto-Lauf gibt es nur für **Enhanced MVP**-Projekte.")
+        return
+    with st.container(border=True):
+        render_enhanced_auto_run_embedded(project, key_scope="page")
+
+
 def render_enhanced_auto_run_page_panel(project_id: str) -> None:
     """Start-Button oben auf jeder Enhanced-Seite — nicht nur in der Sidebar."""
     project = get_project_by_id(str(project_id))
     if project is None or project.project_mode != ProjectMode.WITHOUT_VOICEOVER_ENHANCED:
         return
     with st.container(border=True):
-        _render_auto_run_controls(project, key_scope="page")
-    render_enhanced_auto_run_banner(str(project_id))
+        render_enhanced_auto_run_embedded(project, key_scope="page")
 
+
+def render_enhanced_auto_run_banner(project_id: str, *, key_scope: str = "page") -> None:
     """Fortschritt auf Enhanced-Seiten, inkl. Stop."""
     manager = get_enhanced_auto_run_job_manager()
     state = manager.get_state(project_id)
@@ -64,7 +91,7 @@ def render_enhanced_auto_run_page_panel(project_id: str) -> None:
         with col_stop:
             if st.button(
                 "⏹ Stoppen",
-                key=f"global_stop_auto_run_{project_id}",
+                key=f"global_stop_auto_run_{key_scope}_{project_id}",
                 disabled=state.cancel_requested,
             ):
                 manager.request_cancel(project_id)
@@ -72,7 +99,7 @@ def render_enhanced_auto_run_page_panel(project_id: str) -> None:
         poll_while_running(
             lambda: None,
             lambda: manager.is_running(project_id),
-            refresh_key=f"auto_run_refresh_{project_id}",
+            refresh_key=f"auto_run_refresh_{key_scope}_{project_id}",
         )
         return
 
@@ -87,7 +114,10 @@ def render_enhanced_auto_run_page_panel(project_id: str) -> None:
             + skipped
             + " Als Nächstes manuell: Funnel."
         )
-    if st.button("Hinweis schließen", key=f"auto_run_dismiss_{project_id}"):
+    if st.button(
+        "Hinweis schließen",
+        key=f"auto_run_dismiss_{key_scope}_{project_id}",
+    ):
         manager.dismiss(project_id)
         st.rerun()
 
@@ -98,7 +128,10 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
     running = state is not None and state.status == JobStatus.RUNNING
     other_running = (not running) and any_job_running(project.id)
 
-    st.markdown("**Auto-Lauf**")
+    if key_scope == "sidebar":
+        st.markdown("**▶ Auto-Lauf**")
+    else:
+        st.subheader("▶ Auto-Lauf")
     st.caption(
         "Ein Button, **sequenziell** (nie parallel): Brief + Titel → Style → "
         "Dramaturgie (auto-bestätigen) → Kapitel-Skripte → Script Lock → "
@@ -113,7 +146,7 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
     elif other_running:
         help_text = "Ein anderer Hintergrund-Job läuft — zuerst stoppen."
     if st.button(
-        "▶ Alle Schritte nacheinander",
+        "▶ Auto-Lauf starten",
         key=f"enh_auto_run_start_{key_scope}_{project.id}",
         type="primary",
         disabled=start_disabled,

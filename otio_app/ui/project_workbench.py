@@ -838,6 +838,12 @@ def render_project_workbench() -> None:
     )
 
     render_workflow_progress(project, current_step="analysis", lightweight=True)
+    if getattr(project, "is_without_voiceover_enhanced", False):
+        st.info(
+            "Pipeline ab Brief automatisch: Tab **▶ Auto-Lauf** unten "
+            "oder Seite **▶ Auto-Lauf** in der linken Navigation "
+            "(zwischen Analysen und Project Brief)."
+        )
     if not get_workflow_status(project, lightweight=True).clean_media_done:
         st.warning(
             "**Clean Media noch nicht abgeschlossen** — unter **⓪ Clean Media** Medien "
@@ -904,9 +910,16 @@ def render_project_workbench() -> None:
     selected_folders = _render_folder_picker(project)
     st.divider()
 
-    tab_folders, tab_run, tab_results = st.tabs(
-        ["📁 Ordner", "▶️ Analysen starten", "📄 Ergebnisse"]
-    )
+    enhanced_auto = bool(getattr(project, "is_without_voiceover_enhanced", False))
+    if enhanced_auto:
+        tab_folders, tab_run, tab_results, tab_auto = st.tabs(
+            ["📁 Ordner", "▶️ Analysen starten", "📄 Ergebnisse", "▶ Auto-Lauf"]
+        )
+    else:
+        tab_folders, tab_run, tab_results = st.tabs(
+            ["📁 Ordner", "▶️ Analysen starten", "📄 Ergebnisse"]
+        )
+        tab_auto = None
 
     with tab_folders:
         st.markdown("Status aller Asset-Ordner")
@@ -1001,5 +1014,13 @@ def render_project_workbench() -> None:
                 st.caption("Inventar noch nicht erstellt.")
         else:
             st.caption("Inventar noch nicht erstellt.")
+
+    if tab_auto is not None:
+        with tab_auto:
+            from otio_app.ui.without_voiceover_enhanced.auto_run_ui import (
+                render_enhanced_auto_run_embedded,
+            )
+
+            render_enhanced_auto_run_embedded(project, key_scope="analysen_tab")
 
     render_file_paths(project)
