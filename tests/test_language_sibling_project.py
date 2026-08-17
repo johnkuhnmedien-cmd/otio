@@ -12,6 +12,8 @@ from otio_app.services.language_sibling_project import (
     LanguageSiblingError,
     clone_project_for_language,
     missing_sibling_languages,
+    open_languages_for_auto_run,
+    resolve_sibling_project,
     sibling_project_name,
 )
 
@@ -155,13 +157,87 @@ def test_start_auto_run_requires_video_place_before_create(
     assert [item.language for item in siblings] == ["de"]
 
 
+def test_open_languages_includes_missing_and_incomplete(
+    temp_project_layout: dict[str, Path],
+    temp_db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _enhanced_source(temp_project_layout, temp_db_path)
+    clone_project_for_language(source, "PT", db_path=temp_db_path)
+    siblings = find_projects_by_root(source.project_root, db_path=temp_db_path)
+    monkeypatch.setattr(
+        "otio_app.services.language_sibling_project.auto_run_pipeline_complete",
+        lambda _project: False,
+    )
+    open_langs = open_languages_for_auto_run(source, siblings)
+    assert "DE" not in open_langs
+    assert "PT" in open_langs
+    assert "EN" in open_langs
+    assert "FR" in open_langs
+    assert open_langs == ["EN", "FR", "ES", "PT", "IT"]
+
+
+def test_open_languages_skips_complete_sibling(
+    temp_project_layout: dict[str, Path],
+    temp_db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _enhanced_source(temp_project_layout, temp_db_path)
+    clone_project_for_language(source, "PT", db_path=temp_db_path)
+    siblings = find_projects_by_root(source.project_root, db_path=temp_db_path)
+
+    def fake_complete(project) -> bool:
+        return str(project.language).lower() == "pt"
+
+    monkeypatch.setattr(
+        "otio_app.services.language_sibling_project.auto_run_pipeline_complete",
+        fake_complete,
+    )
+    open_langs = open_languages_for_auto_run(source, siblings)
+    assert "PT" not in open_langs
+    assert "DE" not in open_langs
+    assert "EN" in open_langs
+
+
+def test_resolve_sibling_returns_existing(
+    temp_project_layout: dict[str, Path],
+    temp_db_path: Path,
+) -> None:
+    source = _enhanced_source(temp_project_layout, temp_db_path)
+    existing = clone_project_for_language(source, "PT", db_path=temp_db_path)
+    resolved = resolve_sibling_project(source, "pt", db_path=temp_db_path)
+    assert resolved.id == existing.id
+
+
+def test_resolve_sibling_clones_when_missing(
+    temp_project_layout: dict[str, Path],
+    temp_db_path: Path,
+) -> None:
+    source = _enhanced_source(temp_project_layout, temp_db_path)
+    resolved = resolve_sibling_project(source, "EN", db_path=temp_db_path)
+    assert resolved.id != source.id
+    assert resolved.language == "en"
+    assert resolved.name == "EN_Test Automatic"
+
+
+def test_auto_run_pipeline_complete_false_on_error() -> None:
+    from types import SimpleNamespace
+
+    from otio_app.services.language_sibling_project import auto_run_pipeline_complete
+
+    assert auto_run_pipeline_complete(SimpleNamespace()) is False
+
+
 def test_saved_projects_page_wires_language_buttons() -> None:
     source = Path(__file__).resolve().parents[1] / "app.py"
     text = source.read_text(encoding="utf-8")
     assert "render_language_sibling_actions" in text
-    assert "lang_sibling_" in (
+    ui = (
         Path(__file__).resolve().parents[1]
         / "otio_app"
         / "ui"
         / "language_sibling_ui.py"
     ).read_text(encoding="utf-8")
+    assert "lang_sibling_" in ui
+    assert "Alle offenen Sprachen" in ui
+    assert "lang_queue_all_" in ui

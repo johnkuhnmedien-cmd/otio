@@ -18,8 +18,11 @@ from otio_app.services.voiceover_generation.project_brief_defaults_service impor
 
 __all__ = [
     "LanguageSiblingError",
+    "auto_run_pipeline_complete",
     "clone_project_for_language",
     "missing_sibling_languages",
+    "open_languages_for_auto_run",
+    "resolve_sibling_project",
     "sibling_project_name",
 ]
 
@@ -61,6 +64,94 @@ def missing_sibling_languages(
             continue
         occupied.add(normalize_brief_language(item.language))
     return [lang for lang in BRIEF_LANGUAGE_CHOICES if lang not in occupied]
+
+
+def auto_run_pipeline_complete(project: Project) -> bool:
+    """True wenn Brief→Kapitel-Cuts für skip-done schon erledigt wären."""
+    try:
+        from otio_app.services.voiceover_generation.intro_hook_service import (
+            load_confirmed_intro_hook,
+        )
+        from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
+            list_chapter_audio_statuses,
+        )
+        from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+            list_chapters_needing_unified_cut,
+        )
+        from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+            intro_unified_cut_plan_path,
+        )
+        from otio_app.services.without_voiceover_enhanced.io_utils import load_model
+        from otio_app.services.without_voiceover_enhanced.models import (
+            UnifiedCutPlanDocument,
+        )
+        from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+            load_locked_script,
+        )
+
+        if load_locked_script(project) is None:
+            return False
+        if load_confirmed_intro_hook(project) is None:
+            return False
+        intro = load_model(
+            intro_unified_cut_plan_path(project), UnifiedCutPlanDocument
+        )
+        if intro is None or not list(getattr(intro, "slots", None) or []):
+            return False
+        if list_chapters_needing_unified_cut(project):
+            return False
+        statuses = list_chapter_audio_statuses(project)
+        if not statuses:
+            return False
+        return not any(row.is_open for row in statuses)
+    except Exception:  # noqa: BLE001 — unfertiges Projekt zählt als offen
+        return False
+
+
+def open_languages_for_auto_run(
+    project: Project,
+    siblings: list[Project] | None = None,
+) -> list[str]:
+    """Andere Sprachen ohne fertigen Auto-Lauf (fehlend oder unfertig)."""
+    current = normalize_brief_language(project.language)
+    rows = siblings
+    if rows is None:
+        rows = find_projects_by_root(project.project_root)
+    by_lang: dict[str, Project] = {}
+    for item in rows:
+        if item.project_mode != project.project_mode:
+            continue
+        key = normalize_brief_language(item.language)
+        by_lang[key] = item
+    open_langs: list[str] = []
+    for lang in BRIEF_LANGUAGE_CHOICES:
+        if lang == current:
+            continue
+        existing = by_lang.get(lang)
+        if existing is None or not auto_run_pipeline_complete(existing):
+            open_langs.append(lang)
+    return open_langs
+
+
+def resolve_sibling_project(
+    source: Project,
+    language: str,
+    *,
+    db_path: Path | None = None,
+) -> Project:
+    """Vorhandenes Geschwisterprojekt oder neu anlegen — ohne Auto-Lauf."""
+    target = normalize_brief_language(language)
+    existing = find_project_by_root_and_language(
+        source.project_root,
+        target,
+        db_path=db_path,
+        project_mode=source.project_mode,
+    )
+    if existing is not None:
+        return existing
+    return clone_project_for_language(
+        source, target, db_path=db_path, start_auto_run=False
+    )
 
 
 def clone_project_for_language(

@@ -81,6 +81,11 @@ class EnhancedAutoRunJobManager:
             job = self._jobs.get(project_id)
             return job is not None and job.status == JobStatus.RUNNING
 
+    def any_running(self) -> bool:
+        with self._lock:
+            ids = list(self._jobs)
+        return any(self.is_running(pid) for pid in ids)
+
     def get_state(self, project_id: str) -> EnhancedAutoRunJobState | None:
         self.reconcile_stuck_job(project_id)
         with self._lock:
@@ -138,6 +143,12 @@ class EnhancedAutoRunJobManager:
     def start(self, project: Project) -> bool:
         self.reconcile_stuck_job(project.id)
         with self._lock:
+            for pid, job in self._jobs.items():
+                if pid == project.id or job.status != JobStatus.RUNNING:
+                    continue
+                other = self._threads.get(pid)
+                if other is not None and other.is_alive():
+                    return False
             existing = self._jobs.get(project.id)
             if existing is not None and existing.status == JobStatus.RUNNING:
                 thread = self._threads.get(project.id)

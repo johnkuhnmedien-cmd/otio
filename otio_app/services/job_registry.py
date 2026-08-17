@@ -12,6 +12,9 @@ from otio_app.services.asset_analysis_job import (
 from otio_app.services.clean_media_job import get_clean_media_job_manager
 from otio_app.services.otio_export_job import get_otio_export_job_manager
 from otio_app.services.voice_analysis_job import get_voice_analysis_job_manager
+from otio_app.services.language_auto_run_queue import (
+    get_language_auto_run_queue_manager,
+)
 from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job import (
     get_enhanced_auto_run_job_manager,
 )
@@ -39,6 +42,7 @@ def reconcile_all_jobs() -> None:
         get_otio_export_job_manager().reconcile_stuck_job(project.id)
         get_supplement_funnel_job_manager().reconcile_stuck_job(project.id)
         get_enhanced_auto_run_job_manager().reconcile_stuck_job(project.id)
+        get_language_auto_run_queue_manager().reconcile_stuck_job(project.id)
 
 
 def any_job_running(project_id: str | None = None) -> bool:
@@ -50,8 +54,13 @@ def any_job_running(project_id: str | None = None) -> bool:
         get_otio_export_job_manager(),
         get_supplement_funnel_job_manager(),
         get_enhanced_auto_run_job_manager(),
+        get_language_auto_run_queue_manager(),
     )
     if project_id is None:
+        if get_language_auto_run_queue_manager().any_running():
+            return True
+        if get_enhanced_auto_run_job_manager().any_running():
+            return True
         return any(
             manager.is_running(project.id)
             for project in list_projects()
@@ -156,6 +165,25 @@ def collect_job_activity() -> list[JobActivity]:
                 )
             )
 
+        queue_state = get_language_auto_run_queue_manager().get_state(project_id)
+        if queue_state is not None:
+            current = queue_state.current_language or "—"
+            total = len(queue_state.languages)
+            detail = f"Sprache {queue_state.current_index + 1}/{total}: {current}"
+            if queue_state.completed_languages:
+                detail += f" · fertig: {', '.join(queue_state.completed_languages)}"
+            activities.append(
+                JobActivity(
+                    kind="Sprachen-Queue",
+                    project_id=project_id,
+                    status=queue_state.status,
+                    detail=detail,
+                    thread_alive=get_language_auto_run_queue_manager().thread_alive(
+                        project_id
+                    ),
+                )
+            )
+
     return activities
 
 
@@ -168,6 +196,8 @@ def force_reset_all_jobs() -> int:
     otio_manager = get_otio_export_job_manager()
     funnel_manager = get_supplement_funnel_job_manager()
     auto_manager = get_enhanced_auto_run_job_manager()
+    queue_manager = get_language_auto_run_queue_manager()
+    count += queue_manager.force_reset_all()
 
     for project in list_projects():
         project_id = project.id

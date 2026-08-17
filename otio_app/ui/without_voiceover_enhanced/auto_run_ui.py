@@ -7,6 +7,9 @@ import streamlit as st
 from otio_app.models import Project, ProjectMode
 from otio_app.project_repository import get_project_by_id
 from otio_app.services.job_registry import any_job_running
+from otio_app.services.language_auto_run_queue import (
+    get_language_auto_run_queue_manager,
+)
 from otio_app.ui.voiceover_generation.language_standards_ui import (
     render_language_standards_expander,
 )
@@ -127,7 +130,11 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
     manager = get_enhanced_auto_run_job_manager()
     state = manager.get_state(project.id)
     running = state is not None and state.status == JobStatus.RUNNING
-    other_running = (not running) and any_job_running(project.id)
+    queue_running = get_language_auto_run_queue_manager().any_running()
+    other_auto = (not running) and manager.any_running()
+    other_running = (not running) and (
+        any_job_running(project.id) or queue_running or other_auto
+    )
 
     if key_scope == "sidebar":
         st.markdown("**▶ Auto-Lauf**")
@@ -145,7 +152,9 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
     if running:
         help_text = "Auto-Lauf läuft bereits."
     elif other_running:
-        help_text = "Ein anderer Hintergrund-Job läuft — zuerst stoppen."
+        help_text = (
+            "Ein anderer Auto-Lauf oder die Sprachen-Queue läuft — zuerst stoppen."
+        )
     if st.button(
         "▶ Auto-Lauf starten",
         key=f"enh_auto_run_start_{key_scope}_{project.id}",
