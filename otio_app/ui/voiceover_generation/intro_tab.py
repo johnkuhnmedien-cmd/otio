@@ -56,6 +56,9 @@ from otio_app.ui.voiceover_generation._shared import (
     require_without_voiceover_mode,
     style_source_metric_value,
 )
+from otio_app.ui.voiceover_generation.language_standards_ui import (
+    render_language_standard_path_caption,
+)
 
 import streamlit as st
 
@@ -338,6 +341,7 @@ def _render_settings_editor(project: Project) -> None:
                 save_intro_hook_settings(project, reset)
                 st.session_state[_pending_intro_settings_key(project.id)] = reset
                 st.rerun()
+    render_language_standard_path_caption("intro")
 
 
 def _render_model_settings(project: Project) -> tuple[str, str]:

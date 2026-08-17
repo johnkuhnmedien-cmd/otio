@@ -12,6 +12,9 @@ from otio_app.services.asset_analysis_job import (
 from otio_app.services.clean_media_job import get_clean_media_job_manager
 from otio_app.services.otio_export_job import get_otio_export_job_manager
 from otio_app.services.voice_analysis_job import get_voice_analysis_job_manager
+from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job import (
+    get_enhanced_auto_run_job_manager,
+)
 from otio_app.services.without_voiceover_enhanced.supplement_funnel_job import (
     get_supplement_funnel_job_manager,
 )
@@ -35,6 +38,7 @@ def reconcile_all_jobs() -> None:
         get_asset_analysis_job_manager().reconcile_stuck_job(project.id)
         get_otio_export_job_manager().reconcile_stuck_job(project.id)
         get_supplement_funnel_job_manager().reconcile_stuck_job(project.id)
+        get_enhanced_auto_run_job_manager().reconcile_stuck_job(project.id)
 
 
 def any_job_running(project_id: str | None = None) -> bool:
@@ -45,6 +49,7 @@ def any_job_running(project_id: str | None = None) -> bool:
         get_asset_analysis_job_manager(),
         get_otio_export_job_manager(),
         get_supplement_funnel_job_manager(),
+        get_enhanced_auto_run_job_manager(),
     )
     if project_id is None:
         return any(
@@ -132,6 +137,25 @@ def collect_job_activity() -> list[JobActivity]:
                 )
             )
 
+        auto_state = get_enhanced_auto_run_job_manager().get_state(project_id)
+        if auto_state is not None:
+            detail = auto_state.message or auto_state.step_label or "Auto-Lauf"
+            if auto_state.step_total > 0:
+                detail = (
+                    f"Schritt {auto_state.step_index}/{auto_state.step_total} · {detail}"
+                )
+            activities.append(
+                JobActivity(
+                    kind="Enhanced Auto-Lauf",
+                    project_id=project_id,
+                    status=auto_state.status.value,
+                    detail=detail,
+                    thread_alive=get_enhanced_auto_run_job_manager().thread_alive(
+                        project_id
+                    ),
+                )
+            )
+
     return activities
 
 
@@ -143,6 +167,7 @@ def force_reset_all_jobs() -> int:
     asset_manager = get_asset_analysis_job_manager()
     otio_manager = get_otio_export_job_manager()
     funnel_manager = get_supplement_funnel_job_manager()
+    auto_manager = get_enhanced_auto_run_job_manager()
 
     for project in list_projects():
         project_id = project.id
@@ -160,6 +185,9 @@ def force_reset_all_jobs() -> int:
             count += 1
         if funnel_manager.is_running(project_id):
             funnel_manager.force_reset(project_id)
+            count += 1
+        if auto_manager.is_running(project_id):
+            auto_manager.force_reset(project_id)
             count += 1
     return count
 

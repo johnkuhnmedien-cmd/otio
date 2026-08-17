@@ -41,6 +41,10 @@ from otio_app.ui.voiceover_generation._shared import (
     render_llm_model_selectbox,
     require_without_voiceover_mode,
 )
+from otio_app.ui.voiceover_generation.language_standards_ui import (
+    render_language_standard_path_caption,
+    render_language_standards_expander,
+)
 
 
 def _key(project_id: str, field_name: str) -> str:
@@ -168,6 +172,8 @@ def render_project_brief_page() -> None:
         return
     if not require_without_voiceover_mode(project):
         return
+
+    render_language_standards_expander()
 
     title_key = _key(project.id, "video_title")
     _hydrate_brief_session(project)
@@ -309,6 +315,8 @@ def render_project_brief_page() -> None:
             else "Auf Standard zurücksetzen"
         )
         reset_clicked = st.button(reset_label, key=f"vo_brief_reset_{project.id}")
+
+    render_language_standard_path_caption("project_brief")
 
     if reload_clicked:
         _queue_pending_brief(project.id, load_project_brief(project))

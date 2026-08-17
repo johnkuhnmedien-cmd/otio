@@ -35,6 +35,10 @@ from otio_app.ui.without_voiceover_enhanced.cut_plan_tab import render_enhanced_
 from otio_app.ui.without_voiceover_enhanced.final_output_tab import (
     render_enhanced_final_output_page,
 )
+from otio_app.ui.without_voiceover_enhanced.auto_run_ui import (
+    render_enhanced_auto_run_banner,
+    render_enhanced_auto_run_sidebar,
+)
 from otio_app.ui.without_voiceover_enhanced.folder_voiceovers_tab import (
     render_enhanced_folder_voiceovers_page,
 )
@@ -77,10 +81,16 @@ def _wrap_page(
 
         reconcile_all_jobs()
         record_script_run(page_id)
-        if show_jobs_banner:
-            project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
-            if project_id:
-                render_analysis_jobs_banner(project_id)
+        project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
+        if show_jobs_banner and project_id:
+            render_analysis_jobs_banner(project_id)
+        if project_id:
+            project = get_project_by_id(str(project_id))
+            if (
+                project is not None
+                and project.project_mode == ProjectMode.WITHOUT_VOICEOVER_ENHANCED
+            ):
+                render_enhanced_auto_run_banner(str(project_id))
         render_fn()
 
     wrapped.__name__ = f"page_{page_id.replace(' ', '_')}"
@@ -362,6 +372,8 @@ def run_app_navigation(
     with st.sidebar:
         st.caption(f"Build: **{format_build_label()}**")
         st.caption(workflow_caption)
+        if mode == ProjectMode.WITHOUT_VOICEOVER_ENHANCED:
+            render_enhanced_auto_run_sidebar()
         render_activity_panel()
 
     navigation = st.navigation(pages, position="sidebar")
@@ -425,6 +437,8 @@ def _run_legacy_pages(
             label_visibility="collapsed",
             key="sidebar_nav",
         )
+        if mode == ProjectMode.WITHOUT_VOICEOVER_ENHANCED:
+            render_enhanced_auto_run_sidebar()
 
     previous_page = st.session_state.get(LAST_NAV_PAGE_KEY)
     if previous_page != page:

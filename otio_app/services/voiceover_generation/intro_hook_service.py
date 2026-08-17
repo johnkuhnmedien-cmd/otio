@@ -3,8 +3,10 @@
 Erzeugt genau INTRO_HOOK_CANDIDATE_COUNT Inhaltsvarianten einer gemeinsamen
 Intro-Struktur (Raw-Intro-Referenz) mit visueller Zuordnung (visual_beats).
 Schreibt niemals EditPlanDocuments und löst nie OTIO-Export aus.
-intro_hook.confirmed.json entsteht ausschließlich durch explizite
-Nutzerbestätigung (confirm_intro_hook) — niemals automatisch.
+intro_hook.confirmed.json entsteht durch explizite Nutzerbestätigung
+(confirm_intro_hook) — in der UI per Klick, oder durch den Enhanced-Auto-Lauf
+(dessen Start-Button die Bestätigung der ersten gültigen Variante ist).
+Niemals stillschweigend im Hintergrund ohne Nutzeraktion.
 """
 
 from __future__ import annotations

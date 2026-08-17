@@ -1,0 +1,520 @@
+"""Sprach-Standard-Katalog und sequenzieller Enhanced-Auto-Lauf."""
+
+from __future__ import annotations
+
+import threading
+import time
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+from otio_app.defaults import (
+    DEFAULT_ENHANCED_WORK_SUBDIR,
+    DRAMATURGY_DEFAULTS_FILENAME,
+    ELEVENLABS_VOICE_DEFAULTS_FILENAME,
+    INTRO_HOOK_DEFAULTS_FILENAME,
+    PROJECT_BRIEF_DEFAULTS_FILENAME,
+    STYLE_REFERENCE_DEFAULTS_FILENAME,
+)
+from otio_app.models import Project, ProjectMode
+from otio_app.services.voiceover_generation.dramaturgy_service import (
+    DramaturgyBuildResult,
+    save_confirmed_dramaturgy,
+)
+from otio_app.services.voiceover_generation.intro_hook_service import (
+    IntroHookBuildResult,
+    save_confirmed_intro_hook,
+    save_intro_hook_candidates,
+)
+from otio_app.services.voiceover_generation.language_defaults_catalog import (
+    get_language_standard,
+    list_language_standard_files,
+    list_shared_library_files,
+)
+from otio_app.services.voiceover_generation.llm_trace_service import STATUS_PASS
+from otio_app.services.voiceover_generation.models import (
+    ConfirmedIntroHook,
+    DramaturgyFolderEntry,
+    DramaturgyPlan,
+    IntroHookCandidate,
+    IntroHookCandidatesDocument,
+    ProjectBrief,
+    VoiceoverStyleReferences,
+)
+from otio_app.services.voiceover_generation.project_brief_service import save_project_brief
+from otio_app.services.voiceover_generation.style_reference_service import (
+    save_style_references,
+)
+from otio_app.services.voiceover_generation.video_title_service import (
+    VideoTitleGenerateResult,
+)
+from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job import (
+    JobStatus,
+    get_enhanced_auto_run_job_manager,
+)
+from otio_app.services.without_voiceover_enhanced import enhanced_auto_run_service as auto_run
+from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+    EnhancedAutoRunCancelled,
+    EnhancedAutoRunError,
+    pick_auto_intro_candidate,
+    run_enhanced_auto_pipeline,
+)
+from otio_app.services.without_voiceover_enhanced.models import (
+    EnhancedScriptDocument,
+    ScriptSegment,
+)
+from otio_app.services.without_voiceover_enhanced.script_author_service import (
+    FolderScriptBuildResult,
+)
+from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+    load_locked_script,
+    load_script_draft,
+    lock_script,
+    save_script_draft,
+)
+
+
+def _project(tmp_path: Path, folders: list[str] | None = None) -> Project:
+    root = tmp_path / "Greece"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    folder_names = folders or ["Athens", "Győr"]
+    for folder in folder_names:
+        (root / folder).mkdir(exist_ok=True)
+    return Project(
+        id="pt-greece-auto",
+        name="PT_Greece",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="pt",
+        video_place="Griechenland",
+        asset_subdir_names=folder_names,
+        selected_asset_subdirs=folder_names,
+    )
+
+
+def _seed_brief(project: Project, *, title: str = "", refs: list[str] | None = None) -> None:
+    save_project_brief(
+        project,
+        ProjectBrief(
+            project_id=project.id,
+            language="PT",
+            video_title=title,
+            title_references=refs or ["Ref eins", "Ref zwei"],
+        ),
+    )
+
+
+def _seed_raw_style(project: Project) -> None:
+    save_style_references(
+        project,
+        VoiceoverStyleReferences(
+            project_id=project.id,
+            style_mode="raw_text",
+            raw_reference_text="Ein langer Beispieltext für den Kapitelstil.",
+            raw_intro_reference_text="Intro-Beispieltext.",
+        ),
+    )
+
+
+def _seed_dramaturgy(project: Project, folders: list[str]) -> DramaturgyPlan:
+    plan = DramaturgyPlan(
+        project_id=project.id,
+        project_title="Film",
+        core_promise="Versprechen",
+        narrative_arc="Bogen",
+        recommended_folder_order=[
+            DramaturgyFolderEntry(
+                folder_name=folder,
+                order_index=index,
+                enabled=True,
+                dramaturgy_role="hook" if index == 0 else "development",
+                reason=f"Kapitel {folder}",
+                recommended_word_count=150,
+                recommended_min_words=120,
+                recommended_max_words=180,
+            )
+            for index, folder in enumerate(folders)
+        ],
+    )
+    return save_confirmed_dramaturgy(project, plan)
+
+
+def _seed_scripts_and_lock(project: Project, folders: list[str]) -> None:
+    segments = [
+        ScriptSegment(
+            segment_id=f"{folder}_segment_001",
+            text=f"Narration für {folder}.",
+            sequence_index=index + 1,
+            folder_name=folder,
+            folder_order_index=index,
+        )
+        for index, folder in enumerate(folders)
+    ]
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            script_status="draft",
+            narration_full=" ".join(seg.text for seg in segments),
+            segments=segments,
+        ),
+    )
+    lock_script(project)
+
+
+def test_language_standard_files_live_under_data_dir() -> None:
+    files = list_language_standard_files()
+    names = {item.filename for item in files}
+    assert names == {
+        PROJECT_BRIEF_DEFAULTS_FILENAME,
+        STYLE_REFERENCE_DEFAULTS_FILENAME,
+        DRAMATURGY_DEFAULTS_FILENAME,
+        INTRO_HOOK_DEFAULTS_FILENAME,
+        ELEVENLABS_VOICE_DEFAULTS_FILENAME,
+    }
+    for item in files:
+        assert item.path.name == item.filename
+        assert item.path.parent.name == "data"
+        assert item.per_language is True
+        assert item.stores
+        assert item.not_stored
+    assert get_language_standard("intro").filename == INTRO_HOOK_DEFAULTS_FILENAME
+    shared = {item.filename for item in list_shared_library_files()}
+    assert "raw_style_library.json" in shared
+    assert "style_profile_library.json" in shared
+
+
+def test_pick_auto_intro_prefers_first_without_risks() -> None:
+    document = IntroHookCandidatesDocument(
+        project_id="p",
+        language="PT",
+        candidates=[
+            IntroHookCandidate(hook_id="a", hook_text="risk", risks=["WORD_COUNT"]),
+            IntroHookCandidate(hook_id="b", hook_text="clean", risks=[]),
+            IntroHookCandidate(hook_id="c", hook_text="also", risks=[]),
+        ],
+    )
+    picked = pick_auto_intro_candidate(document)
+    assert picked.hook_id == "b"
+
+
+def test_pick_auto_intro_falls_back_to_first() -> None:
+    document = IntroHookCandidatesDocument(
+        project_id="p",
+        candidates=[
+            IntroHookCandidate(hook_id="only", hook_text="x", risks=["r1"]),
+        ],
+    )
+    assert pick_auto_intro_candidate(document).hook_id == "only"
+
+
+def test_auto_run_skips_completed_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    folders = list(project.selected_asset_subdirs)
+    _seed_brief(project, title="Schon da")
+    _seed_raw_style(project)
+    _seed_dramaturgy(project, folders)
+    _seed_scripts_and_lock(project, folders)
+    save_confirmed_intro_hook(
+        project,
+        ConfirmedIntroHook(
+            project_id=project.id,
+            language="PT",
+            hook_id="h1",
+            hook_text="Intro-Text ohne Ziffern.",
+        ),
+    )
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("LLM/TTS darf bei skip-done nicht laufen")
+
+    monkeypatch.setattr(auto_run, "generate_video_title", boom)
+    monkeypatch.setattr(auto_run, "build_dramaturgy_plan", boom)
+    monkeypatch.setattr(auto_run, "generate_enhanced_script_for_folder", boom)
+    monkeypatch.setattr(auto_run, "build_intro_hook_candidates", boom)
+    monkeypatch.setattr(auto_run, "synthesize_open_chapters_audio", boom)
+    monkeypatch.setattr(auto_run, "generate_intro_unified_cut", boom)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", boom)
+    monkeypatch.setattr(
+        auto_run,
+        "list_chapter_audio_statuses",
+        lambda _p: [MagicMock(is_open=False)],
+    )
+    monkeypatch.setattr(auto_run, "list_chapters_needing_unified_cut", lambda _p: [])
+
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        intro_unified_cut_plan_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+    from otio_app.services.without_voiceover_enhanced.models import (
+        CutBoundary,
+        CutSlot,
+        UnifiedCutPlanDocument,
+    )
+
+    write_json(
+        intro_unified_cut_plan_path(project),
+        UnifiedCutPlanDocument(
+            script_version="script-v1",
+            boundaries=[
+                CutBoundary(
+                    cut_id="intro_cut_000",
+                    sentence_id="s1",
+                    position="start",
+                ),
+                CutBoundary(
+                    cut_id="intro_cut_001",
+                    sentence_id="s1",
+                    position="end",
+                ),
+            ],
+            slots=[
+                CutSlot(
+                    slot_id="intro_slot_001",
+                    local_asset_id="a1",
+                    asset_fit="strong",
+                    asset_fit_reason="test",
+                    visual_intent="open",
+                )
+            ],
+        ),
+    )
+
+    report = run_enhanced_auto_pipeline(project, skip_done=True)
+    assert report.stopped is False
+    assert report.error is None
+    assert "brief" in report.skipped
+    assert "scripts" in report.skipped
+    assert "script_lock" in report.skipped
+    assert "intro" in report.skipped
+    assert "tts" in report.skipped
+    assert "intro_cut" in report.skipped
+    assert "chapter_cuts" in report.skipped
+
+
+def test_auto_run_is_strictly_sequential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    folders = list(project.selected_asset_subdirs)
+    _seed_brief(project, title="")
+    _seed_raw_style(project)
+
+    order: list[str] = []
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def _enter(label: str) -> None:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+            order.append(label)
+        time.sleep(0.01)
+        with lock:
+            active -= 1
+
+    def fake_title(*_a, **_k):
+        _enter("title")
+        return VideoTitleGenerateResult(status=STATUS_PASS, title="Auto Titel")
+
+    def fake_dram(*_a, **_k):
+        _enter("dramaturgy")
+        plan = DramaturgyPlan(
+            project_id=project.id,
+            project_title="Film",
+            core_promise="P",
+            narrative_arc="A",
+            recommended_folder_order=[
+                DramaturgyFolderEntry(
+                    folder_name=folder,
+                    order_index=index,
+                    enabled=True,
+                    dramaturgy_role="hook" if index == 0 else "development",
+                    reason="r",
+                    recommended_word_count=150,
+                    recommended_min_words=120,
+                    recommended_max_words=180,
+                )
+                for index, folder in enumerate(folders)
+            ],
+        )
+        return DramaturgyBuildResult(
+            status=STATUS_PASS,
+            plan=plan,
+            error=None,
+            llm_run_id="run",
+            provider="openai",
+            model="test",
+        )
+
+    def fake_script(project_arg, folder_name, **_k):
+        _enter(f"script:{folder_name}")
+        draft = load_script_draft(project_arg)
+        segments = list(draft.segments) if draft is not None else []
+        segments.append(
+            ScriptSegment(
+                segment_id=f"{folder_name}_segment_001",
+                text=f"Narration für {folder_name}.",
+                sequence_index=len(segments) + 1,
+                folder_name=folder_name,
+                folder_order_index=len(segments),
+            )
+        )
+        save_script_draft(
+            project_arg,
+            EnhancedScriptDocument(
+                script_status="draft",
+                narration_full=" ".join(seg.text for seg in segments),
+                segments=segments,
+            ),
+        )
+        return FolderScriptBuildResult(
+            folder_name=folder_name, status="PASS", segment_count=1
+        )
+
+    def fake_intro(project_arg, **_k):
+        _enter("intro")
+        document = IntroHookCandidatesDocument(
+            project_id=project_arg.id,
+            language="PT",
+            candidates=[
+                IntroHookCandidate(
+                    hook_id="risky", hook_text="alt", risks=["WEAK"]
+                ),
+                IntroHookCandidate(
+                    hook_id="clean", hook_text="Gutes Intro.", risks=[]
+                ),
+            ],
+        )
+        save_intro_hook_candidates(project_arg, document)
+        return IntroHookBuildResult(
+            status=STATUS_PASS,
+            document=document,
+            error=None,
+            llm_run_id="i",
+            provider="openai",
+            model="test",
+        )
+
+    def fake_tts(*_a, **_k):
+        _enter("tts")
+        return MagicMock()
+
+    def fake_intro_cut(*_a, **_k):
+        _enter("intro_cut")
+        return MagicMock(slot_count=2, gap_count=0)
+
+    def fake_chapter_cut(_project, folder_name, **_k):
+        _enter(f"cut:{folder_name}")
+        return MagicMock()
+
+    monkeypatch.setattr(auto_run, "generate_video_title", fake_title)
+    monkeypatch.setattr(auto_run, "build_dramaturgy_plan", fake_dram)
+    monkeypatch.setattr(auto_run, "generate_enhanced_script_for_folder", fake_script)
+    monkeypatch.setattr(auto_run, "build_intro_hook_candidates", fake_intro)
+    monkeypatch.setattr(auto_run, "synthesize_open_chapters_audio", fake_tts)
+    monkeypatch.setattr(auto_run, "list_chapter_audio_statuses", lambda _p: [])
+    monkeypatch.setattr(auto_run, "generate_intro_unified_cut", fake_intro_cut)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", fake_chapter_cut)
+    monkeypatch.setattr(
+        auto_run, "list_chapters_needing_unified_cut", lambda _p: list(folders)
+    )
+    monkeypatch.setattr(auto_run, "refresh_merged_unified_cut_plan", lambda _p: None)
+
+    report = run_enhanced_auto_pipeline(project, skip_done=True)
+    assert report.stopped is False
+    assert max_active == 1
+    assert order[0] == "title"
+    assert order[1] == "dramaturgy"
+    assert order[2].startswith("script:")
+    assert order[3].startswith("script:")
+    assert order[2] != order[3]
+    assert "intro" in order
+    assert "tts" in order
+    assert "intro_cut" in order
+    assert [item for item in order if item.startswith("cut:")] == [
+        f"cut:{folders[0]}",
+        f"cut:{folders[1]}",
+    ]
+    locked = load_locked_script(project)
+    assert locked is not None
+    from otio_app.services.voiceover_generation.intro_hook_service import (
+        load_confirmed_intro_hook,
+    )
+
+    confirmed = load_confirmed_intro_hook(project)
+    assert confirmed is not None
+    assert confirmed.hook_id == "clean"
+
+
+def test_auto_run_cancel_between_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    _seed_brief(project, title="")
+    _seed_raw_style(project)
+    titled = {"done": False}
+
+    def fake_title(*_a, **_k):
+        titled["done"] = True
+        return VideoTitleGenerateResult(status=STATUS_PASS, title="Titel")
+
+    monkeypatch.setattr(auto_run, "generate_video_title", fake_title)
+    monkeypatch.setattr(
+        auto_run,
+        "build_dramaturgy_plan",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("zu weit")),
+    )
+
+    with pytest.raises(EnhancedAutoRunCancelled):
+        run_enhanced_auto_pipeline(
+            project,
+            should_cancel=lambda: titled["done"],
+            skip_done=True,
+        )
+
+
+def test_auto_run_fails_without_title_references(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    save_project_brief(
+        project,
+        ProjectBrief(project_id=project.id, language="PT", video_title=""),
+    )
+    with pytest.raises(EnhancedAutoRunError, match="Titel-Referenzen"):
+        run_enhanced_auto_pipeline(project)
+
+
+def test_auto_run_job_completes_in_background(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    manager = get_enhanced_auto_run_job_manager()
+
+    def fake_pipeline(*_a, **_k):
+        time.sleep(0.02)
+        return auto_run.EnhancedAutoRunReport(completed=["brief"], log_lines=["ok"])
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job.get_project_by_id",
+        lambda _pid: project,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job.run_enhanced_auto_pipeline",
+        fake_pipeline,
+    )
+    assert manager.start(project) is True
+    for _ in range(80):
+        state = manager.get_state(project.id)
+        if state is not None and state.status != JobStatus.RUNNING:
+            break
+        time.sleep(0.05)
+    state = manager.get_state(project.id)
+    assert state is not None
+    assert state.status == JobStatus.COMPLETED
+    manager.dismiss(project.id)

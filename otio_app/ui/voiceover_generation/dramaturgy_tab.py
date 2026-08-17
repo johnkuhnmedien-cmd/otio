@@ -56,6 +56,9 @@ from otio_app.services.voiceover_generation.llm_pricing import (
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
 from otio_app.ui.project_context import render_project_selector
+from otio_app.ui.voiceover_generation.language_standards_ui import (
+    render_language_standard_path_caption,
+)
 from otio_app.ui.voiceover_generation._shared import (
     LLM_INPUT_INFO,
     render_llm_input_info,
@@ -255,6 +258,7 @@ def _render_word_settings(project: Project) -> DramaturgySettings:
                 save_dramaturgy_settings(project, reset)
                 st.session_state[_pending_word_settings_key(project.id)] = reset
                 st.rerun()
+    render_language_standard_path_caption("dramaturgy")
     return draft
 
 

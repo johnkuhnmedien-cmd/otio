@@ -68,6 +68,9 @@ from otio_app.ui.voiceover_generation._shared import (
     render_llm_model_selectbox,
     require_without_voiceover_mode,
 )
+from otio_app.ui.voiceover_generation.language_standards_ui import (
+    render_language_standard_path_caption,
+)
 
 _REF_SLOTS = 3
 
@@ -139,6 +142,7 @@ def _render_language_standard_buttons(
                 "(Referenzen und ggf. Style Profile)."
             ),
         )
+    render_language_standard_path_caption("style_references")
     return lang_save_clicked, reset_clicked
 
 

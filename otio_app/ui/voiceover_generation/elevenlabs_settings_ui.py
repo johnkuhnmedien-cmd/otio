@@ -35,6 +35,9 @@ from otio_app.services.voiceover_generation.models import ElevenLabsSettings
 from otio_app.services.voiceover_generation.tts_orchestration_service import (
     synthesize_test_voice,
 )
+from otio_app.ui.voiceover_generation.language_standards_ui import (
+    render_language_standard_path_caption,
+)
 
 __all__ = [
     "render_elevenlabs_settings_form",
@@ -241,6 +244,8 @@ def render_elevenlabs_settings_form(
                 project, key_prefix=key_prefix, settings=fresh
             )
             st.rerun()
+
+    render_language_standard_path_caption("elevenlabs_voice")
 
     col_reset, col_test = st.columns(2)
     with col_reset:
