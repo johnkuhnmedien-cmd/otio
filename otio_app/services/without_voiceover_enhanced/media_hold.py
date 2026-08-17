@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from otio_app.models import Project
-from otio_app.services.media_utils import ffmpeg_has_drawtext
+from otio_app.services.media_utils import ffmpeg_has_drawtext, is_image_media, is_video_media
 from otio_app.services.otio_media_transform import escape_drawtext_value
 from otio_app.services.without_voiceover_enhanced.paths import (
     assert_enhanced_work_root,
@@ -297,6 +297,15 @@ def ensure_still_hold_video(
     source = Path(image_path).expanduser().resolve()
     if not source.is_file():
         raise MediaHoldError(f"Still fehlt: {source}")
+    if is_video_media(source):
+        raise MediaHoldError(
+            f"Still-Hold ist nur für Fotos, nicht für Video ({source.name})."
+        )
+    if not is_image_media(source):
+        raise MediaHoldError(
+            f"Still-Hold erwartet JPEG/PNG, nicht {source.suffix or 'ohne Endung'} "
+            f"({source.name})."
+        )
     rate = max(1.0, float(fps) or 25.0)
     tw = int(width) if width is not None else int(getattr(project, "width", 0) or 0)
     th = int(height) if height is not None else int(getattr(project, "height", 0) or 0)

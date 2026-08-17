@@ -961,6 +961,73 @@ def test_resolve_shot_media_never_shortens_timeline_end(tmp_path) -> None:
     assert not any("Shot gekürzt" in note for note in repairs)
 
 
+def test_resolve_shot_media_probes_mp4_when_inventory_duration_missing(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression Győr_slot_012: MP4 mit Dauer 0 darf nicht in Still-Hold."""
+    from otio_app.models import Project, ProjectMode
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _resolve_shot_media,
+    )
+
+    media = tmp_path / "Győr_Asset00014_3840x2160.mp4"
+    media.write_bytes(b"x")
+    work = tmp_path / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir()
+    project = Project(
+        id="p",
+        name="p",
+        project_root=str(tmp_path),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        asset_subdir_names=["Győr"],
+        selected_asset_subdirs=["Győr"],
+    )
+    entry = {
+        "path": str(media),
+        "duration_seconds": 0,
+        "usable_in_s": 0.0,
+        "media_kind": "image",
+        "media_type": "image",
+        "available_start_seconds": 0.0,
+        "folder": "Győr",
+        "canonical_id": "asset_gy_r_asset00014",
+    }
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.timeline_resolver.probe_duration_seconds",
+        lambda path: 12.0,
+    )
+
+    def _forbid_still_hold(*_args, **_kwargs):
+        raise AssertionError("MP4 darf nicht über Still-Hold / -loop laufen")
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.timeline_resolver.ensure_still_hold_video",
+        _forbid_still_hold,
+    )
+    repairs: list[str] = []
+    shot = _resolve_shot_media(
+        project,
+        shot_id="Győr_slot_012",
+        asset_id="asset_gy_r_asset00014",
+        entry=entry,
+        timeline_start=78.760,
+        timeline_end=83.280,
+        fps=25.0,
+        head_trim=0.0,
+        short_tolerance=1.0,
+        editorial_function="evidence",
+        may_overlap_pause=False,
+        repairs=repairs,
+    )
+    assert shot.hold_mode == ""
+    assert shot.resolved_media_kind == "video"
+    assert shot.resolved_media_duration_seconds == pytest.approx(12.0)
+    assert shot.timeline_end_seconds - shot.timeline_start_seconds == pytest.approx(4.52)
+    assert any("ffprobe 12.00s" in note for note in repairs)
+
+
 def test_final_shadow_uses_real_sentence_offsets() -> None:
     sentence_index = _sentences()
     plan = UnifiedCutPlanDocument(
