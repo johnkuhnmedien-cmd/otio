@@ -320,3 +320,16 @@ def test_auto_run_helper_uses_language_llm_cut_model(
     )
     project = _project(tmp_path)
     assert llm_cut_provider_model(project) == ("anthropic", "claude-opus-5")
+
+
+def test_cut_plan_ui_has_single_llm_cut_model_selectbox() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "otio_app"
+        / "ui"
+        / "without_voiceover_enhanced"
+        / "cut_plan_tab.py"
+    ).read_text(encoding="utf-8")
+    assert source.count("enh_opt_llm_cut_model_") == 1
+    assert 'label="Modell (Unified Cut)"' not in source
+    assert "key_prefix}_model_" not in source

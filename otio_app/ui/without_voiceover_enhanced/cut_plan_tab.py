@@ -25,7 +25,6 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     save_model_settings,
     split_llm_model_id,
 )
-from otio_app.services.voiceover_generation.models import LlmRoleSettings
 from otio_app.services.voiceover_generation.project_brief_defaults_service import (
     normalize_brief_language,
 )
@@ -57,7 +56,6 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     is_keyword_sync_unified_style,
     load_cut_plan_options,
     persist_cut_plan_options,
-    persist_llm_cut_model,
     resolve_llm_cut_model_id,
     save_cut_plan_options,
 )  # TIMING_MODE_* used in settings UI labels/defaults
@@ -357,10 +355,18 @@ def _render_cost_caption(
     )
 
 
+def _live_llm_cut_model_id(project, options: CutPlanOptions | None = None) -> str:
+    """Live-Wert aus den Cut Plan Settings, sonst persistierter Sprach-/Projektwert."""
+    if options is not None:
+        configured = str(options.llm_cut_model or "").strip()
+        if configured:
+            return configured
+    return resolve_llm_cut_model_id(project)
+
+
 def _render_enhanced_cut_model(
     project,
     *,
-    role_attr: str,
     label: str,
     key_prefix: str,
     input_info: str,
@@ -369,36 +375,19 @@ def _render_enhanced_cut_model(
     chapter_count: int = 1,
     cost_scope_label: str = "Kapitel-Call(s)",
     cost_note: str = "",
+    model_id: str | None = None,
 ) -> tuple[str, str, int]:
-    settings = load_model_settings(project)
-    role_settings: LlmRoleSettings = getattr(settings, role_attr)
-    if role_attr in {"enhanced_rough_cut", "enhanced_final_cut"}:
-        cut_prov, cut_mod = split_llm_model_id(resolve_llm_cut_model_id(project))
-        role_settings = LlmRoleSettings(provider=cut_prov, model=cut_mod)
-    with st.expander(f"⚙️ {label}", expanded=True):
-        updated = render_llm_model_selectbox(
-            label=label,
-            role_settings=role_settings,
-            key=f"{key_prefix}_model_{project.id}",
-            input_info=input_info,
-            options=ENHANCED_CUT_LLM_MODEL_CHOICES,
-            labels=ENHANCED_CUT_LLM_MODEL_LABELS,
-            show_estimated_costs=True,
+    """Kosten/Tokens für den LLM-Cut — Modell nur in Cut Plan Settings."""
+    resolved = str(model_id or "").strip() or resolve_llm_cut_model_id(project)
+    provider, model = split_llm_model_id(resolved)
+    pretty = ENHANCED_CUT_LLM_MODEL_LABELS.get(resolved, resolved)
+    with st.expander("Kosten & Output-Tokens", expanded=True):
+        st.caption(
+            f"**{label}:** {pretty}. Modell nur in **Cut Plan Settings** "
+            "(Intro, Kapitel und Auto-Lauf)."
         )
-        if st.button("Modell speichern", key=f"{key_prefix}_model_save_{project.id}"):
-            if role_attr in {"enhanced_rough_cut", "enhanced_final_cut"}:
-                persist_llm_cut_model(
-                    project,
-                    resolve_llm_model_id(updated.provider, updated.model),
-                )
-                st.session_state[_cut_plan_settings_reload_key(project.id)] = True
-            else:
-                save_model_settings(
-                    project, settings.model_copy(update={role_attr: updated})
-                )
-            st.success(f"{label} gespeichert.")
-            st.rerun()
-
+        if input_info:
+            render_llm_input_info(input_info)
         token_key = f"{key_prefix}_max_tokens_{project.id}"
         if token_key not in st.session_state:
             st.session_state[token_key] = default_output_tokens
@@ -415,15 +404,15 @@ def _render_enhanced_cut_model(
             ),
         )
         _render_cost_caption(
-            provider=updated.provider,
-            model=updated.model,
+            provider=provider,
+            model=model,
             input_tokens=input_tokens,
             output_ceiling=int(max_tokens),
             chapter_count=chapter_count,
             scope_label=cost_scope_label,
             note=cost_note,
         )
-    return updated.provider, updated.model, int(max_tokens)
+    return provider, model, int(max_tokens)
 
 
 def _render_lightweight_funnel_monitor(project) -> None:
@@ -635,7 +624,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
     current = load_cut_plan_options(project)
     with st.expander("Cut Plan Settings", expanded=False):
         st.caption(
-            "Shot/Usage/Reuse/Vorlauf/Nachlauf/Toleranz → LLM 2+3 + Python. "
+            "LLM-Cut-Modell, Shot/Usage/Reuse/Vorlauf/Nachlauf/Toleranz → LLM + Python. "
             "Head-Trim → nur Python. Titel + Still → OTIO (Titel-Einblendung folgt)."
         )
         cut_mode_labels = {
@@ -776,7 +765,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             format_func=lambda m: ENHANCED_CUT_LLM_MODEL_LABELS.get(m, m),
             key=f"enh_opt_llm_cut_model_{project.id}",
             help=(
-                "Gilt für Unified Cut, Intro-Cut, Körper-Kapitel und Auto-Lauf. "
+                "Ein Modell für Unified Cut, Intro-Cut, Körper-Kapitel und Auto-Lauf. "
+                "Nur hier wählen — nicht noch einmal im Cut-Bereich. "
                 "Wird mit „Als Standard für die Sprache speichern“ übernommen."
             ),
         )
@@ -1436,6 +1426,7 @@ def _render_intro_cut_section(
     st.caption(
         "Nur Intro: gebündelte Inventare · strong-only · Opening 4s / Closing 5–8s · "
         "ohne Cut-Plan shot_min. "
+        "Modell wie der Unified Cut (Cut Plan Settings). "
         "**Intro: Python Timing** rechnet nur das Intro neu (Gesamt-Timeline bleibt). "
         "**Intro-OTIO** exportiert ausschließlich Intro (auch mit Lücken)."
     )
@@ -2029,10 +2020,10 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         st.warning(f"Kapitel-Liste nicht verfügbar: {exc}")
         body_chapters = []
     chapter_count = max(1, len(body_chapters))
+    model_id = _live_llm_cut_model_id(project, options)
     rough_provider, rough_model, rough_max = _render_enhanced_cut_model(
         project,
-        role_attr="enhanced_rough_cut",
-        label="Modell (Unified Cut)",
+        label="Unified Cut",
         key_prefix="enh_unified",
         input_info=LLM_INPUT_INFO.get("enhanced_rough_cut", ""),
         input_tokens=_estimate_rough_cut_input_tokens(project)[0],
@@ -2043,6 +2034,7 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             "Ceiling für alle Körper-Kapitel-Calls — nicht der Intro-Call. "
             "Intro hat eine eigene Schätzung darunter."
         ),
+        model_id=model_id,
     )
     _render_intro_cut_section(
         project,
@@ -2437,19 +2429,19 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         st.caption(f"Coverage Gaps (Funnel): {len(coverage.gaps)}")
 
 
-def _render_section_rough(project) -> None:
+def _render_section_rough(project, options: CutPlanOptions | None = None) -> None:
     st.subheader("1. Groben Cut Plan erzeugen")
     _render_slim_status(project)
     rough_tokens, rough_chapters = _estimate_rough_cut_input_tokens(project)
     rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
         project,
-        role_attr="enhanced_rough_cut",
-        label="Modell (LLM-Lauf 2)",
+        label="LLM-Lauf 2",
         key_prefix="enh_rough",
         input_info=LLM_INPUT_INFO["enhanced_rough_cut"],
         input_tokens=rough_tokens,
         default_output_tokens=_ROUGH_CUT_OUTPUT_DEFAULT,
         chapter_count=rough_chapters,
+        model_id=_live_llm_cut_model_id(project, options),
     )
     st.caption(
         f"Lauf 2 läuft sequenziell: **ein LLM-Call pro Kapitel** "
@@ -3431,18 +3423,18 @@ def _render_section_funnel(project) -> None:
                         st.error(str(exc))
 
 
-def _render_section_final(project) -> None:
+def _render_section_final(project, options: CutPlanOptions | None = None) -> None:
     st.subheader("3. Finalen Cut Plan erzeugen und technisch auflösen")
     final_tokens, final_chapters = _estimate_final_cut_input_tokens(project)
     final_provider, final_model, _final_max = _render_enhanced_cut_model(
         project,
-        role_attr="enhanced_final_cut",
-        label="Modell (LLM-Lauf 3)",
+        label="LLM-Lauf 3",
         key_prefix="enh_final",
         input_info=LLM_INPUT_INFO["enhanced_final_cut"],
         input_tokens=final_tokens,
         default_output_tokens=_FINAL_CUT_OUTPUT_DEFAULT,
         chapter_count=final_chapters,
+        model_id=_live_llm_cut_model_id(project, options),
     )
     st.caption(
         f"Lauf 3 und Python-Auflösung sind getrennt: "
@@ -3719,8 +3711,8 @@ def render_enhanced_cut_plan_page() -> None:
     if section == _SECTION_UNIFIED:
         _render_section_unified(project, options)
     elif section == _SECTION_ROUGH:
-        _render_section_rough(project)
+        _render_section_rough(project, options)
     elif section == _SECTION_FUNNEL:
         _render_section_funnel(project)
     else:
-        _render_section_final(project)
+        _render_section_final(project, options)
