@@ -25,6 +25,9 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     save_model_settings,
 )
 from otio_app.services.voiceover_generation.models import LlmRoleSettings
+from otio_app.services.voiceover_generation.project_brief_defaults_service import (
+    normalize_brief_language,
+)
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     CUT_PLAN_MODE_CHOICES,
     CUT_PLAN_MODE_LEGACY,
@@ -54,6 +57,15 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
     save_cut_plan_options,
 )  # TIMING_MODE_* used in settings UI labels/defaults
+from otio_app.services.without_voiceover_enhanced.cut_plan_options_defaults_service import (
+    apply_language_defaults_to_options,
+    default_cut_plan_options_for_project,
+    load_language_cut_plan_defaults,
+    save_language_cut_plan_defaults,
+)
+from otio_app.ui.voiceover_generation.language_standards_ui import (
+    render_language_standard_path_caption,
+)
 from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
     ChapterCutError,
     export_all_chapters_otio,
@@ -554,8 +566,71 @@ def _default_cut_section(project) -> str:
     return _SECTION_ROUGH
 
 
+def _cut_plan_settings_reload_key(project_id: str) -> str:
+    return f"_enh_opt_reload_{project_id}"
+
+
+def _clear_cut_plan_settings_widgets(project_id: str) -> None:
+    """Widget-Keys löschen, bevor die Settings-Widgets neu entstehen."""
+    suffix = f"_{project_id}"
+    stale = [
+        key
+        for key in list(st.session_state.keys())
+        if isinstance(key, str) and key.startswith("enh_opt_") and key.endswith(suffix)
+    ]
+    for key in stale:
+        st.session_state.pop(key, None)
+
+
+def _persist_cut_plan_options_with_sfx(project, options: CutPlanOptions) -> CutPlanOptions:
+    saved = save_cut_plan_options(project, options)
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        split_llm_model_id,
+    )
+
+    sfx_prov, sfx_mod = split_llm_model_id(str(saved.sfx_planner_model))
+    model_settings = load_model_settings(project)
+    save_model_settings(
+        project,
+        model_settings.model_copy(
+            update={
+                "enhanced_sfx_planner": LlmRoleSettings(
+                    provider=sfx_prov, model=sfx_mod
+                )
+            }
+        ),
+    )
+    return saved
+
+
+def _cut_plan_settings_success_text(saved: CutPlanOptions) -> str:
+    if is_keyword_flow_free_unified_style(saved):
+        style_note = " · Keyword Flow Free"
+    elif is_keyword_flow_unified_style(saved):
+        style_note = " · Keyword Flow"
+    elif is_keyword_sync_unified_style(saved):
+        style_note = " · Keyword-Sync"
+    else:
+        style_note = " · Rhythmus"
+    style_note += f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
+    style_note += (
+        f" · SFX planner={saved.sfx_planner_model} "
+        f"· max SFX={saved.max_sfx_per_chapter}"
+        f" · Music={saved.elevenlabs_music_count}"
+    )
+    return (
+        f"mode={saved.cut_plan_mode} · "
+        f"style={saved.unified_cut_style}{style_note} · "
+        f"reuse≥{saved.min_asset_reuse_distance_shots} · "
+        f"preroll {saved.voiceover_preroll_sec}s/{saved.voiceover_preroll_mode} · "
+        f"postroll {saved.voiceover_postroll_sec}s/{saved.voiceover_postroll_mode}"
+    )
+
+
 def _render_cut_plan_settings(project) -> CutPlanOptions:
     """Gemeinsame Settings für Lauf 2/3 + Python/OTIO (vor den Bereichen)."""
+    if st.session_state.pop(_cut_plan_settings_reload_key(project.id), False):
+        _clear_cut_plan_settings_widgets(project.id)
     current = load_cut_plan_options(project)
     with st.expander("Cut Plan Settings", expanded=False):
         st.caption(
@@ -1170,51 +1245,60 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             still_image_pan_min_aspect=float(still_image_pan_min_aspect),
             still_image_pan_max_aspect=float(still_image_pan_max_aspect),
         )
-        if st.button(
-            "Cut Plan Settings speichern",
-            key=f"enh_opt_save_{project.id}",
-            type="primary",
-        ):
-            saved = save_cut_plan_options(project, draft)
-            # Mirror SFX planner into model-settings role (same registry/router).
-            from otio_app.services.voiceover_generation.model_settings_service import (
-                split_llm_model_id,
-            )
-
-            sfx_prov, sfx_mod = split_llm_model_id(str(saved.sfx_planner_model))
-            model_settings = load_model_settings(project)
-            save_model_settings(
-                project,
-                model_settings.model_copy(
-                    update={
-                        "enhanced_sfx_planner": LlmRoleSettings(
-                            provider=sfx_prov, model=sfx_mod
-                        )
-                    }
+        lang_key = normalize_brief_language(project.language)
+        has_language_default = load_language_cut_plan_defaults(lang_key) is not None
+        col_save, col_lang, col_reset = st.columns(3)
+        with col_save:
+            if st.button(
+                "Cut Plan Settings speichern",
+                key=f"enh_opt_save_{project.id}",
+                type="primary",
+            ):
+                saved = _persist_cut_plan_options_with_sfx(project, draft)
+                st.success(f"Gespeichert: {_cut_plan_settings_success_text(saved)}")
+                st.rerun()
+        with col_lang:
+            if st.button(
+                f"Als Standard für {lang_key} speichern",
+                key=f"enh_opt_save_lang_{project.id}",
+                help=(
+                    f"Cut Plan Settings global für {lang_key}. "
+                    "Erzeugte Cuts, Timing und Funnel bleiben projektspezifisch."
                 ),
+            ):
+                save_language_cut_plan_defaults(lang_key, draft)
+                saved = _persist_cut_plan_options_with_sfx(project, draft)
+                st.success(
+                    f"Als globaler Standard für **{lang_key}** gespeichert. "
+                    f"{_cut_plan_settings_success_text(saved)}"
+                )
+                st.rerun()
+        with col_reset:
+            reset_label = (
+                f"Auf {lang_key}-Standard zurück"
+                if has_language_default
+                else "Auf Standard zurücksetzen"
             )
-            if is_keyword_flow_free_unified_style(saved):
-                style_note = " · Keyword Flow Free"
-            elif is_keyword_flow_unified_style(saved):
-                style_note = " · Keyword Flow"
-            elif is_keyword_sync_unified_style(saved):
-                style_note = " · Keyword-Sync"
-            else:
-                style_note = " · Rhythmus"
-            style_note += f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
-            style_note += (
-                f" · SFX planner={saved.sfx_planner_model} "
-                f"· max SFX={saved.max_sfx_per_chapter}"
-                f" · Music={saved.elevenlabs_music_count}"
-            )
-            st.success(
-                f"Gespeichert: mode={saved.cut_plan_mode} · "
-                f"style={saved.unified_cut_style}{style_note} · "
-                f"reuse≥{saved.min_asset_reuse_distance_shots} · "
-                f"preroll {saved.voiceover_preroll_sec}s/{saved.voiceover_preroll_mode} · "
-                f"postroll {saved.voiceover_postroll_sec}s/{saved.voiceover_postroll_mode}"
-            )
-            st.rerun()
+            if st.button(
+                reset_label,
+                key=f"enh_opt_reset_lang_{project.id}",
+                disabled=not has_language_default,
+                help=(
+                    f"Lädt den globalen {lang_key}-Standard in dieses Projekt."
+                    if has_language_default
+                    else "Noch kein Sprachstandard gespeichert."
+                ),
+            ):
+                language_defaults = load_language_cut_plan_defaults(lang_key)
+                if language_defaults is not None:
+                    reset = apply_language_defaults_to_options(
+                        default_cut_plan_options_for_project(project),
+                        language_defaults,
+                    )
+                    _persist_cut_plan_options_with_sfx(project, reset)
+                    st.session_state[_cut_plan_settings_reload_key(project.id)] = True
+                    st.rerun()
+        render_language_standard_path_caption("cut_plan_options")
         # Live-Modus sofort für Bereichs-Radio nutzen (Persistenz erst beim Speichern).
         return draft
 

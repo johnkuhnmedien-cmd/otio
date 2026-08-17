@@ -41,8 +41,9 @@ def render_enhanced_auto_run_page() -> None:
     st.header("▶ Auto-Lauf")
     st.write(
         "Ein Klick startet **nacheinander** (nie parallel) alles ab Project Brief "
-        "bis zu den Kapitel-Cuts. **⓪ Clean Media** und **① Analysen** bleiben "
-        "manuell. Stoppt **vor** Funnel / Timing / Musik / Export."
+        "bis zu den Kapitel-Cuts. Kapitel-Skripte zuerst komplett, danach "
+        "Freitext-Nachbearbeitung, erst dann Script Lock. **⓪ Clean Media** und "
+        "**① Analysen** bleiben manuell. Stoppt **vor** Funnel / Timing / Musik / Export."
     )
     from otio_app.ui.project_context import render_project_selector
 
@@ -134,10 +135,10 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
         st.subheader("▶ Auto-Lauf")
     st.caption(
         "Ein Button, **sequenziell** (nie parallel): Brief + Titel → Style → "
-        "Dramaturgie (auto-bestätigen) → Kapitel-Skripte → Script Lock → "
-        "Intro (erste gültige Variante) → TTS → Intro-Cut → alle Kapitel-Cuts. "
-        "Stoppt **vor** Funnel / Timing / Musik / Export. Fertige Schritte "
-        "werden übersprungen."
+        "Dramaturgie (auto-bestätigen) → Kapitel-Skripte → Freitext-Nachbearbeitung "
+        "→ Script Lock → Intro (erste gültige Variante) → TTS → Intro-Cut → "
+        "alle Kapitel-Cuts. Stoppt **vor** Funnel / Timing / Musik / Export. "
+        "Fertige Schritte werden übersprungen."
     )
     start_disabled = running or other_running
     help_text = None

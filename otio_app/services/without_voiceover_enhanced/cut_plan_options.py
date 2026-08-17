@@ -708,7 +708,11 @@ def intro_hold_timings(
 def load_cut_plan_options(project: Project) -> CutPlanOptions:
     path = cut_plan_options_path(project)
     if not path.is_file():
-        return default_cut_plan_options()
+        from otio_app.services.without_voiceover_enhanced.cut_plan_options_defaults_service import (
+            default_cut_plan_options_for_project,
+        )
+
+        return default_cut_plan_options_for_project(project)
     loaded = load_model(path, CutPlanOptions)
     if loaded is None:
         try:

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from otio_app.defaults import (
+    CUT_PLAN_OPTIONS_DEFAULTS_FILENAME,
     DEFAULT_ENHANCED_WORK_SUBDIR,
     DRAMATURGY_DEFAULTS_FILENAME,
     ELEVENLABS_VOICE_DEFAULTS_FILENAME,
@@ -72,6 +73,9 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_script_draft,
     lock_script,
     save_script_draft,
+)
+from otio_app.services.without_voiceover_enhanced.script_prompts import (
+    DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS,
 )
 
 
@@ -142,7 +146,7 @@ def _seed_dramaturgy(project: Project, folders: list[str]) -> DramaturgyPlan:
     return save_confirmed_dramaturgy(project, plan)
 
 
-def _seed_scripts_and_lock(project: Project, folders: list[str]) -> None:
+def _seed_scripts(project: Project, folders: list[str]) -> None:
     segments = [
         ScriptSegment(
             segment_id=f"{folder}_segment_001",
@@ -161,6 +165,10 @@ def _seed_scripts_and_lock(project: Project, folders: list[str]) -> None:
             segments=segments,
         ),
     )
+
+
+def _seed_scripts_and_lock(project: Project, folders: list[str]) -> None:
+    _seed_scripts(project, folders)
     lock_script(project)
 
 
@@ -173,6 +181,7 @@ def test_language_standard_files_live_under_data_dir() -> None:
         DRAMATURGY_DEFAULTS_FILENAME,
         INTRO_HOOK_DEFAULTS_FILENAME,
         ELEVENLABS_VOICE_DEFAULTS_FILENAME,
+        CUT_PLAN_OPTIONS_DEFAULTS_FILENAME,
     }
     for item in files:
         assert item.path.name == item.filename
@@ -235,6 +244,7 @@ def test_auto_run_skips_completed_steps(
     monkeypatch.setattr(auto_run, "generate_video_title", boom)
     monkeypatch.setattr(auto_run, "build_dramaturgy_plan", boom)
     monkeypatch.setattr(auto_run, "generate_enhanced_script_for_folder", boom)
+    monkeypatch.setattr(auto_run, "revise_enhanced_script_for_folder", boom)
     monkeypatch.setattr(auto_run, "build_intro_hook_candidates", boom)
     monkeypatch.setattr(auto_run, "synthesize_open_chapters_audio", boom)
     monkeypatch.setattr(auto_run, "generate_intro_unified_cut", boom)
@@ -289,6 +299,7 @@ def test_auto_run_skips_completed_steps(
     assert report.error is None
     assert "brief" in report.skipped
     assert "scripts" in report.skipped
+    assert "script_revise" in report.skipped
     assert "script_lock" in report.skipped
     assert "intro" in report.skipped
     assert "tts" in report.skipped
@@ -378,6 +389,13 @@ def test_auto_run_is_strictly_sequential(
             folder_name=folder_name, status="PASS", segment_count=1
         )
 
+    def fake_revise(_project_arg, folder_name, *, editor_instructions, **_k):
+        _enter(f"revise:{folder_name}")
+        assert editor_instructions == DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS.strip()
+        return FolderScriptBuildResult(
+            folder_name=folder_name, status="PASS", segment_count=1
+        )
+
     def fake_intro(project_arg, **_k):
         _enter("intro")
         document = IntroHookCandidatesDocument(
@@ -417,6 +435,7 @@ def test_auto_run_is_strictly_sequential(
     monkeypatch.setattr(auto_run, "generate_video_title", fake_title)
     monkeypatch.setattr(auto_run, "build_dramaturgy_plan", fake_dram)
     monkeypatch.setattr(auto_run, "generate_enhanced_script_for_folder", fake_script)
+    monkeypatch.setattr(auto_run, "revise_enhanced_script_for_folder", fake_revise)
     monkeypatch.setattr(auto_run, "build_intro_hook_candidates", fake_intro)
     monkeypatch.setattr(auto_run, "synthesize_open_chapters_audio", fake_tts)
     monkeypatch.setattr(auto_run, "list_chapter_audio_statuses", lambda _p: [])
@@ -435,6 +454,12 @@ def test_auto_run_is_strictly_sequential(
     assert order[2].startswith("script:")
     assert order[3].startswith("script:")
     assert order[2] != order[3]
+    assert order[4].startswith("revise:")
+    assert order[5].startswith("revise:")
+    assert [item for item in order if item.startswith("revise:")] == [
+        f"revise:{folders[0]}",
+        f"revise:{folders[1]}",
+    ]
     assert "intro" in order
     assert "tts" in order
     assert "intro_cut" in order
@@ -451,6 +476,97 @@ def test_auto_run_is_strictly_sequential(
     confirmed = load_confirmed_intro_hook(project)
     assert confirmed is not None
     assert confirmed.hook_id == "clean"
+
+
+def test_auto_run_revises_existing_scripts_before_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    folders = list(project.selected_asset_subdirs)
+    _seed_brief(project, title="Schon da")
+    _seed_raw_style(project)
+    _seed_dramaturgy(project, folders)
+    _seed_scripts(project, folders)
+
+    order: list[str] = []
+
+    def boom(*_a, **_k):
+        raise AssertionError("Skripterzeugung darf nicht nochmal laufen")
+
+    def fake_revise(_project, folder_name, *, editor_instructions, **_k):
+        order.append(folder_name)
+        assert editor_instructions == DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS.strip()
+        return FolderScriptBuildResult(
+            folder_name=folder_name, status="PASS", segment_count=1
+        )
+
+    monkeypatch.setattr(auto_run, "generate_enhanced_script_for_folder", boom)
+    monkeypatch.setattr(auto_run, "revise_enhanced_script_for_folder", fake_revise)
+    monkeypatch.setattr(auto_run, "build_intro_hook_candidates", boom)
+    monkeypatch.setattr(auto_run, "synthesize_open_chapters_audio", lambda *_a, **_k: MagicMock())
+    monkeypatch.setattr(auto_run, "list_chapter_audio_statuses", lambda _p: [])
+    monkeypatch.setattr(auto_run, "generate_intro_unified_cut", boom)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", boom)
+    monkeypatch.setattr(auto_run, "list_chapters_needing_unified_cut", lambda _p: [])
+    monkeypatch.setattr(auto_run, "refresh_merged_unified_cut_plan", lambda _p: None)
+
+    def fake_intro(project_arg, **_k):
+        document = IntroHookCandidatesDocument(
+            project_id=project_arg.id,
+            language="PT",
+            candidates=[IntroHookCandidate(hook_id="h", hook_text="Intro.", risks=[])],
+        )
+        save_intro_hook_candidates(project_arg, document)
+        return IntroHookBuildResult(
+            status=STATUS_PASS,
+            document=document,
+            error=None,
+            llm_run_id="i",
+            provider="openai",
+            model="test",
+        )
+
+    monkeypatch.setattr(auto_run, "build_intro_hook_candidates", fake_intro)
+    monkeypatch.setattr(
+        auto_run, "list_chapter_audio_statuses", lambda _p: [MagicMock(is_open=False)]
+    )
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        intro_unified_cut_plan_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+    from otio_app.services.without_voiceover_enhanced.models import (
+        CutBoundary,
+        CutSlot,
+        UnifiedCutPlanDocument,
+    )
+
+    write_json(
+        intro_unified_cut_plan_path(project),
+        UnifiedCutPlanDocument(
+            script_version="script-v1",
+            boundaries=[
+                CutBoundary(cut_id="intro_cut_000", sentence_id="s1", position="start"),
+                CutBoundary(cut_id="intro_cut_001", sentence_id="s1", position="end"),
+            ],
+            slots=[
+                CutSlot(
+                    slot_id="intro_slot_001",
+                    local_asset_id="a1",
+                    asset_fit="strong",
+                    asset_fit_reason="test",
+                    visual_intent="open",
+                )
+            ],
+        ),
+    )
+
+    report = run_enhanced_auto_pipeline(project, skip_done=True)
+    assert report.stopped is False
+    assert "scripts" in report.skipped
+    assert "script_revise" in report.completed
+    assert "script_lock" in report.completed
+    assert order == folders
+    assert load_locked_script(project) is not None
 
 
 def test_auto_run_cancel_between_steps(

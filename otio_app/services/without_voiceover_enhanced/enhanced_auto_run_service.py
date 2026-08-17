@@ -2,10 +2,11 @@
 
 Ein Schritt nach dem anderen, innerhalb jedes Schritts ein Kapitel nach dem
 anderen. Keine parallelen LLM-/TTS-Calls. Bereits erledigte Schritte werden
-übersprungen (skip-done). Der Aufruf über den Auto-Lauf-Button gilt als
-explizite Bestätigung für Dramaturgie, Script Lock und Intro (erste gültige
-Variante). Clean Media, Analysen, Funnel, Timing, Musik, SFX, OTIO und
-YouTube bleiben manuell.
+übersprungen (skip-done). Kapitel-Skripte laufen zuerst komplett durch, danach
+die Freitext-Nachbearbeitung aller Kapitel, erst dann Script Lock. Der Aufruf
+über den Auto-Lauf-Button gilt als explizite Bestätigung für Dramaturgie,
+Script Lock und Intro (erste gültige Variante). Clean Media, Analysen, Funnel,
+Timing, Musik, SFX, OTIO und YouTube bleiben manuell.
 """
 
 from __future__ import annotations
@@ -92,11 +93,15 @@ from otio_app.services.without_voiceover_enhanced.script_author_service import (
     folders_present_in_script,
     generate_enhanced_script_for_folder,
     list_enabled_dramaturgy_folders,
+    revise_enhanced_script_for_folder,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
     load_script_draft,
     lock_script,
+)
+from otio_app.services.without_voiceover_enhanced.script_prompts import (
+    DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS,
 )
 
 __all__ = [
@@ -114,6 +119,7 @@ AUTO_RUN_STEPS: tuple[tuple[str, str], ...] = (
     ("style", "② Style"),
     ("dramaturgy", "③ Dramaturgie"),
     ("scripts", "④ Kapitel-Skripte"),
+    ("script_revise", "④ Freitext-Nachbearbeitung"),
     ("script_lock", "④ Script Lock"),
     ("intro", "⑤ Intro"),
     ("tts", "⑥ Audio / TTS"),
@@ -269,6 +275,17 @@ def run_enhanced_auto_pipeline(
 
     checkpoint("scripts")
     _run_scripts(
+        project,
+        skip_done=skip_done,
+        emit=emit,
+        checkpoint=checkpoint,
+        provider=models.voiceover_author.provider,
+        model=models.voiceover_author.model,
+        finish=finish_step,
+    )
+
+    checkpoint("script_revise")
+    _run_script_revise(
         project,
         skip_done=skip_done,
         emit=emit,
@@ -519,6 +536,73 @@ def _run_scripts(
         generated += 1
     emit("scripts", f"{generated} Kapitel-Skript(e) erzeugt (sequenziell).")
     finish("scripts", skipped=False)
+
+
+def _folders_with_scripts(project: Project) -> list:
+    entries = list_enabled_dramaturgy_folders(project)
+    draft = load_script_draft(project)
+    present = folders_present_in_script(draft)
+    return [
+        entry
+        for entry in entries
+        if entry.folder_name in present
+        and chapter_narration_text(draft, entry.folder_name).strip()
+    ]
+
+
+def _run_script_revise(
+    project: Project,
+    *,
+    skip_done: bool,
+    emit: Callable[..., None],
+    checkpoint: Callable[[str], None],
+    provider: str,
+    model: str,
+    finish: Callable[..., None],
+) -> None:
+    if skip_done and load_locked_script(project) is not None:
+        emit(
+            "script_revise",
+            "Script Lock vorhanden — Freitext-Nachbearbeitung übersprungen.",
+            skipped=True,
+        )
+        finish("script_revise", skipped=True)
+        return
+
+    folders = _folders_with_scripts(project)
+    if not folders:
+        raise EnhancedAutoRunError(
+            "Keine Kapitel-Skripte für die Freitext-Nachbearbeitung."
+        )
+    instructions = DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS.strip()
+    revised = 0
+    for index, entry in enumerate(folders, start=1):
+        checkpoint("script_revise")
+        emit(
+            "script_revise",
+            f"Freitext {index}/{len(folders)}: {entry.folder_name}",
+            item_label=entry.folder_name,
+            item_index=index,
+            item_total=len(folders),
+        )
+        result = revise_enhanced_script_for_folder(
+            project,
+            entry.folder_name,
+            editor_instructions=instructions,
+            provider=provider,
+            model=model,
+        )
+        if result.status != "PASS":
+            raise EnhancedAutoRunError(
+                result.error
+                or f"Freitext-Nachbearbeitung fehlgeschlagen für „{entry.folder_name}“."
+            )
+        revised += 1
+    emit(
+        "script_revise",
+        f"{revised} Kapitel mit Standard-Freitext nachbearbeitet (sequenziell).",
+    )
+    finish("script_revise", skipped=False)
 
 
 def _run_script_lock(

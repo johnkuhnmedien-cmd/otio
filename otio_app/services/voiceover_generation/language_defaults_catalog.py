@@ -17,6 +17,7 @@ from pathlib import Path
 
 from otio_app.config import ensure_data_dir
 from otio_app.defaults import (
+    CUT_PLAN_OPTIONS_DEFAULTS_FILENAME,
     DRAMATURGY_DEFAULTS_FILENAME,
     ELEVENLABS_VOICE_DEFAULTS_FILENAME,
     INTRO_HOOK_DEFAULTS_FILENAME,
@@ -33,6 +34,9 @@ from otio_app.services.voiceover_generation.elevenlabs_voice_defaults_service im
 )
 from otio_app.services.voiceover_generation.intro_hook_defaults_service import (
     get_intro_hook_defaults_path,
+)
+from otio_app.services.without_voiceover_enhanced.cut_plan_options_defaults_service import (
+    get_cut_plan_options_defaults_path,
 )
 from otio_app.services.voiceover_generation.project_brief_defaults_service import (
     get_project_brief_defaults_path,
@@ -75,7 +79,7 @@ def language_standards_dir() -> Path:
 
 
 def list_language_standard_files() -> list[LanguageStandardFile]:
-    """Alle per-Sprache-Standards (Brief, Style, Dramaturgie, Intro, Voice-ID)."""
+    """Alle per-Sprache-Standards (Brief, Style, Dramaturgie, Intro, Voice-ID, Cut Plan)."""
     return [
         LanguageStandardFile(
             key="project_brief",
@@ -128,6 +132,17 @@ def list_language_standard_files() -> list[LanguageStandardFile]:
             path=get_elevenlabs_voice_defaults_path(),
             stores="Voice-ID, Modell und Stimm-Parameter pro Sprache",
             not_stored="API-Key (liegt in user_secrets.env / Umgebung)",
+        ),
+        LanguageStandardFile(
+            key="cut_plan_options",
+            tab="⑦ Cut Plan",
+            filename=CUT_PLAN_OPTIONS_DEFAULTS_FILENAME,
+            path=get_cut_plan_options_defaults_path(),
+            stores=(
+                "Modus, Unified-Stil, Shot-Min/Max, Reuse, Vor-/Nachlauf, "
+                "Intro-Hüllen, Still/Pan, Titel, Music-Anzahl, SFX-Maximum"
+            ),
+            not_stored="Erzeugte Cuts, Timing, Funnel, OTIO",
         ),
     ]
 
