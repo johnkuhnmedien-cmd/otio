@@ -63,4 +63,5 @@ def expected_feature_markers() -> list[str]:
         "URL-Pfad z. B. /systemstatus (st.navigation)",
         "Schnittplan: Radio-Navigation statt Tabs",
         "OTIO Export: ein Klick ohne Pflicht-Vorschau",
+        "Enhanced: Auto-Lauf Alle Schritte nacheinander",
     ]

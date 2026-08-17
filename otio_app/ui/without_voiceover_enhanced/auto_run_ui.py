@@ -30,7 +30,15 @@ def render_enhanced_auto_run_sidebar() -> None:
     render_language_standards_expander()
 
 
-def render_enhanced_auto_run_banner(project_id: str) -> None:
+def render_enhanced_auto_run_page_panel(project_id: str) -> None:
+    """Start-Button oben auf jeder Enhanced-Seite — nicht nur in der Sidebar."""
+    project = get_project_by_id(str(project_id))
+    if project is None or project.project_mode != ProjectMode.WITHOUT_VOICEOVER_ENHANCED:
+        return
+    with st.container(border=True):
+        _render_auto_run_controls(project, key_scope="page")
+    render_enhanced_auto_run_banner(str(project_id))
+
     """Fortschritt auf Enhanced-Seiten, inkl. Stop."""
     manager = get_enhanced_auto_run_job_manager()
     state = manager.get_state(project_id)

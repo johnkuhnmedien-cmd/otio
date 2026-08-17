@@ -36,7 +36,7 @@ from otio_app.ui.without_voiceover_enhanced.final_output_tab import (
     render_enhanced_final_output_page,
 )
 from otio_app.ui.without_voiceover_enhanced.auto_run_ui import (
-    render_enhanced_auto_run_banner,
+    render_enhanced_auto_run_page_panel,
     render_enhanced_auto_run_sidebar,
 )
 from otio_app.ui.without_voiceover_enhanced.folder_voiceovers_tab import (
@@ -90,7 +90,7 @@ def _wrap_page(
                 project is not None
                 and project.project_mode == ProjectMode.WITHOUT_VOICEOVER_ENHANCED
             ):
-                render_enhanced_auto_run_banner(str(project_id))
+                render_enhanced_auto_run_page_panel(str(project_id))
         render_fn()
 
     wrapped.__name__ = f"page_{page_id.replace(' ', '_')}"
