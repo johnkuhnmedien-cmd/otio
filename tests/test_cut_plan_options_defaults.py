@@ -19,6 +19,8 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     UNIFIED_CUT_STYLE_KEYWORD_FLOW,
     CutPlanOptions,
     load_cut_plan_options,
+    persist_cut_plan_options,
+    resolve_llm_cut_model_id,
     save_cut_plan_options,
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_options_defaults_service import (
@@ -72,17 +74,20 @@ def test_save_and_load_language_cut_plan_defaults(
             min_asset_reuse_distance_shots=6,
             voiceover_preroll_sec=2.0,
             elevenlabs_music_count=5,
+            llm_cut_model="anthropic:claude-opus-5",
         ),
     )
     assert saved.cut_plan_mode == CUT_PLAN_MODE_UNIFIED
     assert saved.unified_cut_style == UNIFIED_CUT_STYLE_KEYWORD_FLOW
     assert saved.shot_min_sec == 4.0
     assert saved.elevenlabs_music_count == 5
+    assert saved.llm_cut_model == "anthropic:claude-opus-5"
     loaded = load_language_cut_plan_defaults("PT")
     assert loaded is not None
     assert loaded.shot_max_sec == 12.0
     assert loaded.min_asset_reuse_distance_shots == 6
     assert loaded.voiceover_preroll_sec == 2.0
+    assert loaded.llm_cut_model == "anthropic:claude-opus-5"
     assert get_cut_plan_options_defaults_path().is_relative_to(cut_plan_defaults_dir)
     assert get_cut_plan_options_defaults_path().name == CUT_PLAN_OPTIONS_DEFAULTS_FILENAME
 
@@ -96,6 +101,7 @@ def test_load_project_options_uses_language_standard_when_file_missing(
             unified_cut_style=UNIFIED_CUT_STYLE_KEYWORD_FLOW,
             shot_min_sec=5.0,
             elevenlabs_music_count=8,
+            llm_cut_model="openai:gpt-5.6-sol",
         ),
     )
     project = _project(tmp_path, language="pt")
@@ -103,6 +109,8 @@ def test_load_project_options_uses_language_standard_when_file_missing(
     assert loaded.unified_cut_style == UNIFIED_CUT_STYLE_KEYWORD_FLOW
     assert loaded.shot_min_sec == 5.0
     assert loaded.elevenlabs_music_count == 8
+    assert loaded.llm_cut_model == "openai:gpt-5.6-sol"
+    assert resolve_llm_cut_model_id(project) == "openai:gpt-5.6-sol"
 
 
 def test_existing_project_options_are_not_overwritten_by_language_standard(
@@ -150,6 +158,7 @@ def test_default_for_project_without_standard_is_hardcoded(
     assert options.shot_max_sec == 8.0
     assert options.min_asset_reuse_distance_shots == 4
     assert options.elevenlabs_music_count == 4
+    assert options.llm_cut_model == ""
 
 
 def test_catalog_includes_cut_plan_options_standard() -> None:
@@ -157,3 +166,157 @@ def test_catalog_includes_cut_plan_options_standard() -> None:
     assert item.filename == CUT_PLAN_OPTIONS_DEFAULTS_FILENAME
     assert item.tab == "⑦ Cut Plan"
     assert item.per_language is True
+    assert "LLM-Cut-Modell" in item.stores
+    assert "SFX-Planner-Modell" in item.stores
+
+
+def test_persist_mirrors_llm_cut_model_to_both_roles(
+    tmp_path: Path, cut_plan_defaults_dir: Path
+) -> None:
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        load_model_settings,
+    )
+
+    project = _project(tmp_path)
+    saved = persist_cut_plan_options(
+        project,
+        CutPlanOptions(llm_cut_model="anthropic:claude-opus-5"),
+    )
+    assert saved.llm_cut_model == "anthropic:claude-opus-5"
+    settings = load_model_settings(project)
+    assert settings.enhanced_rough_cut.provider == "anthropic"
+    assert settings.enhanced_rough_cut.model == "claude-opus-5"
+    assert settings.enhanced_final_cut.provider == "anthropic"
+    assert settings.enhanced_final_cut.model == "claude-opus-5"
+    assert resolve_llm_cut_model_id(project) == "anthropic:claude-opus-5"
+
+
+def test_persist_llm_cut_model_does_not_overwrite_sfx_planner(
+    tmp_path: Path, cut_plan_defaults_dir: Path
+) -> None:
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        load_model_settings,
+        save_model_settings,
+    )
+    from otio_app.services.voiceover_generation.models import (
+        LlmRoleSettings,
+        VoiceoverGenerationModelSettings,
+    )
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        persist_llm_cut_model,
+    )
+
+    project = _project(tmp_path)
+    save_model_settings(
+        project,
+        VoiceoverGenerationModelSettings(
+            enhanced_sfx_planner=LlmRoleSettings(
+                provider="openai", model="gpt-5.4-mini"
+            ),
+        ),
+    )
+    persist_llm_cut_model(project, "anthropic:claude-opus-5")
+    settings = load_model_settings(project)
+    assert settings.enhanced_sfx_planner.model == "gpt-5.4-mini"
+    assert settings.enhanced_rough_cut.model == "claude-opus-5"
+    assert load_cut_plan_options(project).llm_cut_model == "anthropic:claude-opus-5"
+
+
+def test_persist_llm_cut_model_does_not_overwrite_sfx_planner(
+    tmp_path: Path, cut_plan_defaults_dir: Path
+) -> None:
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        load_model_settings,
+        save_model_settings,
+    )
+    from otio_app.services.voiceover_generation.models import (
+        LlmRoleSettings,
+        VoiceoverGenerationModelSettings,
+    )
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        persist_llm_cut_model,
+    )
+
+    project = _project(tmp_path)
+    save_model_settings(
+        project,
+        VoiceoverGenerationModelSettings(
+            enhanced_sfx_planner=LlmRoleSettings(
+                provider="openai", model="gpt-5.4-mini"
+            ),
+        ),
+    )
+    persist_llm_cut_model(project, "anthropic:claude-opus-5")
+    settings = load_model_settings(project)
+    assert settings.enhanced_sfx_planner.model == "gpt-5.4-mini"
+    assert settings.enhanced_rough_cut.model == "claude-opus-5"
+    assert load_cut_plan_options(project).llm_cut_model == "anthropic:claude-opus-5"
+
+
+def test_resolve_llm_cut_falls_back_to_model_settings_when_unset(
+    tmp_path: Path, cut_plan_defaults_dir: Path
+) -> None:
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        save_model_settings,
+    )
+    from otio_app.services.voiceover_generation.models import (
+        LlmRoleSettings,
+        VoiceoverGenerationModelSettings,
+    )
+
+    project = _project(tmp_path)
+    save_cut_plan_options(project, CutPlanOptions(shot_min_sec=3.0))
+    save_model_settings(
+        project,
+        VoiceoverGenerationModelSettings(
+            enhanced_rough_cut=LlmRoleSettings(
+                provider="anthropic", model="claude-fable-5"
+            ),
+            enhanced_final_cut=LlmRoleSettings(
+                provider="openai", model="gpt-5.6-terra"
+            ),
+        ),
+    )
+    assert load_cut_plan_options(project).llm_cut_model == ""
+    assert resolve_llm_cut_model_id(project) == "anthropic:claude-fable-5"
+
+
+def test_resolve_prefers_cut_plan_options_over_model_settings(
+    tmp_path: Path, cut_plan_defaults_dir: Path
+) -> None:
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        save_model_settings,
+    )
+    from otio_app.services.voiceover_generation.models import (
+        LlmRoleSettings,
+        VoiceoverGenerationModelSettings,
+    )
+
+    project = _project(tmp_path)
+    save_cut_plan_options(
+        project, CutPlanOptions(llm_cut_model="openai:gpt-5.6-sol")
+    )
+    save_model_settings(
+        project,
+        VoiceoverGenerationModelSettings(
+            enhanced_rough_cut=LlmRoleSettings(
+                provider="anthropic", model="claude-opus-5"
+            ),
+        ),
+    )
+    assert resolve_llm_cut_model_id(project) == "openai:gpt-5.6-sol"
+
+
+def test_auto_run_helper_uses_language_llm_cut_model(
+    tmp_path: Path, cut_plan_defaults_dir: Path
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+        llm_cut_provider_model,
+    )
+
+    save_language_cut_plan_defaults(
+        "pt",
+        CutPlanOptions(llm_cut_model="anthropic:claude-opus-5"),
+    )
+    project = _project(tmp_path)
+    assert llm_cut_provider_model(project) == ("anthropic", "claude-opus-5")

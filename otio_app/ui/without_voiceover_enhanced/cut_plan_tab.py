@@ -23,6 +23,7 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
     resolve_llm_model_id,
     save_model_settings,
+    split_llm_model_id,
 )
 from otio_app.services.voiceover_generation.models import LlmRoleSettings
 from otio_app.services.voiceover_generation.project_brief_defaults_service import (
@@ -55,6 +56,9 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     is_keyword_flow_unified_style,
     is_keyword_sync_unified_style,
     load_cut_plan_options,
+    persist_cut_plan_options,
+    persist_llm_cut_model,
+    resolve_llm_cut_model_id,
     save_cut_plan_options,
 )  # TIMING_MODE_* used in settings UI labels/defaults
 from otio_app.services.without_voiceover_enhanced.cut_plan_options_defaults_service import (
@@ -368,6 +372,9 @@ def _render_enhanced_cut_model(
 ) -> tuple[str, str, int]:
     settings = load_model_settings(project)
     role_settings: LlmRoleSettings = getattr(settings, role_attr)
+    if role_attr in {"enhanced_rough_cut", "enhanced_final_cut"}:
+        cut_prov, cut_mod = split_llm_model_id(resolve_llm_cut_model_id(project))
+        role_settings = LlmRoleSettings(provider=cut_prov, model=cut_mod)
     with st.expander(f"⚙️ {label}", expanded=True):
         updated = render_llm_model_selectbox(
             label=label,
@@ -379,10 +386,18 @@ def _render_enhanced_cut_model(
             show_estimated_costs=True,
         )
         if st.button("Modell speichern", key=f"{key_prefix}_model_save_{project.id}"):
-            save_model_settings(
-                project, settings.model_copy(update={role_attr: updated})
-            )
+            if role_attr in {"enhanced_rough_cut", "enhanced_final_cut"}:
+                persist_llm_cut_model(
+                    project,
+                    resolve_llm_model_id(updated.provider, updated.model),
+                )
+                st.session_state[_cut_plan_settings_reload_key(project.id)] = True
+            else:
+                save_model_settings(
+                    project, settings.model_copy(update={role_attr: updated})
+                )
             st.success(f"{label} gespeichert.")
+            st.rerun()
 
         token_key = f"{key_prefix}_max_tokens_{project.id}"
         if token_key not in st.session_state:
@@ -578,29 +593,14 @@ def _clear_cut_plan_settings_widgets(project_id: str) -> None:
         for key in list(st.session_state.keys())
         if isinstance(key, str) and key.startswith("enh_opt_") and key.endswith(suffix)
     ]
+    for prefix in ("enh_unified_model", "enh_rough_model", "enh_final_model"):
+        stale.append(f"{prefix}_{project_id}")
     for key in stale:
         st.session_state.pop(key, None)
 
 
 def _persist_cut_plan_options_with_sfx(project, options: CutPlanOptions) -> CutPlanOptions:
-    saved = save_cut_plan_options(project, options)
-    from otio_app.services.voiceover_generation.model_settings_service import (
-        split_llm_model_id,
-    )
-
-    sfx_prov, sfx_mod = split_llm_model_id(str(saved.sfx_planner_model))
-    model_settings = load_model_settings(project)
-    save_model_settings(
-        project,
-        model_settings.model_copy(
-            update={
-                "enhanced_sfx_planner": LlmRoleSettings(
-                    provider=sfx_prov, model=sfx_mod
-                )
-            }
-        ),
-    )
-    return saved
+    return persist_cut_plan_options(project, options)
 
 
 def _cut_plan_settings_success_text(saved: CutPlanOptions) -> str:
@@ -614,6 +614,7 @@ def _cut_plan_settings_success_text(saved: CutPlanOptions) -> str:
         style_note = " · Rhythmus"
     style_note += f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
     style_note += (
+        f" · LLM Cut={saved.llm_cut_model or '—'}"
         f" · SFX planner={saved.sfx_planner_model} "
         f"· max SFX={saved.max_sfx_per_chapter}"
         f" · Music={saved.elevenlabs_music_count}"
@@ -760,6 +761,24 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             key=f"enh_opt_mini_repair_thr_{project.id}",
             disabled=cut_plan_mode != CUT_PLAN_MODE_UNIFIED
             or not enable_unified_mini_repair,
+        )
+        st.markdown("##### LLM Cut")
+        cut_model_options = list(ENHANCED_CUT_LLM_MODEL_CHOICES)
+        current_llm_cut_model = str(current.llm_cut_model or "").strip()
+        if not current_llm_cut_model:
+            current_llm_cut_model = resolve_llm_cut_model_id(project)
+        if current_llm_cut_model not in cut_model_options:
+            cut_model_options = [current_llm_cut_model, *cut_model_options]
+        llm_cut_model = st.selectbox(
+            "Modell (Unified Cut / Auto-Lauf)",
+            options=cut_model_options,
+            index=cut_model_options.index(current_llm_cut_model),
+            format_func=lambda m: ENHANCED_CUT_LLM_MODEL_LABELS.get(m, m),
+            key=f"enh_opt_llm_cut_model_{project.id}",
+            help=(
+                "Gilt für Unified Cut, Intro-Cut, Körper-Kapitel und Auto-Lauf. "
+                "Wird mit „Als Standard für die Sprache speichern“ übernommen."
+            ),
         )
         st.markdown("##### Sound Effects (MVP)")
         sfx_model_options = list(ENHANCED_CUT_LLM_MODEL_CHOICES)
@@ -1206,6 +1225,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             ),
             enable_unified_mini_repair=bool(enable_unified_mini_repair),
             unified_mini_repair_threshold=float(unified_mini_repair_threshold),
+            llm_cut_model=str(llm_cut_model),
             sfx_planner_model=str(sfx_planner_model),
             max_sfx_per_chapter=int(max_sfx_per_chapter),
             elevenlabs_music_count=int(elevenlabs_music_count),
@@ -1255,6 +1275,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 type="primary",
             ):
                 saved = _persist_cut_plan_options_with_sfx(project, draft)
+                st.session_state[_cut_plan_settings_reload_key(project.id)] = True
                 st.success(f"Gespeichert: {_cut_plan_settings_success_text(saved)}")
                 st.rerun()
         with col_lang:
@@ -1262,12 +1283,13 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 f"Als Standard für {lang_key} speichern",
                 key=f"enh_opt_save_lang_{project.id}",
                 help=(
-                    f"Cut Plan Settings global für {lang_key}. "
+                    f"Cut Plan Settings inkl. LLM-Cut-Modell global für {lang_key}. "
                     "Erzeugte Cuts, Timing und Funnel bleiben projektspezifisch."
                 ),
             ):
                 save_language_cut_plan_defaults(lang_key, draft)
                 saved = _persist_cut_plan_options_with_sfx(project, draft)
+                st.session_state[_cut_plan_settings_reload_key(project.id)] = True
                 st.success(
                     f"Als globaler Standard für **{lang_key}** gespeichert. "
                     f"{_cut_plan_settings_success_text(saved)}"

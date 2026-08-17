@@ -47,6 +47,7 @@ from otio_app.services.voiceover_generation.intro_hook_settings_service import (
 from otio_app.services.voiceover_generation.llm_trace_service import STATUS_PASS
 from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
+    split_llm_model_id,
 )
 from otio_app.services.voiceover_generation.models import (
     IntroHookCandidate,
@@ -87,6 +88,9 @@ from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
     ensure_confirmed_intro_in_locked_script,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model
+from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    resolve_llm_cut_model_id,
+)
 from otio_app.services.without_voiceover_enhanced.models import UnifiedCutPlanDocument
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
     chapter_narration_text,
@@ -111,6 +115,7 @@ __all__ = [
     "EnhancedAutoRunError",
     "EnhancedAutoRunReport",
     "pick_auto_intro_candidate",
+    "llm_cut_provider_model",
     "run_enhanced_auto_pipeline",
 ]
 
@@ -185,6 +190,11 @@ def _style_has_content(refs: VoiceoverStyleReferences) -> bool:
     return any(str(chunk or "").strip() for chunk in chunks)
 
 
+def llm_cut_provider_model(project: Project) -> tuple[str, str]:
+    """Provider/Modell für Intro- und Kapitel-LLM-Cuts (Sprachstandard zuerst)."""
+    return split_llm_model_id(resolve_llm_cut_model_id(project))
+
+
 def run_enhanced_auto_pipeline(
     project: Project,
     *,
@@ -242,6 +252,7 @@ def run_enhanced_auto_pipeline(
             report.completed.append(step_id)
 
     models = load_model_settings(project)
+    cut_provider, cut_model = llm_cut_provider_model(project)
 
     checkpoint("brief")
     _run_brief(
@@ -316,8 +327,8 @@ def run_enhanced_auto_pipeline(
         project,
         skip_done=skip_done,
         emit=emit,
-        provider=models.enhanced_final_cut.provider,
-        model=models.enhanced_final_cut.model,
+        provider=cut_provider,
+        model=cut_model,
         finish=finish_step,
     )
 
@@ -327,8 +338,8 @@ def run_enhanced_auto_pipeline(
         skip_done=skip_done,
         emit=emit,
         checkpoint=checkpoint,
-        provider=models.enhanced_final_cut.provider,
-        model=models.enhanced_final_cut.model,
+        provider=cut_provider,
+        model=cut_model,
         finish=finish_step,
     )
 
