@@ -37,6 +37,7 @@ from otio_app.project_repository import (
     list_projects,
     update_project_video_place,
 )
+from otio_app.ui.language_sibling_ui import render_language_sibling_actions
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_NEW
 from otio_app.ui.routing import PENDING_SWITCH_URL_PATH_KEY, run_app_navigation
 
@@ -629,9 +630,28 @@ def render_project_list_page() -> None:
     projects = list_projects()
     if not projects:
         st.info("Noch keine Projekte gespeichert.")
-    else:
-        for project in projects:
-            with st.expander(f"{project.name}  ({project.status.value})"):
+        return
+
+    siblings_by_key: dict[tuple[str, str], list] = {}
+    for item in projects:
+        key = (item.project_root, item.project_mode.value)
+        siblings_by_key.setdefault(key, []).append(item)
+
+    for project in projects:
+        with st.container(border=True):
+            st.markdown(
+                f"**{project.name}** · `{project.status.value}` · "
+                f"{project.language.upper()} · "
+                f"{PROJECT_MODE_LABELS[project.project_mode.value]}"
+            )
+            render_language_sibling_actions(
+                project,
+                siblings=siblings_by_key.get(
+                    (project.project_root, project.project_mode.value),
+                    [project],
+                ),
+            )
+            with st.expander("Details"):
                 st.write(f"**ID:** `{project.id}`")
                 st.write(f"**Projektmodus:** {PROJECT_MODE_LABELS[project.project_mode.value]}")
                 st.write(f"**Projektordner:** `{project.project_root}`")
