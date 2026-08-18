@@ -14,6 +14,7 @@ from otio_app.services.language_sibling_project import (
     clone_project_for_language,
     missing_sibling_languages,
     open_languages_for_auto_run,
+    selected_languages_in_order,
     sibling_project_name,
 )
 from otio_app.services.voiceover_generation.project_brief_defaults_service import (
@@ -27,6 +28,17 @@ from otio_app.ui.polling import poll_while_running
 from otio_app.ui.routing import PENDING_SWITCH_URL_PATH_KEY
 
 _AUTO_LAUF_URL_PATH = "auto-lauf"
+
+
+def _pick_checkbox_key(project_id: str, language: str) -> str:
+    return f"lang_queue_pick_{project_id}_{language}"
+
+
+def _language_pick_help(project: Project, language: str, missing: list[str]) -> str:
+    preview = sibling_project_name(project.name, project.language, language)
+    if language in missing:
+        return f"Noch kein Projekt — legt „{preview}“ an und startet den Auto-Lauf."
+    return f"Vorhanden, Auto-Lauf noch offen — setzt „{preview}“ mit skip-done fort."
 
 
 def render_language_sibling_actions(
@@ -80,28 +92,72 @@ def render_language_sibling_actions(
 
     if open_langs and not queue_running:
         st.caption(
-            "Alle offenen Sprachen nacheinander (nie parallel): fehlende Projekte "
-            "anlegen, unfertige fortsetzen. Stoppt bei Fehler, vor Funnel."
+            "Sprachen wählen, dann nacheinander (nie parallel). "
+            "Fehlende Projekte werden angelegt, unfertige fortgesetzt. "
+            "Stoppt bei Fehler, vor Funnel."
         )
-        start_disabled = (not place_ok) or jobs_busy
-        help_text = (
-            "Reihenfolge: "
-            + ", ".join(open_langs)
-            + ". Bleibt auf Gespeicherte Projekte; Fortschritt mit Aktualisieren holen."
-        )
-        if not place_ok:
-            help_text = "Land / Region fehlt."
-        elif jobs_busy:
-            help_text = "Ein Auto-Lauf oder die Sprachen-Queue läuft bereits."
-        if st.button(
-            f"Alle offenen Sprachen ▶ ({len(open_langs)})",
-            key=f"lang_queue_all_{project.id}",
-            type="primary",
-            disabled=start_disabled,
-            help=help_text,
-            use_container_width=True,
-        ):
-            _start_open_language_queue(project, open_langs)
+        pending_key = f"lang_queue_pick_pending_{project.id}"
+        pending_picks = st.session_state.pop(pending_key, None)
+        if isinstance(pending_picks, dict):
+            for lang, checked in pending_picks.items():
+                st.session_state[_pick_checkbox_key(project.id, lang)] = bool(checked)
+
+        pick_columns = st.columns(len(open_langs))
+        picked: list[str] = []
+        for column, lang in zip(pick_columns, open_langs):
+            with column:
+                checked = st.checkbox(
+                    lang,
+                    key=_pick_checkbox_key(project.id, lang),
+                    help=_language_pick_help(project, lang, missing),
+                )
+            if checked:
+                picked.append(lang)
+        selected = selected_languages_in_order(open_langs, picked)
+
+        action_cols = st.columns([1, 1, 3])
+        with action_cols[0]:
+            if st.button(
+                "Alle",
+                key=f"lang_queue_pick_all_{project.id}",
+                disabled=jobs_busy,
+                help="Offene Sprachen ankreuzen.",
+                use_container_width=True,
+            ):
+                st.session_state[pending_key] = {lang: True for lang in open_langs}
+                st.rerun()
+        with action_cols[1]:
+            if st.button(
+                "Keine",
+                key=f"lang_queue_pick_none_{project.id}",
+                disabled=jobs_busy,
+                help="Auswahl leeren.",
+                use_container_width=True,
+            ):
+                st.session_state[pending_key] = {lang: False for lang in open_langs}
+                st.rerun()
+        with action_cols[2]:
+            start_disabled = (not place_ok) or jobs_busy or not selected
+            help_text = (
+                "Reihenfolge: "
+                + ", ".join(selected)
+                + ". Bleibt auf Gespeicherte Projekte; Fortschritt mit Aktualisieren holen."
+            )
+            if not place_ok:
+                help_text = "Land / Region fehlt."
+            elif jobs_busy:
+                help_text = "Ein Auto-Lauf oder die Sprachen-Queue läuft bereits."
+            elif not selected:
+                help_text = "Zuerst Sprachen ankreuzen."
+            if st.button(
+                f"Gewählte Sprachen ▶ ({len(selected)})",
+                key=f"lang_queue_start_{project.id}",
+                type="primary",
+                disabled=start_disabled,
+                help=help_text,
+                use_container_width=True,
+            ):
+                _start_open_language_queue(project, selected)
 
     if not missing:
         return

@@ -23,6 +23,7 @@ __all__ = [
     "missing_sibling_languages",
     "open_languages_for_auto_run",
     "resolve_sibling_project",
+    "selected_languages_in_order",
     "sibling_project_name",
 ]
 
@@ -131,6 +132,19 @@ def open_languages_for_auto_run(
         if existing is None or not auto_run_pipeline_complete(existing):
             open_langs.append(lang)
     return open_langs
+
+
+def selected_languages_in_order(
+    open_langs: list[str],
+    selected: list[str] | None,
+) -> list[str]:
+    """Gewählte Sprachen in der offenen Reihenfolge — nichts extra, nichts umsortiert."""
+    wanted = {
+        normalize_brief_language(item)
+        for item in (selected or [])
+        if str(item).strip()
+    }
+    return [lang for lang in open_langs if lang in wanted]
 
 
 def resolve_sibling_project(

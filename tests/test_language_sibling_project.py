@@ -14,6 +14,7 @@ from otio_app.services.language_sibling_project import (
     missing_sibling_languages,
     open_languages_for_auto_run,
     resolve_sibling_project,
+    selected_languages_in_order,
     sibling_project_name,
 )
 
@@ -199,6 +200,15 @@ def test_open_languages_skips_complete_sibling(
     assert "EN" in open_langs
 
 
+def test_selected_languages_keep_open_order() -> None:
+    assert selected_languages_in_order(
+        ["EN", "FR", "ES", "PT", "IT"],
+        ["pt", "EN", "XX"],
+    ) == ["EN", "PT"]
+    assert selected_languages_in_order(["EN", "FR"], []) == []
+    assert selected_languages_in_order(["EN", "FR"], None) == []
+
+
 def test_resolve_sibling_returns_existing(
     temp_project_layout: dict[str, Path],
     temp_db_path: Path,
@@ -239,5 +249,7 @@ def test_saved_projects_page_wires_language_buttons() -> None:
         / "language_sibling_ui.py"
     ).read_text(encoding="utf-8")
     assert "lang_sibling_" in ui
-    assert "Alle offenen Sprachen" in ui
-    assert "lang_queue_all_" in ui
+    assert "Gewählte Sprachen" in ui
+    assert "lang_queue_pick_" in ui
+    assert "lang_queue_start_" in ui
+    assert "Alle offenen Sprachen" not in ui
