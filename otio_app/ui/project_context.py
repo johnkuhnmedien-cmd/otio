@@ -162,6 +162,9 @@ def render_workflow_progress(
 
 def render_output_status(project: Project) -> None:
     """Kurzüberblick über erzeugte Dateien."""
+    if getattr(project, "is_without_voiceover_enhanced", False):
+        _render_enhanced_output_status(project)
+        return
     status = get_workflow_status(project)
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
@@ -174,6 +177,29 @@ def render_output_status(project: Project) -> None:
         st.metric("Zuordnung", "✓" if status.mapping_confirmed else "—")
     with col5:
         st.metric("Schnittplan", "✓" if status.edit_plan_done else "—")
+
+
+def _render_enhanced_output_status(project: Project) -> None:
+    """Statusübersicht für Enhanced: Analysen plus Auto-Lauf bis YouTube."""
+    status = get_workflow_status(project, lightweight=True)
+    st.caption("**Statusübersicht**")
+    head = st.columns(2)
+    with head[0]:
+        st.metric("Clean Media", "✓" if status.clean_media_done else "—")
+    with head[1]:
+        st.metric("Inventar", "✓" if status.inventory_done else "—")
+    from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+        list_auto_run_step_statuses,
+    )
+
+    rows = list_auto_run_step_statuses(project)
+    chunk_size = 5
+    for start in range(0, len(rows), chunk_size):
+        chunk = rows[start : start + chunk_size]
+        columns = st.columns(chunk_size)
+        for column, item in zip(columns, chunk):
+            with column:
+                st.metric(item.short_label, "✓" if item.done else "—")
 
 
 def render_file_paths(project: Project) -> None:

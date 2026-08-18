@@ -18,6 +18,9 @@ from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job import (
     JobStatus,
     get_enhanced_auto_run_job_manager,
 )
+from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+    list_auto_run_step_statuses,
+)
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY
 from otio_app.ui.polling import poll_while_running
 
@@ -58,10 +61,11 @@ def render_enhanced_auto_run_page() -> None:
     st.header("▶ Auto-Lauf")
     st.write(
         "Ein Klick startet **nacheinander** (nie parallel) alles ab Project Brief "
-        "bis zum OTIO-Export. Kapitel-Skripte zuerst komplett, danach "
-        "Freitext-Nachbearbeitung, erst dann Script Lock. **⓪ Clean Media** und "
-        "**① Analysen** bleiben manuell. Danach: Stocksuche (Wikimedia, Openverse, "
-        "Archive.org) → alle offenen Gaps → Python Timing → ElevenLabs Music → OTIO."
+        "bis YouTube Publish. Kapitel-Skripte zuerst komplett, danach "
+        "Freitext-Nachbearbeitung, erst dann Script Lock. **⓪ Clean Media**, "
+        "**① Analysen** und **SFX** bleiben manuell. Danach: Stocksuche (Wikimedia, Openverse, "
+        "Archive.org) → alle offenen Gaps → Python Timing → ElevenLabs Music → "
+        "OTIO → YouTube (Metadaten + Quiz)."
     )
     from otio_app.ui.project_context import render_project_selector
 
@@ -177,7 +181,8 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
         "Dramaturgie (auto-bestätigen) → Kapitel-Skripte → Freitext-Nachbearbeitung "
         "→ Script Lock → Intro (erste gültige Variante) → TTS → Intro-Cut → "
         "alle Kapitel-Cuts → Stocksuche (Wikimedia/Openverse/Archive.org) → "
-        "alle offenen Gaps → Python Timing → ElevenLabs Music → OTIO-Export. "
+        "alle offenen Gaps → Python Timing → ElevenLabs Music → OTIO-Export → "
+        "YouTube Publish (Metadaten + Quiz). "
         "Offene Gaps nach dem Funnel gelten als Fehler. "
         "Fertige Schritte werden übersprungen."
     )
@@ -210,3 +215,20 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
             st.rerun()
         if state is not None:
             st.caption(state.message or state.step_label)
+    if key_scope != "sidebar":
+        _render_auto_run_status_overview(project)
+
+
+def _render_auto_run_status_overview(project: Project) -> None:
+    """✓/— je Auto-Lauf-Schritt, inkl. Stock, Funnel, Timing, Music, OTIO, YouTube."""
+    st.markdown("**Statusübersicht**")
+    rows = list_auto_run_step_statuses(project)
+    if not rows:
+        return
+    chunk_size = 5
+    for start in range(0, len(rows), chunk_size):
+        chunk = rows[start : start + chunk_size]
+        columns = st.columns(chunk_size)
+        for column, item in zip(columns, chunk):
+            with column:
+                st.metric(item.short_label, "✓" if item.done else "—")

@@ -836,9 +836,11 @@ def render_project_workbench() -> None:
         getattr(project, "is_without_voiceover_pipeline", False)
         or getattr(project, "is_without_voiceover", False)
     )
+    enhanced = bool(getattr(project, "is_without_voiceover_enhanced", False))
 
-    render_workflow_progress(project, current_step="analysis", lightweight=True)
-    if getattr(project, "is_without_voiceover_enhanced", False):
+    if not enhanced:
+        render_workflow_progress(project, current_step="analysis", lightweight=True)
+    if enhanced:
         st.info(
             "Pipeline ab Brief automatisch: Tab **▶ Auto-Lauf** unten "
             "oder Seite **▶ Auto-Lauf** in der linken Navigation "

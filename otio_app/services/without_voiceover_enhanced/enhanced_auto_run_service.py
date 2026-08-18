@@ -1,12 +1,12 @@
-"""Sequenzielle Enhanced-Pipeline: Brief → … → LLM Cuts → Funnel → Timing → Musik → OTIO.
+"""Sequenzielle Enhanced-Pipeline: Brief → … → LLM Cuts → Funnel → Timing → Musik → OTIO → YouTube.
 
 Ein Schritt nach dem anderen, innerhalb jedes Schritts ein Kapitel nach dem
 anderen. Keine parallelen LLM-/TTS-Calls. Bereits erledigte Schritte werden
 übersprungen (skip-done). Kapitel-Skripte laufen zuerst komplett durch, danach
 die Freitext-Nachbearbeitung aller Kapitel, erst dann Script Lock. Der Aufruf
 über den Auto-Lauf-Button gilt als explizite Bestätigung für Dramaturgie,
-Script Lock und Intro (erste gültige Variante). Clean Media, Analysen, SFX
-und YouTube bleiben manuell. Offene Coverage-Gaps nach dem Funnel sind ein
+Script Lock und Intro (erste gültige Variante). Clean Media, Analysen und SFX
+bleiben manuell. Offene Coverage-Gaps nach dem Funnel sind ein
 Fehler (die Sprachen-Queue macht mit der nächsten Sprache weiter).
 """
 
@@ -92,6 +92,9 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
 )
 from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service import (
     generate_music_for_allowed_targets,
+    list_music_generation_targets,
+    music_ui_status_chapter,
+    music_ui_status_intro,
 )
 from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
     IntroCutError,
@@ -107,11 +110,23 @@ from otio_app.services.without_voiceover_enhanced.io_utils import load_model
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     resolve_llm_cut_model_id,
 )
-from otio_app.services.without_voiceover_enhanced.models import UnifiedCutPlanDocument
+from otio_app.services.without_voiceover_enhanced.models import (
+    ResolvedTimelineDocument,
+    UnifiedCutPlanDocument,
+)
 from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     EnhancedOtioExportError,
 )
-from otio_app.services.without_voiceover_enhanced.paths import exports_dir
+from otio_app.services.without_voiceover_enhanced.paths import (
+    exports_dir,
+    resolved_timeline_path,
+)
+from otio_app.services.youtube_publish_service import (
+    build_youtube_publish_context_from_resolved,
+    generate_youtube_publish_metadata_from_context,
+    generate_youtube_quizzes_from_context,
+    load_youtube_metadata,
+)
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
     chapter_narration_text,
     folders_present_in_script,
@@ -138,15 +153,19 @@ from otio_app.services.without_voiceover_enhanced.supplement_funnel_service impo
 
 __all__ = [
     "AUTO_RUN_STEPS",
+    "AUTO_RUN_STEP_SHORT_LABELS",
     "AUTO_RUN_STOCK_PROVIDERS",
     "AutoRunProgress",
+    "AutoRunStepStatus",
     "EnhancedAutoRunCancelled",
     "EnhancedAutoRunError",
     "EnhancedAutoRunReport",
     "format_auto_run_failure_message",
+    "list_auto_run_step_statuses",
     "pick_auto_intro_candidate",
     "llm_cut_provider_model",
     "run_enhanced_auto_pipeline",
+    "youtube_publish_complete",
 ]
 
 AUTO_RUN_STEPS: tuple[tuple[str, str], ...] = (
@@ -165,7 +184,27 @@ AUTO_RUN_STEPS: tuple[tuple[str, str], ...] = (
     ("timing", "⑨ Python Timing"),
     ("music", "⑩ ElevenLabs Music"),
     ("otio", "⑪ OTIO-Export"),
+    ("youtube", "⑫ YouTube Publish"),
 )
+
+AUTO_RUN_STEP_SHORT_LABELS: dict[str, str] = {
+    "brief": "Brief",
+    "style": "Style",
+    "dramaturgy": "Dramaturgie",
+    "scripts": "Skripte",
+    "script_revise": "Freitext",
+    "script_lock": "Lock",
+    "intro": "Intro",
+    "tts": "TTS",
+    "intro_cut": "Intro-Cut",
+    "chapter_cuts": "Kapitel-Cuts",
+    "stock": "Stock",
+    "funnel": "Funnel",
+    "timing": "Timing",
+    "music": "Music",
+    "otio": "OTIO",
+    "youtube": "YouTube",
+}
 
 # Auto-Lauf sucht nur die freien Anbieter — analog zur UI-Auswahl.
 AUTO_RUN_STOCK_PROVIDERS: dict[str, bool] = {
@@ -223,6 +262,14 @@ class AutoRunProgress:
     skipped: bool = False
 
 
+@dataclass(frozen=True)
+class AutoRunStepStatus:
+    step_id: str
+    label: str
+    short_label: str
+    done: bool
+
+
 @dataclass
 class EnhancedAutoRunReport:
     skipped: list[str] = field(default_factory=list)
@@ -271,7 +318,7 @@ def run_enhanced_auto_pipeline(
     on_progress: ProgressCallback | None = None,
     skip_done: bool = True,
 ) -> EnhancedAutoRunReport:
-    """Führt die Enhanced-Schritte strikt sequenziell aus bis zum OTIO-Export."""
+    """Führt die Enhanced-Schritte strikt sequenziell aus bis YouTube Publish."""
     report = EnhancedAutoRunReport()
     step_total = len(AUTO_RUN_STEPS)
     last_step_label = ""
@@ -460,7 +507,17 @@ def run_enhanced_auto_pipeline(
             finish=finish_step,
         )
 
-        emit("otio", "Auto-Lauf fertig.")
+        checkpoint("youtube")
+        _run_youtube(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            provider=models.youtube_publish.provider,
+            model=models.youtube_publish.model,
+            finish=finish_step,
+        )
+
+        emit("youtube", "Auto-Lauf fertig.")
         return report
     except EnhancedAutoRunCancelled:
         raise
@@ -947,6 +1004,128 @@ def otio_export_complete(project: Project) -> bool:
     return path.is_file()
 
 
+def youtube_publish_complete(project: Project) -> bool:
+    document = load_youtube_metadata(project)
+    if document is None:
+        return False
+    if not (document.title or "").strip():
+        return False
+    if not (
+        (document.description or "").strip()
+        or (document.description_body or "").strip()
+    ):
+        return False
+    return bool(list(document.quizzes or []))
+
+
+def _music_targets_complete(project: Project) -> bool:
+    targets = list_music_generation_targets(project)
+    if not targets:
+        return False
+    for kind, folder in targets:
+        if kind == "intro":
+            status = music_ui_status_intro(project)
+        else:
+            status = music_ui_status_chapter(project, folder)
+        if str(status.get("status") or "") != "completed":
+            return False
+    return True
+
+
+def list_auto_run_step_statuses(project: Project) -> list[AutoRunStepStatus]:
+    """Skip-done-Stand je Auto-Lauf-Schritt für die Statusübersicht."""
+
+    def _safe(checker: Callable[[], bool]) -> bool:
+        try:
+            return bool(checker())
+        except Exception:  # noqa: BLE001 — unfertiges Projekt zählt als offen
+            return False
+
+    def brief_done() -> bool:
+        brief = load_project_brief(project)
+        return bool((brief.video_title or "").strip())
+
+    def style_done() -> bool:
+        refs_path = get_voiceover_style_references_path(project.language_work_dir_path)
+        refs = load_style_references(project)
+        if not (refs_path.is_file() and _style_has_content(refs)):
+            return False
+        return is_raw_style_mode(refs) or load_style_profile(project) is not None
+
+    def dramaturgy_done() -> bool:
+        return load_confirmed_dramaturgy(project) is not None
+
+    def scripts_done() -> bool:
+        entries = list_enabled_dramaturgy_folders(project)
+        if not entries:
+            return False
+        draft = load_script_draft(project)
+        present = folders_present_in_script(draft)
+        return all(
+            entry.folder_name in present
+            and chapter_narration_text(draft, entry.folder_name).strip()
+            for entry in entries
+        )
+
+    def lock_done() -> bool:
+        return load_locked_script(project) is not None
+
+    def intro_done() -> bool:
+        return load_confirmed_intro_hook(project) is not None
+
+    def tts_done() -> bool:
+        statuses = list_chapter_audio_statuses(project)
+        return bool(statuses) and not any(row.is_open for row in statuses)
+
+    def intro_cut_done() -> bool:
+        existing = load_model(
+            intro_unified_cut_plan_path(project), UnifiedCutPlanDocument
+        )
+        return existing is not None and bool(existing.slots)
+
+    def chapter_cuts_done() -> bool:
+        return not list_chapters_needing_unified_cut(project)
+
+    def gaps_done() -> bool:
+        return not list_open_funnel_gap_ids(project)
+
+    def timing_done() -> bool:
+        return intro_timing_complete(project) and not list_chapters_needing_python_timing(
+            project
+        )
+
+    checkers: dict[str, Callable[[], bool]] = {
+        "brief": brief_done,
+        "style": style_done,
+        "dramaturgy": dramaturgy_done,
+        "scripts": scripts_done,
+        "script_revise": lock_done,
+        "script_lock": lock_done,
+        "intro": intro_done,
+        "tts": tts_done,
+        "intro_cut": intro_cut_done,
+        "chapter_cuts": chapter_cuts_done,
+        "stock": gaps_done,
+        "funnel": gaps_done,
+        "timing": timing_done,
+        "music": lambda: _music_targets_complete(project),
+        "otio": lambda: otio_export_complete(project),
+        "youtube": lambda: youtube_publish_complete(project),
+    }
+    rows: list[AutoRunStepStatus] = []
+    for step_id, label in AUTO_RUN_STEPS:
+        checker = checkers.get(step_id, lambda: False)
+        rows.append(
+            AutoRunStepStatus(
+                step_id=step_id,
+                label=label,
+                short_label=AUTO_RUN_STEP_SHORT_LABELS.get(step_id, step_id),
+                done=_safe(checker),
+            )
+        )
+    return rows
+
+
 def _run_stock_and_funnel(
     project: Project,
     *,
@@ -1175,3 +1354,79 @@ def _run_otio(
         raise EnhancedAutoRunError(f"OTIO-Export fehlgeschlagen: {exc}") from exc
     emit("otio", f"OTIO geschrieben: {path}")
     finish("otio", skipped=False)
+
+
+def load_resolved_timeline_for_auto_run(project: Project) -> ResolvedTimelineDocument | None:
+    return load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+
+
+def _run_youtube(
+    project: Project,
+    *,
+    skip_done: bool,
+    emit: Callable[..., None],
+    provider: str,
+    model: str,
+    finish: Callable[..., None],
+) -> None:
+    if skip_done and youtube_publish_complete(project):
+        emit("youtube", "YouTube Publish vorhanden — übersprungen.", skipped=True)
+        finish("youtube", skipped=True)
+        return
+
+    emit("youtube", "YouTube Publish (Metadaten + Quiz)…")
+    resolved = load_resolved_timeline_for_auto_run(project)
+    if resolved is None:
+        raise EnhancedAutoRunError(
+            "Keine aufgelöste Timeline für YouTube — OTIO-Export zuerst."
+        )
+    context = build_youtube_publish_context_from_resolved(project, resolved)
+    if not context.chapters:
+        raise EnhancedAutoRunError(
+            "Keine Kapitel in der Timeline — YouTube Publish nicht möglich."
+        )
+
+    existing = load_youtube_metadata(project)
+    need_meta = not (
+        existing is not None
+        and (existing.title or "").strip()
+        and (
+            (existing.description or "").strip()
+            or (existing.description_body or "").strip()
+        )
+    )
+    need_quiz = not (existing is not None and list(existing.quizzes or []))
+    if not skip_done:
+        need_meta = True
+        need_quiz = True
+
+    if need_meta:
+        emit("youtube", "YouTube-Metadaten…", item_label="Metadaten")
+        result = generate_youtube_publish_metadata_from_context(
+            project,
+            context,
+            provider=provider,
+            model=model,
+        )
+        if result.status != STATUS_PASS or result.document is None:
+            raise EnhancedAutoRunError(
+                result.error or "YouTube-Metadaten fehlgeschlagen."
+            )
+
+    if need_quiz:
+        emit("youtube", "YouTube-Quiz…", item_label="Quiz")
+        result = generate_youtube_quizzes_from_context(
+            project,
+            context,
+            provider=provider,
+            model=model,
+        )
+        if result.status != STATUS_PASS or result.document is None:
+            raise EnhancedAutoRunError(result.error or "YouTube-Quiz fehlgeschlagen.")
+
+    if not youtube_publish_complete(project):
+        raise EnhancedAutoRunError(
+            "YouTube Publish unvollständig — Titel, Beschreibung oder Quiz fehlen."
+        )
+    emit("youtube", "YouTube Publish fertig (Metadaten + Quiz).")
+    finish("youtube", skipped=False)

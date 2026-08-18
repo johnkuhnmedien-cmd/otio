@@ -233,6 +233,12 @@ def _stub_auto_run_tail(
         )
         monkeypatch.setattr(auto_run, "export_all_chapters_otio", boom)
         monkeypatch.setattr(auto_run, "otio_export_complete", lambda _p: True)
+        monkeypatch.setattr(auto_run, "youtube_publish_complete", lambda _p: True)
+        monkeypatch.setattr(
+            auto_run, "generate_youtube_publish_metadata_from_context", boom
+        )
+        monkeypatch.setattr(auto_run, "generate_youtube_quizzes_from_context", boom)
+        monkeypatch.setattr(auto_run, "load_resolved_timeline_for_auto_run", boom)
         return seen_providers
 
     def fake_search(*_a, **_k):
@@ -267,6 +273,25 @@ def _stub_auto_run_tail(
         _enter("otio")
         return Path("/tmp/out.otio")
 
+    yt_done = {"v": False}
+
+    def fake_yt_complete(_p) -> bool:
+        return yt_done["v"]
+
+    def fake_resolved(_p):
+        return MagicMock()
+
+    def fake_yt_context(*_a, **_k):
+        return MagicMock(chapters=["c1"], quiz_count=1)
+
+    def fake_yt_meta(*_a, **_k):
+        _enter("youtube")
+        return MagicMock(status="PASS", document=object(), error=None)
+
+    def fake_yt_quiz(*_a, **_k):
+        yt_done["v"] = True
+        return MagicMock(status="PASS", document=object(), error=None)
+
     monkeypatch.setattr(auto_run, "search_supplements_for_gaps", fake_search)
     monkeypatch.setattr(auto_run, "run_supplement_funnel_for_gaps", fake_funnel)
     monkeypatch.setattr(auto_run, "resolve_intro_timeline", fake_intro_timing)
@@ -281,6 +306,17 @@ def _stub_auto_run_tail(
     monkeypatch.setattr(auto_run, "generate_music_for_allowed_targets", fake_music)
     monkeypatch.setattr(auto_run, "export_all_chapters_otio", fake_otio)
     monkeypatch.setattr(auto_run, "otio_export_complete", lambda _p: False)
+    monkeypatch.setattr(auto_run, "youtube_publish_complete", fake_yt_complete)
+    monkeypatch.setattr(auto_run, "load_resolved_timeline_for_auto_run", fake_resolved)
+    monkeypatch.setattr(
+        auto_run, "build_youtube_publish_context_from_resolved", fake_yt_context
+    )
+    monkeypatch.setattr(
+        auto_run, "generate_youtube_publish_metadata_from_context", fake_yt_meta
+    )
+    monkeypatch.setattr(
+        auto_run, "generate_youtube_quizzes_from_context", fake_yt_quiz
+    )
     return seen_providers
 
 
@@ -424,6 +460,7 @@ def test_auto_run_skips_completed_steps(
     assert "timing" in report.skipped
     assert "music" in report.skipped
     assert "otio" in report.skipped
+    assert "youtube" in report.skipped
 
 
 def test_auto_run_is_strictly_sequential(
@@ -603,6 +640,7 @@ def test_auto_run_is_strictly_sequential(
     ]
     assert "music" in order
     assert "otio" in order
+    assert "youtube" in order
     locked = load_locked_script(project)
     assert locked is not None
     from otio_app.services.voiceover_generation.intro_hook_service import (
@@ -793,6 +831,28 @@ def test_auto_run_stock_providers_are_free_only() -> None:
     assert auto_run.AUTO_RUN_STOCK_PROVIDERS["archive_org"] is True
 
 
+def test_auto_run_steps_include_tail_through_youtube() -> None:
+    ids = [step_id for step_id, _label in auto_run.AUTO_RUN_STEPS]
+    for step_id in ("stock", "funnel", "timing", "music", "otio", "youtube"):
+        assert step_id in ids
+    assert ids[-1] == "youtube"
+    assert ids[-2] == "otio"
+
+
+def test_auto_run_status_overview_covers_every_step(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    rows = auto_run.list_auto_run_step_statuses(project)
+    assert [row.step_id for row in rows] == [
+        step_id for step_id, _label in auto_run.AUTO_RUN_STEPS
+    ]
+    by_id = {row.step_id: row for row in rows}
+    assert by_id["youtube"].short_label == "YouTube"
+    assert by_id["otio"].short_label == "OTIO"
+    assert by_id["funnel"].short_label == "Funnel"
+    assert by_id["youtube"].done is False
+    assert by_id["otio"].done is False
+
+
 def test_auto_run_cancel_between_steps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -962,6 +1022,9 @@ def test_auto_run_ui_exports_page_and_banner() -> None:
     assert 'key_scope="auto_page"' in source
     assert 'key_scope="auto_panel"' in source
     assert "_render_running_auto_run_status" in source
+    assert "_render_auto_run_status_overview" in source
+    assert "Statusübersicht" in source
+    assert "YouTube Publish" in source
     assert "Auto-Lauf fehlgeschlagen —" in source
 
 

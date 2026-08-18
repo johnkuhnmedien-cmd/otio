@@ -68,5 +68,5 @@ def expected_feature_markers() -> list[str]:
         "Nach Neustart bleibt /auto-lauf erreichbar (letztes Projekt + versteckte Route)",
         "Auto-Lauf-Fortschritt aktualisiert sich selbst (kein extra st.rerun)",
         "Job-Status (Clean Media, Analysen, …) aktualisiert sich selbst",
-        "Auto-Lauf bis OTIO; Sprachen-Queue macht bei Fehler mit der nächsten weiter",
+        "Auto-Lauf bis YouTube; Sprachen-Queue macht bei Fehler mit der nächsten weiter",
     ]

@@ -68,7 +68,7 @@ def missing_sibling_languages(
 
 
 def auto_run_pipeline_complete(project: Project) -> bool:
-    """True wenn Brief→OTIO für skip-done schon erledigt wären."""
+    """True wenn Brief→YouTube für skip-done schon erledigt wären."""
     try:
         from otio_app.services.voiceover_generation.intro_hook_service import (
             load_confirmed_intro_hook,
@@ -131,7 +131,13 @@ def auto_run_pipeline_complete(project: Project) -> bool:
             if str(music_status.get("status") or "") != "completed":
                 return False
         otio_path = exports_dir(project) / f"{project.name}_enhanced.otio"
-        return otio_path.is_file()
+        if not otio_path.is_file():
+            return False
+        from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+            youtube_publish_complete,
+        )
+
+        return youtube_publish_complete(project)
     except Exception:  # noqa: BLE001 — unfertiges Projekt zählt als offen
         return False
 
