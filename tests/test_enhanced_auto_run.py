@@ -644,6 +644,33 @@ def test_auto_run_ui_exports_page_and_banner() -> None:
     assert callable(module.render_enhanced_auto_run_page)
     assert callable(module.render_enhanced_auto_run_page_panel)
     assert callable(module.render_enhanced_auto_run_embedded)
+    assert callable(module.auto_run_progress_fraction)
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    assert 'key_scope="auto_page"' in source
+    assert 'key_scope="auto_panel"' in source
+    assert "_render_running_auto_run_status" in source
+
+
+def test_auto_run_progress_fraction_includes_chapter_item() -> None:
+    from otio_app.ui.without_voiceover_enhanced.auto_run_ui import (
+        auto_run_progress_fraction,
+    )
+    from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job import (
+        EnhancedAutoRunJobState,
+        JobStatus,
+    )
+
+    state = EnhancedAutoRunJobState(
+        project_id="p",
+        status=JobStatus.RUNNING,
+        step_index=4,
+        step_total=10,
+        item_index=1,
+        item_total=18,
+    )
+    value = auto_run_progress_fraction(state)
+    assert value == pytest.approx((3 + 1 / 18) / 10)
+    assert value < 0.4
 
 
 def test_enhanced_navigation_includes_auto_run_page() -> None:

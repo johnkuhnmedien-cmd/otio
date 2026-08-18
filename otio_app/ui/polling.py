@@ -1,8 +1,14 @@
-"""Job-Fortschritt — ohne Auto-Polling (verhindert Rerun-Stürme und heiße CPUs)."""
+"""Job-Fortschritt — manuell aktualisieren, ohne zweiten st.rerun().
+
+Ein Button-Klick startet in Streamlit bereits einen Script-Lauf. Ein zusätzliches
+``st.rerun()`` in derselben Ausführung (besonders unter ``st.navigation``) kann
+den Klick verschlucken — der Fortschritt bleibt stehen.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 
 import streamlit as st
 
@@ -18,7 +24,7 @@ def poll_while_running(
     interval_seconds: float = DEFAULT_POLL_SECONDS,  # noqa: ARG001 — API compat
     refresh_key: str = "job_refresh",
 ) -> None:
-    """Rendert Job-UI einmal; optional manuell aktualisieren statt run_every."""
+    """Rendert Job-UI; Button löst den normalen Streamlit-Rerun aus (kein extra rerun)."""
     if is_shutting_down():
         return
 
@@ -27,9 +33,14 @@ def poll_while_running(
     if not is_running_fn():
         return
 
-    st.caption("Job läuft im Hintergrund — Fortschritt mit **Aktualisieren** holen.")
+    now = datetime.now().strftime("%H:%M:%S")
+    st.caption(
+        f"Job läuft im Hintergrund — Stand **{now}**. "
+        "Fortschritt mit **Aktualisieren** holen."
+    )
     if st.button("🔄 Aktualisieren", key=refresh_key):
-        st.rerun()
+        tick_key = f"{refresh_key}__tick"
+        st.session_state[tick_key] = int(st.session_state.get(tick_key, 0)) + 1
 
 
 def running_job_fragment(*, interval_seconds: float = DEFAULT_POLL_SECONDS):  # noqa: ARG001
