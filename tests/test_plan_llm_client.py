@@ -335,7 +335,7 @@ def test_generate_plan_text_anthropic_uses_higher_max_tokens_default(
 
     call_kwargs = mock_anthropic.return_value.messages.stream.call_args.kwargs
     assert call_kwargs["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
-    assert DEFAULT_MAX_OUTPUT_TOKENS == 50_000
+    assert DEFAULT_MAX_OUTPUT_TOKENS == 100_000
 
 
 def test_generate_plan_text_openai_uses_higher_max_tokens_default(
@@ -352,7 +352,7 @@ def test_generate_plan_text_openai_uses_higher_max_tokens_default(
     call_kwargs = mock_openai.return_value.chat.completions.create.call_args.kwargs
     assert call_kwargs["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
     assert call_kwargs["stream"] is True
-    assert DEFAULT_MAX_OUTPUT_TOKENS == 50_000
+    assert DEFAULT_MAX_OUTPUT_TOKENS == 100_000
 
 
 def test_generate_plan_text_anthropic_raises_when_truncated_at_max_tokens(

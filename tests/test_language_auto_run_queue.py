@@ -152,7 +152,7 @@ def test_queue_runs_languages_sequentially_never_overlap(patch_incomplete) -> No
     assert state.completed_languages == ["EN", "PT"]
 
 
-def test_queue_stops_after_failed_language(patch_incomplete) -> None:
+def test_queue_continues_after_failed_language(patch_incomplete) -> None:
     source = _source()
     siblings = {
         "EN": SimpleNamespace(id="en-proj", name="EN_Test", language="en"),
@@ -163,10 +163,13 @@ def test_queue_stops_after_failed_language(patch_incomplete) -> None:
     manager.start(source, ["EN", "PT"])
     state = _wait_queue(manager, source.id)
     assert state is not None
-    assert state.status == "failed"
-    assert state.failed_language == "EN"
+    assert state.status == "completed"
+    assert state.failed_languages == ["EN"]
+    assert state.completed_languages == ["PT"]
     assert "ElevenLabs" in (state.error or "")
-    assert fake.started == ["en-proj"]
+    assert "Weiter nach Fehler" in (state.error or "")
+    assert fake.started == ["en-proj", "pt-proj"]
+    assert fake.max_running == 1
 
 
 def test_queue_cancel_does_not_start_next(patch_incomplete) -> None:
@@ -211,7 +214,7 @@ def test_queue_requires_video_place() -> None:
         manager.start(source, ["EN"])
 
 
-def test_queue_clones_only_until_failure(
+def test_queue_clones_remaining_languages_after_failure(
     temp_project_layout,
     temp_db_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -246,11 +249,12 @@ def test_queue_clones_only_until_failure(
     manager.start(source, ["EN", "PT"])
     state = _wait_queue(manager, source.id)
     assert state is not None
-    assert state.status == "failed"
-    assert state.failed_language == "EN"
+    assert state.status == "completed"
+    assert state.failed_languages == ["EN"]
+    assert "PT" in state.completed_languages
     siblings = find_projects_by_root(source.project_root, db_path=temp_db_path)
     langs = {item.language for item in siblings}
-    assert langs == {"de", "en"}
+    assert langs == {"de", "en", "pt"}
 
 
 def test_queue_skips_already_complete_language(monkeypatch) -> None:

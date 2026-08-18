@@ -55,6 +55,9 @@ def test_default_model_settings_has_all_roles() -> None:
         elif role == "dramaturgy":
             assert role_settings.provider == "openai"
             assert role_settings.model == "gpt-5.6-terra"
+        elif role == "intro":
+            assert role_settings.provider == "openai"
+            assert role_settings.model == "gpt-5.6-terra"
         elif role in {"enhanced_rough_cut", "enhanced_final_cut"}:
             assert role_settings.provider == "openai"
             assert role_settings.model == "gpt-5.6-terra"
@@ -72,6 +75,8 @@ def test_load_model_settings_returns_default_when_missing(tmp_path: Path) -> Non
     assert settings.style_profile.provider == "anthropic"
     assert settings.dramaturgy.provider == "openai"
     assert settings.dramaturgy.model == "gpt-5.6-terra"
+    assert settings.intro.provider == "openai"
+    assert settings.intro.model == "gpt-5.6-terra"
     assert settings.settings_revision == MODEL_SETTINGS_REVISION
 
 
@@ -215,3 +220,49 @@ def test_load_keeps_explicit_dramaturgy_after_revision(tmp_path: Path) -> None:
     loaded = load_model_settings(project)
     assert loaded.dramaturgy.provider == "anthropic"
     assert loaded.dramaturgy.model == "claude-sonnet-5"
+
+
+def test_load_upgrades_legacy_implicit_intro_to_terra(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    path = get_model_settings_path(project.language_work_dir_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "settings_revision": 2,
+                "intro": {"provider": "anthropic", "model": "claude-sonnet-5"},
+                "enhanced_rough_cut": {
+                    "provider": "anthropic",
+                    "model": "claude-opus-5",
+                },
+                "enhanced_final_cut": {
+                    "provider": "openai",
+                    "model": "gpt-5.6-sol",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_model_settings(project)
+    assert loaded.intro.provider == "openai"
+    assert loaded.intro.model == "gpt-5.6-terra"
+    assert loaded.enhanced_rough_cut.model == "claude-opus-5"
+    assert loaded.enhanced_final_cut.model == "gpt-5.6-sol"
+    assert loaded.settings_revision == MODEL_SETTINGS_REVISION
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["intro"]["model"] == "gpt-5.6-terra"
+    assert persisted["enhanced_rough_cut"]["model"] == "claude-opus-5"
+
+
+def test_load_keeps_explicit_intro_after_revision(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    save_model_settings(
+        project,
+        VoiceoverGenerationModelSettings(
+            settings_revision=MODEL_SETTINGS_REVISION,
+            intro=LlmRoleSettings(provider="anthropic", model="claude-sonnet-5"),
+        ),
+    )
+    loaded = load_model_settings(project)
+    assert loaded.intro.provider == "anthropic"
+    assert loaded.intro.model == "claude-sonnet-5"

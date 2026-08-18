@@ -58,9 +58,10 @@ def render_enhanced_auto_run_page() -> None:
     st.header("▶ Auto-Lauf")
     st.write(
         "Ein Klick startet **nacheinander** (nie parallel) alles ab Project Brief "
-        "bis zu den Kapitel-Cuts. Kapitel-Skripte zuerst komplett, danach "
+        "bis zum OTIO-Export. Kapitel-Skripte zuerst komplett, danach "
         "Freitext-Nachbearbeitung, erst dann Script Lock. **⓪ Clean Media** und "
-        "**① Analysen** bleiben manuell. Stoppt **vor** Funnel / Timing / Musik / Export."
+        "**① Analysen** bleiben manuell. Danach: Stocksuche (Wikimedia, Openverse, "
+        "Archive.org) → alle offenen Gaps → Python Timing → ElevenLabs Music → OTIO."
     )
     from otio_app.ui.project_context import render_project_selector
 
@@ -148,7 +149,6 @@ def render_enhanced_auto_run_banner(project_id: str, *, key_scope: str = "page")
         st.success(
             (state.message or "Auto-Lauf fertig.")
             + skipped
-            + " Als Nächstes manuell: Funnel."
         )
     if st.button(
         "Hinweis schließen",
@@ -176,7 +176,9 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
         "Ein Button, **sequenziell** (nie parallel): Brief + Titel → Style → "
         "Dramaturgie (auto-bestätigen) → Kapitel-Skripte → Freitext-Nachbearbeitung "
         "→ Script Lock → Intro (erste gültige Variante) → TTS → Intro-Cut → "
-        "alle Kapitel-Cuts. Stoppt **vor** Funnel / Timing / Musik / Export. "
+        "alle Kapitel-Cuts → Stocksuche (Wikimedia/Openverse/Archive.org) → "
+        "alle offenen Gaps → Python Timing → ElevenLabs Music → OTIO-Export. "
+        "Offene Gaps nach dem Funnel gelten als Fehler. "
         "Fertige Schritte werden übersprungen."
     )
     start_disabled = running or other_running

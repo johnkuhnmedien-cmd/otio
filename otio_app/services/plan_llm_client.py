@@ -76,9 +76,8 @@ def format_truncated_plan_response_error(
 
 
 # Ceiling, kein Target: ungenutzte Tokens werden nicht abgerechnet.
-# 16k reichte bei umfangreicher Dramaturgie (viele Ordner) nicht; Auto-Lauf
-# und alle Calls ohne eigenes Limit nutzen deshalb 50k.
-DEFAULT_MAX_OUTPUT_TOKENS = 50_000
+# 16k/50k reichten bei Intro und umfangreicher Dramaturgie nicht.
+DEFAULT_MAX_OUTPUT_TOKENS = 100_000
 
 # Anthropic SDK: non-streaming wird abgelehnt, wenn expected_time > 10 Min
 # (Formel: 3600 * max_tokens / 128000). Ab ~21334 Tokens ist Streaming nötig.

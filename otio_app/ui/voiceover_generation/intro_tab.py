@@ -66,7 +66,7 @@ import streamlit as st
 # Limit kostet nichts. Anthropic streamt oberhalb ~20k automatisch.
 _INTRO_MAX_OUTPUT_TOKENS_MIN = 16_384
 _INTRO_MAX_OUTPUT_TOKENS_MAX = 100_000
-_INTRO_MAX_OUTPUT_TOKENS_DEFAULT = 65_536
+_INTRO_MAX_OUTPUT_TOKENS_DEFAULT = 100_000
 _INTRO_MAX_OUTPUT_TOKENS_STEP = 4_096
 
 
@@ -347,6 +347,7 @@ def _render_settings_editor(project: Project) -> None:
 def _render_model_settings(project: Project) -> tuple[str, str]:
     settings = load_model_settings(project)
     with st.expander("⚙️ Modell für Intro", expanded=False):
+        st.caption("Standard für Intro-Skript: **GPT-5.6 Terra**.")
         role_settings = render_llm_model_selectbox(
             label="Modell",
             role_settings=settings.intro,

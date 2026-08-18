@@ -68,7 +68,7 @@ def missing_sibling_languages(
 
 
 def auto_run_pipeline_complete(project: Project) -> bool:
-    """True wenn Brief→Kapitel-Cuts für skip-done schon erledigt wären."""
+    """True wenn Brief→OTIO für skip-done schon erledigt wären."""
     try:
         from otio_app.services.voiceover_generation.intro_hook_service import (
             load_confirmed_intro_hook,
@@ -77,17 +77,28 @@ def auto_run_pipeline_complete(project: Project) -> bool:
             list_chapter_audio_statuses,
         )
         from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+            list_chapters_needing_python_timing,
             list_chapters_needing_unified_cut,
         )
+        from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service import (
+            list_music_generation_targets,
+            music_ui_status_chapter,
+            music_ui_status_intro,
+        )
         from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+            intro_resolved_timeline_path,
             intro_unified_cut_plan_path,
         )
         from otio_app.services.without_voiceover_enhanced.io_utils import load_model
         from otio_app.services.without_voiceover_enhanced.models import (
             UnifiedCutPlanDocument,
         )
+        from otio_app.services.without_voiceover_enhanced.paths import exports_dir
         from otio_app.services.without_voiceover_enhanced.script_lock_service import (
             load_locked_script,
+        )
+        from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
+            list_open_funnel_gap_ids,
         )
 
         if load_locked_script(project) is None:
@@ -104,7 +115,23 @@ def auto_run_pipeline_complete(project: Project) -> bool:
         statuses = list_chapter_audio_statuses(project)
         if not statuses:
             return False
-        return not any(row.is_open for row in statuses)
+        if any(row.is_open for row in statuses):
+            return False
+        if list_open_funnel_gap_ids(project):
+            return False
+        if not intro_resolved_timeline_path(project).is_file():
+            return False
+        if list_chapters_needing_python_timing(project):
+            return False
+        for kind, folder in list_music_generation_targets(project):
+            if kind == "intro":
+                music_status = music_ui_status_intro(project)
+            else:
+                music_status = music_ui_status_chapter(project, folder)
+            if str(music_status.get("status") or "") != "completed":
+                return False
+        otio_path = exports_dir(project) / f"{project.name}_enhanced.otio"
+        return otio_path.is_file()
     except Exception:  # noqa: BLE001 — unfertiges Projekt zählt als offen
         return False
 

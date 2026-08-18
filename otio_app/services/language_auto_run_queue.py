@@ -44,7 +44,9 @@ class LanguageAutoRunQueueState:
     current_project_id: str | None = None
     current_index: int = 0
     completed_languages: list[str] = field(default_factory=list)
+    failed_languages: list[str] = field(default_factory=list)
     failed_language: str | None = None
+    language_errors: dict[str, str] = field(default_factory=dict)
     error: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
@@ -196,7 +198,9 @@ class LanguageAutoRunQueueJobManager:
                 current_project_id=state.current_project_id,
                 current_index=state.current_index,
                 completed_languages=list(state.completed_languages),
+                failed_languages=list(state.failed_languages),
                 failed_language=state.failed_language,
+                language_errors=dict(state.language_errors),
                 error=state.error,
                 started_at=state.started_at,
                 finished_at=state.finished_at,
@@ -285,12 +289,12 @@ class LanguageAutoRunQueueJobManager:
                     state.error = None
                 try:
                     sibling = self._resolve_sibling(source, language)
-                except Exception as exc:  # noqa: BLE001 — Queue stoppt bei Anlagefehler
+                except Exception as exc:  # noqa: BLE001 — eine Sprache, Queue weiter
                     logger.exception(
                         "Sprachen-Queue: Anlegen von %s fehlgeschlagen", language
                     )
-                    self._fail(source_id, str(exc), failed_language=language)
-                    return
+                    self._note_language_failure(source_id, language, str(exc))
+                    continue
                 with self._lock:
                     self._states[source_id].current_project_id = sibling.id
                 if auto_run_pipeline_complete(sibling):
@@ -307,15 +311,15 @@ class LanguageAutoRunQueueJobManager:
                         "Sprachen-Queue: Auto-Lauf für %s konnte nicht starten",
                         sibling.name,
                     )
-                    self._fail(source_id, str(exc), failed_language=language)
-                    return
+                    self._note_language_failure(source_id, language, str(exc))
+                    continue
                 if started is False:
-                    self._fail(
+                    self._note_language_failure(
                         source_id,
+                        language,
                         f"Auto-Lauf für {language} läuft bereits oder konnte nicht starten.",
-                        failed_language=language,
                     )
-                    return
+                    continue
                 if not self._wait_for_auto_run(source_id, sibling.id):
                     return
                 auto_state = auto_manager.get_state(sibling.id)
@@ -335,9 +339,9 @@ class LanguageAutoRunQueueJobManager:
                     )
                     if auto_status == "cancelled" or self._is_cancelled(source_id):
                         self._mark_cancelled(source_id, error=str(error))
-                    else:
-                        self._fail(source_id, str(error), failed_language=language)
-                    return
+                        return
+                    self._note_language_failure(source_id, language, str(error))
+                    continue
                 with self._lock:
                     self._states[source_id].completed_languages.append(language)
             self._mark_completed(source_id)
@@ -361,6 +365,26 @@ class LanguageAutoRunQueueJobManager:
     def _is_cancelled(self, source_id: str) -> bool:
         with self._lock:
             return bool(self._cancel.get(source_id))
+
+    def _note_language_failure(
+        self,
+        source_id: str,
+        language: str,
+        error: str,
+    ) -> None:
+        with self._lock:
+            state = self._states.get(source_id)
+            if state is None:
+                return
+            if language not in state.failed_languages:
+                state.failed_languages.append(language)
+            state.failed_language = language
+            state.language_errors[language] = error
+            logger.warning(
+                "Sprachen-Queue: %s fehlgeschlagen, nächste Sprache: %s",
+                language,
+                error,
+            )
 
     def _fail(
         self,
@@ -398,7 +422,14 @@ class LanguageAutoRunQueueJobManager:
             state.status = "completed"
             state.current_language = None
             state.current_project_id = None
-            state.error = None
+            if state.failed_languages:
+                parts = [
+                    f"{lang}: {state.language_errors.get(lang) or 'fehlgeschlagen'}"
+                    for lang in state.failed_languages
+                ]
+                state.error = "Weiter nach Fehler. " + " · ".join(parts)
+            else:
+                state.error = None
             state.finished_at = _now_iso()
             self._threads.pop(source_id, None)
 

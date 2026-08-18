@@ -14,6 +14,8 @@ from otio_app.defaults import (
     VOICEOVER_GEN_DEFAULT_PROVIDER,
     VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL,
     VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER,
+    VOICEOVER_GEN_INTRO_DEFAULT_MODEL,
+    VOICEOVER_GEN_INTRO_DEFAULT_PROVIDER,
     VOICEOVER_GEN_MODEL_CHOICES,
     VOICEOVER_GEN_MODEL_LABELS,
     VOICEOVER_GEN_MODEL_PRESETS,
@@ -26,8 +28,9 @@ from otio_app.services.voiceover_generation.models import (
     VoiceoverGenerationModelSettings,
 )
 
-# Revision 2: Dramaturgie-Standard openai/gpt-5.6-terra statt anthropic/claude-sonnet-5.
-MODEL_SETTINGS_REVISION = 2
+# Revision 2: Dramaturgie GPT-5.6 Terra.
+# Revision 3: Intro-Skript GPT-5.6 Terra (Cut-Modelle bleiben pro Sprache).
+MODEL_SETTINGS_REVISION = 3
 
 __all__ = [
     "MODEL_SETTINGS_REVISION",
@@ -49,7 +52,7 @@ def default_model_settings() -> VoiceoverGenerationModelSettings:
     return VoiceoverGenerationModelSettings(settings_revision=MODEL_SETTINGS_REVISION)
 
 
-def _legacy_implicit_dramaturgy(role: LlmRoleSettings) -> bool:
+def _legacy_implicit_anthropic_default(role: LlmRoleSettings) -> bool:
     return (
         role.provider == VOICEOVER_GEN_DEFAULT_PROVIDER
         and role.model == VOICEOVER_GEN_DEFAULT_MODEL
@@ -63,15 +66,25 @@ def upgrade_model_settings(
 
     Revision 2 setzt Dramaturgie auf GPT-5.6 Terra, wenn noch der alte
     implizite Anthropic-Standard drinsteht (oft mitgespeichert, weil jede
-    Rolle die ganze Datei schreibt).
+    Rolle die ganze Datei schreibt). Revision 3 dasselbe fürs Intro-Skript.
+    Cut-Modelle werden nicht angefasst.
     """
     if settings.settings_revision >= MODEL_SETTINGS_REVISION:
         return settings, False
     updates: dict = {"settings_revision": MODEL_SETTINGS_REVISION}
-    if _legacy_implicit_dramaturgy(settings.dramaturgy):
+    if settings.settings_revision < 2 and _legacy_implicit_anthropic_default(
+        settings.dramaturgy
+    ):
         updates["dramaturgy"] = LlmRoleSettings(
             provider=VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER,
             model=VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL,
+        )
+    if settings.settings_revision < 3 and _legacy_implicit_anthropic_default(
+        settings.intro
+    ):
+        updates["intro"] = LlmRoleSettings(
+            provider=VOICEOVER_GEN_INTRO_DEFAULT_PROVIDER,
+            model=VOICEOVER_GEN_INTRO_DEFAULT_MODEL,
         )
     return settings.model_copy(update=updates), True
 

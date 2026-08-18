@@ -94,7 +94,7 @@ def render_language_sibling_actions(
         st.caption(
             "Sprachen wählen, dann nacheinander (nie parallel). "
             "Fehlende Projekte werden angelegt, unfertige fortgesetzt. "
-            "Stoppt bei Fehler, vor Funnel."
+            "Eine Sprache darf scheitern — die Queue macht mit der nächsten weiter."
         )
         pending_key = f"lang_queue_pick_pending_{project.id}"
         pending_picks = st.session_state.pop(pending_key, None)
@@ -196,7 +196,13 @@ def _render_queue_status(project, queue_state, queue_manager, auto_manager) -> N
             with col_info:
                 st.info(
                     f"▶ Sprachen-Queue sequenziell — {current} "
-                    f"({state.current_index + 1}/{total}, {done} fertig){extra}"
+                    f"({state.current_index + 1}/{total}, {done} fertig"
+                    + (
+                        f", {len(state.failed_languages)} Fehler"
+                        if state.failed_languages
+                        else ""
+                    )
+                    + f"){extra}"
                 )
                 st.progress(min(1.0, max(0.0, done / total)))
                 if state.current_project_id:
@@ -233,10 +239,15 @@ def _render_queue_status(project, queue_state, queue_manager, auto_manager) -> N
         )
     elif queue_state.status == "completed":
         finished = ", ".join(queue_state.completed_languages) or "keine"
-        st.success(
-            f"Sprachen-Queue fertig ({finished}). "
-            "Als Nächstes manuell: Funnel je Sprache."
-        )
+        failed = ", ".join(queue_state.failed_languages)
+        if queue_state.failed_languages:
+            st.warning(
+                f"Sprachen-Queue durchgelaufen. Fertig: {finished}. "
+                f"Fehler (weitergemacht): {failed}. "
+                f"{queue_state.error or ''}".strip()
+            )
+        else:
+            st.success(f"Sprachen-Queue fertig ({finished}).")
     if st.button(
         "Hinweis schließen",
         key=f"lang_queue_dismiss_{project.id}",

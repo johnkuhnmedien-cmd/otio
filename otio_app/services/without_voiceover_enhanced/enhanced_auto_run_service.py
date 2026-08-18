@@ -1,12 +1,13 @@
-"""Sequenzielle Enhanced-Pipeline: Brief → … → LLM Cuts, Stop vor Funnel.
+"""Sequenzielle Enhanced-Pipeline: Brief → … → LLM Cuts → Funnel → Timing → Musik → OTIO.
 
 Ein Schritt nach dem anderen, innerhalb jedes Schritts ein Kapitel nach dem
 anderen. Keine parallelen LLM-/TTS-Calls. Bereits erledigte Schritte werden
 übersprungen (skip-done). Kapitel-Skripte laufen zuerst komplett durch, danach
 die Freitext-Nachbearbeitung aller Kapitel, erst dann Script Lock. Der Aufruf
 über den Auto-Lauf-Button gilt als explizite Bestätigung für Dramaturgie,
-Script Lock und Intro (erste gültige Variante). Clean Media, Analysen, Funnel,
-Timing, Musik, SFX, OTIO und YouTube bleiben manuell.
+Script Lock und Intro (erste gültige Variante). Clean Media, Analysen, SFX
+und YouTube bleiben manuell. Offene Coverage-Gaps nach dem Funnel sind ein
+Fehler (die Sprachen-Queue macht mit der nächsten Sprache weiter).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from otio_app.project_layout import (
     get_project_brief_path,
     get_voiceover_style_references_path,
 )
+from otio_app.services.plan_llm_client import DEFAULT_MAX_OUTPUT_TOKENS
 from otio_app.services.voiceover_generation.dramaturgy_defaults_service import (
     auto_run_dramaturgy_planning_mode,
 )
@@ -76,13 +78,27 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
 )
 from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
     ChapterCutError,
+    export_all_chapters_otio,
     generate_chapter_unified_cut,
+    list_chapters_needing_python_timing,
     list_chapters_needing_unified_cut,
+    list_chapters_ready_for_python_timing,
     refresh_merged_unified_cut_plan,
+    resolve_chapter_timeline,
+)
+from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
+    CutPlanError,
+    search_supplements_for_gaps,
+)
+from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service import (
+    generate_music_for_allowed_targets,
 )
 from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+    IntroCutError,
     generate_intro_unified_cut,
+    intro_resolved_timeline_path,
     intro_unified_cut_plan_path,
+    resolve_intro_timeline,
 )
 from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
     ensure_confirmed_intro_in_locked_script,
@@ -92,6 +108,10 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     resolve_llm_cut_model_id,
 )
 from otio_app.services.without_voiceover_enhanced.models import UnifiedCutPlanDocument
+from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+    EnhancedOtioExportError,
+)
+from otio_app.services.without_voiceover_enhanced.paths import exports_dir
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
     chapter_narration_text,
     folders_present_in_script,
@@ -107,9 +127,18 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
     DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS,
 )
+from otio_app.services.without_voiceover_enhanced.stock_provider_config import (
+    save_stock_providers_config,
+)
+from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
+    SupplementFunnelError,
+    list_open_funnel_gap_ids,
+    run_supplement_funnel_for_gaps,
+)
 
 __all__ = [
     "AUTO_RUN_STEPS",
+    "AUTO_RUN_STOCK_PROVIDERS",
     "AutoRunProgress",
     "EnhancedAutoRunCancelled",
     "EnhancedAutoRunError",
@@ -131,7 +160,21 @@ AUTO_RUN_STEPS: tuple[tuple[str, str], ...] = (
     ("tts", "⑥ Audio / TTS"),
     ("intro_cut", "⑦ Intro LLM Cut"),
     ("chapter_cuts", "⑦ Kapitel LLM Cuts"),
+    ("stock", "⑧ Stocksuche"),
+    ("funnel", "⑧ Supplement-Funnel"),
+    ("timing", "⑨ Python Timing"),
+    ("music", "⑩ ElevenLabs Music"),
+    ("otio", "⑪ OTIO-Export"),
 )
+
+# Auto-Lauf sucht nur die freien Anbieter — analog zur UI-Auswahl.
+AUTO_RUN_STOCK_PROVIDERS: dict[str, bool] = {
+    "pexels": False,
+    "pixabay": False,
+    "wikimedia": True,
+    "openverse": True,
+    "archive_org": True,
+}
 
 
 class EnhancedAutoRunError(RuntimeError):
@@ -228,7 +271,7 @@ def run_enhanced_auto_pipeline(
     on_progress: ProgressCallback | None = None,
     skip_done: bool = True,
 ) -> EnhancedAutoRunReport:
-    """Führt die Enhanced-Schritte strikt sequenziell aus. Stoppt vor Funnel."""
+    """Führt die Enhanced-Schritte strikt sequenziell aus bis zum OTIO-Export."""
     report = EnhancedAutoRunReport()
     step_total = len(AUTO_RUN_STEPS)
     last_step_label = ""
@@ -380,7 +423,44 @@ def run_enhanced_auto_pipeline(
             finish=finish_step,
         )
 
-        emit("chapter_cuts", "Auto-Lauf fertig — als Nächstes manuell: Funnel / Timing.")
+        checkpoint("stock")
+        _run_stock_and_funnel(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            checkpoint=checkpoint,
+            cancelled=cancelled,
+            funnel_model=models.enhanced_supplement_funnel.model,
+            finish=finish_step,
+        )
+
+        checkpoint("timing")
+        _run_timing(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            checkpoint=checkpoint,
+            finish=finish_step,
+        )
+
+        checkpoint("music")
+        _run_music(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            cancelled=cancelled,
+            finish=finish_step,
+        )
+
+        checkpoint("otio")
+        _run_otio(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            finish=finish_step,
+        )
+
+        emit("otio", "Auto-Lauf fertig.")
         return report
     except EnhancedAutoRunCancelled:
         raise
@@ -710,7 +790,10 @@ def _run_intro(
 
     emit("intro", "Intro-Varianten werden erzeugt…")
     result = build_intro_hook_candidates(
-        project, provider=provider, model=model
+        project,
+        provider=provider,
+        model=model,
+        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
     )
     if result.status != STATUS_PASS or result.document is None:
         raise EnhancedAutoRunError(result.error or "Intro-Erzeugung fehlgeschlagen.")
@@ -853,3 +936,242 @@ def _run_chapter_cuts(
         )
     emit("chapter_cuts", f"{generated} Kapitel-LLM-Cut(s) sequenziell erzeugt.")
     finish("chapter_cuts", skipped=False)
+
+
+def intro_timing_complete(project: Project) -> bool:
+    return intro_resolved_timeline_path(project).is_file()
+
+
+def otio_export_complete(project: Project) -> bool:
+    path = exports_dir(project) / f"{project.name}_enhanced.otio"
+    return path.is_file()
+
+
+def _run_stock_and_funnel(
+    project: Project,
+    *,
+    skip_done: bool,
+    emit: Callable[..., None],
+    checkpoint: Callable[[str], None],
+    cancelled: Callable[[], bool],
+    funnel_model: str,
+    finish: Callable[..., None],
+) -> None:
+    open_ids = list_open_funnel_gap_ids(project)
+    if skip_done and not open_ids:
+        emit("stock", "Keine offenen Coverage-Gaps — Stocksuche übersprungen.", skipped=True)
+        finish("stock", skipped=True)
+        emit("funnel", "Keine offenen Coverage-Gaps — Funnel übersprungen.", skipped=True)
+        finish("funnel", skipped=True)
+        return
+
+    save_stock_providers_config(project, AUTO_RUN_STOCK_PROVIDERS)
+    emit(
+        "stock",
+        "Stockanbieter: Wikimedia, Openverse, Archive.org.",
+    )
+    if not open_ids:
+        emit("stock", "Keine Coverage-Gaps — Stocksuche übersprungen.", skipped=True)
+        finish("stock", skipped=True)
+        emit("funnel", "Kein Funnel nötig.", skipped=True)
+        finish("funnel", skipped=True)
+        return
+
+    emit("stock", f"Stocksuche für {len(open_ids)} offene Gap(s)…")
+    try:
+        results = search_supplements_for_gaps(project)
+    except CutPlanError as exc:
+        text = str(exc)
+        if "bereits erfüllt" in text:
+            emit("stock", "Alle Gaps bereits erfüllt — übersprungen.", skipped=True)
+            finish("stock", skipped=True)
+            emit("funnel", "Kein Funnel nötig.", skipped=True)
+            finish("funnel", skipped=True)
+            return
+        raise EnhancedAutoRunError(text) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise EnhancedAutoRunError(f"Stocksuche fehlgeschlagen: {exc}") from exc
+
+    n_candidates = len(getattr(results, "candidates", None) or [])
+    emit("stock", f"Stocksuche fertig — {n_candidates} Kandidat(en).")
+    finish("stock", skipped=False)
+
+    checkpoint("funnel")
+    emit("funnel", f"Alle offenen Gaps auflösen ({len(open_ids)})…")
+    try:
+        run_supplement_funnel_for_gaps(
+            project,
+            gap_ids=open_ids,
+            skip_filled=True,
+            should_stop=cancelled,
+            model=(funnel_model or "").strip() or None,
+        )
+    except EnhancedAutoRunCancelled:
+        raise
+    except SupplementFunnelError as exc:
+        raise EnhancedAutoRunError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise EnhancedAutoRunError(f"Funnel fehlgeschlagen: {exc}") from exc
+
+    still_open = list_open_funnel_gap_ids(project)
+    if still_open:
+        preview = ", ".join(still_open[:8])
+        more = f" (+{len(still_open) - 8})" if len(still_open) > 8 else ""
+        raise EnhancedAutoRunError(
+            f"{len(still_open)} Coverage Gap(s) nach dem Funnel noch offen: "
+            f"{preview}{more}"
+        )
+    emit("funnel", "Alle offenen Gaps erfüllt.")
+    finish("funnel", skipped=False)
+
+
+def _run_timing(
+    project: Project,
+    *,
+    skip_done: bool,
+    emit: Callable[..., None],
+    checkpoint: Callable[[str], None],
+    finish: Callable[..., None],
+) -> None:
+    intro_done = intro_timing_complete(project)
+    names = (
+        list_chapters_needing_python_timing(project)
+        if skip_done
+        else list_chapters_ready_for_python_timing(project)
+    )
+    if skip_done and intro_done and not names:
+        emit("timing", "Python Timing vorhanden — übersprungen.", skipped=True)
+        finish("timing", skipped=True)
+        return
+
+    if not intro_done:
+        emit("timing", "Intro Python Timing…", item_label="Intro")
+        try:
+            resolve_intro_timeline(project)
+        except IntroCutError as exc:
+            raise EnhancedAutoRunError(str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise EnhancedAutoRunError(f"Intro Python Timing fehlgeschlagen: {exc}") from exc
+
+    timed = 0
+    total = len(names)
+    for index, name in enumerate(names, start=1):
+        checkpoint("timing")
+        emit(
+            "timing",
+            f"Python Timing {index}/{total}: {name}",
+            item_label=name,
+            item_index=index,
+            item_total=total,
+        )
+        try:
+            resolve_chapter_timeline(project, name)
+            timed += 1
+        except ChapterCutError as exc:
+            raise EnhancedAutoRunError(str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise EnhancedAutoRunError(
+                f"Python Timing für {name} fehlgeschlagen: {exc}"
+            ) from exc
+
+    leftover = list_chapters_needing_python_timing(project)
+    if leftover:
+        preview = ", ".join(leftover[:8])
+        more = f" (+{len(leftover) - 8})" if len(leftover) > 8 else ""
+        raise EnhancedAutoRunError(
+            f"Python Timing unvollständig, noch offen: {preview}{more}"
+        )
+    emit("timing", f"Python Timing fertig (Intro + {timed} Kapitel).")
+    finish("timing", skipped=False)
+
+
+def _run_music(
+    project: Project,
+    *,
+    skip_done: bool,
+    emit: Callable[..., None],
+    cancelled: Callable[[], bool],
+    finish: Callable[..., None],
+) -> None:
+    emit("music", "ElevenLabs Music (Intro + erste Kapitel laut Settings)…")
+
+    def _progress(label: str, index: int, total: int) -> None:
+        emit(
+            "music",
+            f"ElevenLabs Music {index}/{total}: {label}",
+            item_label=label,
+            item_index=index,
+            item_total=total,
+        )
+
+    try:
+        result = generate_music_for_allowed_targets(
+            project,
+            skip_completed=True,
+            on_progress=_progress,
+            should_stop=cancelled,
+        )
+    except EnhancedAutoRunCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise EnhancedAutoRunError(f"ElevenLabs Music fehlgeschlagen: {exc}") from exc
+
+    if result.get("stopped"):
+        raise EnhancedAutoRunCancelled("Auto-Lauf gestoppt.")
+    failed = list(result.get("failed") or [])
+    if failed:
+        first = failed[0]
+        raise EnhancedAutoRunError(
+            f"ElevenLabs Music fehlgeschlagen ({first.get('label') or 'Ziel'}): "
+            f"{first.get('reason') or 'Unbekannt'}"
+        )
+    generated = list(result.get("generated") or [])
+    skipped = list(result.get("skipped") or [])
+    leftover_skip = [
+        item
+        for item in skipped
+        if str(item.get("reason") or "").strip() != "bereits vorhanden"
+    ]
+    if leftover_skip:
+        first = leftover_skip[0]
+        raise EnhancedAutoRunError(
+            "ElevenLabs Music unvollständig "
+            f"({first.get('label') or 'Ziel'}): "
+            f"{first.get('reason') or 'übersprungen'}"
+        )
+    if skip_done and not generated and skipped:
+        emit("music", "ElevenLabs Music vorhanden — übersprungen.", skipped=True)
+        finish("music", skipped=True)
+        return
+    emit(
+        "music",
+        f"ElevenLabs Music fertig ({len(generated)} neu, {len(skipped)} übersprungen).",
+    )
+    finish("music", skipped=False)
+
+
+def _run_otio(
+    project: Project,
+    *,
+    skip_done: bool,
+    emit: Callable[..., None],
+    finish: Callable[..., None],
+) -> None:
+    if skip_done and otio_export_complete(project):
+        emit("otio", "OTIO-Export vorhanden — übersprungen.", skipped=True)
+        finish("otio", skipped=True)
+        return
+    emit("otio", "OTIO-Export (Intro + alle Kapitel)…")
+    try:
+        path = export_all_chapters_otio(
+            project,
+            basename=f"{project.name}_enhanced",
+            allow_errors=True,
+            include_intro=True,
+        )
+    except (ChapterCutError, EnhancedOtioExportError) as exc:
+        raise EnhancedAutoRunError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise EnhancedAutoRunError(f"OTIO-Export fehlgeschlagen: {exc}") from exc
+    emit("otio", f"OTIO geschrieben: {path}")
+    finish("otio", skipped=False)

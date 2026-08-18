@@ -200,6 +200,10 @@ VOICEOVER_GEN_DEFAULT_MODEL = "claude-sonnet-5"
 # Anthropic-Standard der übrigen redaktionellen Rollen.
 VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER = "openai"
 VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL = "gpt-5.6-terra"
+# Intro-Skript (Hook-Varianten): GPT-5.6 Terra. Cut-Modelle bleiben
+# pro Sprache in den Cut Plan Settings — hier nicht überschreiben.
+VOICEOVER_GEN_INTRO_DEFAULT_PROVIDER = "openai"
+VOICEOVER_GEN_INTRO_DEFAULT_MODEL = "gpt-5.6-terra"
 # Phase 11.1: Standard für die neue Rolle — bewusst Gemini 3.1 Flash Lite
 # (schnell, günstig) statt des allgemeinen Anthropic-Standards oben, da diese
 # Rolle nur kurze Suchqueries generiert, keine langen redaktionellen Texte.

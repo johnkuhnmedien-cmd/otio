@@ -174,6 +174,116 @@ def _seed_scripts_and_lock(project: Project, folders: list[str]) -> None:
     lock_script(project)
 
 
+def _stub_auto_run_tail(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    enter=None,
+    skip_all: bool = False,
+    open_gaps_before: list[str] | None = None,
+    open_gaps_after: list[str] | None = None,
+    chapter_names: list[str] | None = None,
+) -> dict[str, bool]:
+    """Stock/Funnel/Timing/Music/OTIO: skip-done oder mitzählen."""
+    funnel_ran = {"v": False}
+    timing_done = {"intro": False, "chapters": []}
+    seen_providers: dict[str, bool] = {}
+    names = list(chapter_names or [])
+
+    def _enter(label: str) -> None:
+        if enter is not None:
+            enter(label)
+
+    def fake_open_ids(_project) -> list[str]:
+        if funnel_ran["v"]:
+            return list(open_gaps_after or [])
+        if skip_all:
+            return []
+        return list(open_gaps_before if open_gaps_before is not None else ["gap-1"])
+
+    def fake_save(_project, config) -> None:
+        seen_providers.clear()
+        seen_providers.update(config)
+        _enter("providers")
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("Tail-Schritt darf bei skip-done nicht laufen")
+
+    monkeypatch.setattr(auto_run, "list_open_funnel_gap_ids", fake_open_ids)
+    monkeypatch.setattr(auto_run, "save_stock_providers_config", fake_save)
+
+    if skip_all:
+        monkeypatch.setattr(auto_run, "search_supplements_for_gaps", boom)
+        monkeypatch.setattr(auto_run, "run_supplement_funnel_for_gaps", boom)
+        monkeypatch.setattr(auto_run, "resolve_intro_timeline", boom)
+        monkeypatch.setattr(auto_run, "resolve_chapter_timeline", boom)
+        monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
+        monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", lambda _p: [])
+        monkeypatch.setattr(
+            auto_run, "list_chapters_ready_for_python_timing", lambda _p: []
+        )
+        monkeypatch.setattr(
+            auto_run,
+            "generate_music_for_allowed_targets",
+            lambda *_a, **_k: {
+                "generated": [],
+                "skipped": [{"label": "intro", "reason": "bereits vorhanden"}],
+                "failed": [],
+                "stopped": False,
+            },
+        )
+        monkeypatch.setattr(auto_run, "export_all_chapters_otio", boom)
+        monkeypatch.setattr(auto_run, "otio_export_complete", lambda _p: True)
+        return seen_providers
+
+    def fake_search(*_a, **_k):
+        _enter("stock")
+        return MagicMock(candidates=["c1"])
+
+    def fake_funnel(*_a, **_k):
+        _enter("funnel")
+        funnel_ran["v"] = True
+
+    def fake_intro_timing(_p):
+        _enter("timing:intro")
+        timing_done["intro"] = True
+
+    def fake_chapter_timing(_p, name, **_k):
+        _enter(f"timing:{name}")
+        timing_done["chapters"].append(name)
+
+    def fake_needing(_p):
+        return [name for name in names if name not in timing_done["chapters"]]
+
+    def fake_music(*_a, **_k):
+        _enter("music")
+        return {
+            "generated": [{"label": "intro"}],
+            "skipped": [],
+            "failed": [],
+            "stopped": False,
+        }
+
+    def fake_otio(*_a, **_k):
+        _enter("otio")
+        return Path("/tmp/out.otio")
+
+    monkeypatch.setattr(auto_run, "search_supplements_for_gaps", fake_search)
+    monkeypatch.setattr(auto_run, "run_supplement_funnel_for_gaps", fake_funnel)
+    monkeypatch.setattr(auto_run, "resolve_intro_timeline", fake_intro_timing)
+    monkeypatch.setattr(auto_run, "resolve_chapter_timeline", fake_chapter_timing)
+    monkeypatch.setattr(
+        auto_run, "intro_timing_complete", lambda _p: timing_done["intro"]
+    )
+    monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", fake_needing)
+    monkeypatch.setattr(
+        auto_run, "list_chapters_ready_for_python_timing", fake_needing
+    )
+    monkeypatch.setattr(auto_run, "generate_music_for_allowed_targets", fake_music)
+    monkeypatch.setattr(auto_run, "export_all_chapters_otio", fake_otio)
+    monkeypatch.setattr(auto_run, "otio_export_complete", lambda _p: False)
+    return seen_providers
+
+
 def test_language_standard_files_live_under_data_dir() -> None:
     files = list_language_standard_files()
     names = {item.filename for item in files}
@@ -296,6 +406,8 @@ def test_auto_run_skips_completed_steps(
         ),
     )
 
+    _stub_auto_run_tail(monkeypatch, skip_all=True)
+
     report = run_enhanced_auto_pipeline(project, skip_done=True)
     assert report.stopped is False
     assert report.error is None
@@ -307,6 +419,11 @@ def test_auto_run_skips_completed_steps(
     assert "tts" in report.skipped
     assert "intro_cut" in report.skipped
     assert "chapter_cuts" in report.skipped
+    assert "stock" in report.skipped
+    assert "funnel" in report.skipped
+    assert "timing" in report.skipped
+    assert "music" in report.skipped
+    assert "otio" in report.skipped
 
 
 def test_auto_run_is_strictly_sequential(
@@ -447,6 +564,9 @@ def test_auto_run_is_strictly_sequential(
         auto_run, "list_chapters_needing_unified_cut", lambda _p: list(folders)
     )
     monkeypatch.setattr(auto_run, "refresh_merged_unified_cut_plan", lambda _p: None)
+    seen_providers = _stub_auto_run_tail(
+        monkeypatch, enter=_enter, chapter_names=list(folders)
+    )
 
     report = run_enhanced_auto_pipeline(project, skip_done=True)
     assert report.stopped is False
@@ -469,6 +589,20 @@ def test_auto_run_is_strictly_sequential(
         f"cut:{folders[0]}",
         f"cut:{folders[1]}",
     ]
+    assert seen_providers["pexels"] is False
+    assert seen_providers["pixabay"] is False
+    assert seen_providers["wikimedia"] is True
+    assert seen_providers["openverse"] is True
+    assert seen_providers["archive_org"] is True
+    assert "stock" in order
+    assert "funnel" in order
+    assert "timing:intro" in order
+    assert [item for item in order if item.startswith("timing:") and item != "timing:intro"] == [
+        f"timing:{folders[0]}",
+        f"timing:{folders[1]}",
+    ]
+    assert "music" in order
+    assert "otio" in order
     locked = load_locked_script(project)
     assert locked is not None
     from otio_app.services.voiceover_generation.intro_hook_service import (
@@ -562,6 +696,8 @@ def test_auto_run_revises_existing_scripts_before_lock(
         ),
     )
 
+    _stub_auto_run_tail(monkeypatch, skip_all=True)
+
     report = run_enhanced_auto_pipeline(project, skip_done=True)
     assert report.stopped is False
     assert "scripts" in report.skipped
@@ -569,6 +705,92 @@ def test_auto_run_revises_existing_scripts_before_lock(
     assert "script_lock" in report.completed
     assert order == folders
     assert load_locked_script(project) is not None
+
+
+def test_auto_run_errors_when_funnel_leaves_open_gaps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    folders = list(project.selected_asset_subdirs)
+    _seed_brief(project, title="Schon da")
+    _seed_raw_style(project)
+    _seed_dramaturgy(project, folders)
+    _seed_scripts_and_lock(project, folders)
+    save_confirmed_intro_hook(
+        project,
+        ConfirmedIntroHook(
+            project_id=project.id,
+            language="PT",
+            hook_id="h1",
+            hook_text="Intro-Text ohne Ziffern.",
+        ),
+    )
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("LLM/TTS darf vor dem Funnel nicht laufen")
+
+    monkeypatch.setattr(auto_run, "generate_video_title", boom)
+    monkeypatch.setattr(auto_run, "build_dramaturgy_plan", boom)
+    monkeypatch.setattr(auto_run, "generate_enhanced_script_for_folder", boom)
+    monkeypatch.setattr(auto_run, "revise_enhanced_script_for_folder", boom)
+    monkeypatch.setattr(auto_run, "build_intro_hook_candidates", boom)
+    monkeypatch.setattr(auto_run, "synthesize_open_chapters_audio", boom)
+    monkeypatch.setattr(auto_run, "generate_intro_unified_cut", boom)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", boom)
+    monkeypatch.setattr(
+        auto_run,
+        "list_chapter_audio_statuses",
+        lambda _p: [MagicMock(is_open=False)],
+    )
+    monkeypatch.setattr(auto_run, "list_chapters_needing_unified_cut", lambda _p: [])
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        intro_unified_cut_plan_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+    from otio_app.services.without_voiceover_enhanced.models import (
+        CutBoundary,
+        CutSlot,
+        UnifiedCutPlanDocument,
+    )
+
+    write_json(
+        intro_unified_cut_plan_path(project),
+        UnifiedCutPlanDocument(
+            script_version="script-v1",
+            boundaries=[
+                CutBoundary(cut_id="intro_cut_000", sentence_id="s1", position="start"),
+                CutBoundary(cut_id="intro_cut_001", sentence_id="s1", position="end"),
+            ],
+            slots=[
+                CutSlot(
+                    slot_id="intro_slot_001",
+                    local_asset_id="a1",
+                    asset_fit="strong",
+                    asset_fit_reason="test",
+                    visual_intent="open",
+                )
+            ],
+        ),
+    )
+    _stub_auto_run_tail(
+        monkeypatch,
+        open_gaps_before=["gap-a", "gap-b"],
+        open_gaps_after=["gap-a"],
+    )
+
+    with pytest.raises(EnhancedAutoRunError, match="Coverage Gap") as exc_info:
+        run_enhanced_auto_pipeline(project, skip_done=True)
+    message = str(exc_info.value)
+    assert "gap-a" in message
+    assert "Schritt ⑧ Supplement-Funnel" in message
+
+
+def test_auto_run_stock_providers_are_free_only() -> None:
+    assert auto_run.AUTO_RUN_STOCK_PROVIDERS["pexels"] is False
+    assert auto_run.AUTO_RUN_STOCK_PROVIDERS["pixabay"] is False
+    assert auto_run.AUTO_RUN_STOCK_PROVIDERS["wikimedia"] is True
+    assert auto_run.AUTO_RUN_STOCK_PROVIDERS["openverse"] is True
+    assert auto_run.AUTO_RUN_STOCK_PROVIDERS["archive_org"] is True
 
 
 def test_auto_run_cancel_between_steps(

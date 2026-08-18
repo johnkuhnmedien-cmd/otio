@@ -205,8 +205,8 @@ from otio_app.ui.voiceover_generation._shared import (
 )
 from otio_app.ui.without_voiceover_enhanced._shared import get_enhanced_project
 
-_ROUGH_CUT_OUTPUT_DEFAULT = 50_000
-_FINAL_CUT_OUTPUT_DEFAULT = 50_000
+_ROUGH_CUT_OUTPUT_DEFAULT = 100_000
+_FINAL_CUT_OUTPUT_DEFAULT = 100_000
 _OUTPUT_TOKENS_MIN = 2_000
 _OUTPUT_TOKENS_MAX = 100_000
 _OUTPUT_TOKENS_STEP = 1_000
@@ -1417,7 +1417,7 @@ def _render_intro_cut_section(
     *,
     provider: str,
     model: str,
-    output_ceiling: int = 8_192,
+    output_ceiling: int = 100_000,
 ) -> None:
     """Separater Intro-Pfad vor den Kapitel-Unified-Buttons."""
     st.markdown("##### 0. Intro Cut (separat)")
@@ -1433,7 +1433,7 @@ def _render_intro_cut_section(
         provider=provider,
         model=model,
         input_tokens=intro_tokens,
-        output_ceiling=min(int(output_ceiling), 8_192),
+        output_ceiling=int(output_ceiling),
         chapter_count=1,
         scope_label="Intro-Call (1×, alle Kapitel-Inventare gebündelt)",
         note=(
