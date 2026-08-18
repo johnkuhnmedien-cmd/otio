@@ -11,6 +11,10 @@ from otio_app.services.asset_analysis_job import (
     JobStatus,
     get_asset_analysis_job_manager,
 )
+from otio_app.services.clean_media_job import (
+    JobStatus as CleanJobStatus,
+    get_clean_media_job_manager,
+)
 from otio_app.services.supplement_recovery_job import (
     RecoveryJobStatus,
     SupplementRecoveryJobState,
@@ -158,72 +162,172 @@ def _render_recovery_report(state: SupplementRecoveryJobState) -> None:
         st.caption(f"• {line}")
 
 
-def render_analysis_jobs_banner(project_id: str) -> None:
-    """Globales Banner auf Nicht-Analyse-Seiten."""
+def _format_clean_progress_line(state) -> str:
+    folder = (state.phase_data or {}).get("folder") or ""
+    extra = f" · {folder}" if folder else ""
+    return f"{state.done_media}/{state.total_media or '?'} Medien{extra}"
+
+
+def _banner_fraction(done: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return min(max(done / total, 0.0), 1.0)
+
+
+def _banner_skip(skip_kinds: tuple[str, ...] | list[str] | set[str]) -> set[str]:
+    return {str(kind).strip().lower() for kind in skip_kinds if str(kind).strip()}
+
+
+def _banner_job_running(project_id: str, skip: set[str]) -> bool:
+    if "clean" not in skip and get_clean_media_job_manager().is_running(project_id):
+        return True
+    if "voice" not in skip and get_voice_analysis_job_manager().is_running(project_id):
+        return True
+    if "assets" not in skip and get_asset_analysis_job_manager().is_running(project_id):
+        return True
+    if "recovery" not in skip and get_supplement_recovery_job_manager().is_running(
+        project_id
+    ):
+        return True
+    return False
+
+
+def _render_banner_stop_row(
+    *,
+    message: str,
+    stop_key: str,
+    cancel_requested: bool,
+    on_stop,
+    progress: float | None = None,
+    progress_text: str = "",
+) -> None:
+    extra = " **(Stop angefordert …)**" if cancel_requested else ""
+    col_info, col_stop = st.columns([5, 1])
+    with col_info:
+        st.info(f"{message}{extra}")
+        if progress is not None:
+            fraction = min(max(float(progress), 0.0), 1.0)
+            if progress_text:
+                st.progress(fraction, text=progress_text)
+            else:
+                st.progress(fraction)
+    with col_stop:
+        if st.button("⏹ Stoppen", key=stop_key, disabled=cancel_requested):
+            on_stop()
+            st.rerun()
+
+
+def _render_running_jobs_banner(project_id: str, skip: set[str]) -> None:
+    if "clean" not in skip:
+        clean_state = get_clean_media_job_manager().get_state(project_id)
+        if clean_state is not None and clean_state.status == CleanJobStatus.RUNNING:
+            _render_banner_stop_row(
+                message=(
+                    f"🧹 Clean Media läuft — {_format_clean_progress_line(clean_state)}"
+                ),
+                stop_key=f"global_stop_clean_{project_id}",
+                cancel_requested=clean_state.cancel_requested,
+                on_stop=lambda: get_clean_media_job_manager().request_cancel(project_id),
+                progress=_banner_fraction(clean_state.done_media, clean_state.total_media),
+                progress_text=(
+                    f"{clean_state.done_media} / {clean_state.total_media or '?'} Medien"
+                ),
+            )
+    if "voice" not in skip:
+        voice_state = get_voice_analysis_job_manager().get_state(project_id)
+        if voice_state is not None and voice_state.status == JobStatus.RUNNING:
+            _render_banner_stop_row(
+                message=f"🎙️ Voice-over läuft — {_format_voice_progress_line(voice_state)}",
+                stop_key=f"global_stop_voice_{project_id}",
+                cancel_requested=voice_state.cancel_requested,
+                on_stop=lambda: get_voice_analysis_job_manager().request_cancel(
+                    project_id
+                ),
+                progress=_banner_fraction(voice_state.done_files, voice_state.total_files),
+                progress_text=(
+                    f"{voice_state.done_files} / {voice_state.total_files or '?'} Audiodateien"
+                ),
+            )
+    if "assets" not in skip:
+        asset_state = get_asset_analysis_job_manager().get_state(project_id)
+        if asset_state is not None and asset_state.status == JobStatus.RUNNING:
+            _render_banner_stop_row(
+                message=(
+                    f"⏳ Asset-Analyse läuft — {_format_asset_progress_line(asset_state)} "
+                    "Du kannst die Seite wechseln."
+                ),
+                stop_key=f"global_stop_assets_{project_id}",
+                cancel_requested=asset_state.cancel_requested,
+                on_stop=lambda: get_asset_analysis_job_manager().request_cancel(
+                    project_id
+                ),
+                progress=_banner_fraction(asset_state.done_media, asset_state.total_media),
+                progress_text=(
+                    f"{asset_state.done_media} / {asset_state.total_media or '?'} Assets"
+                ),
+            )
+    if "recovery" not in skip:
+        recovery_state = get_supplement_recovery_job_manager().get_state(project_id)
+        if (
+            recovery_state is not None
+            and recovery_state.status == RecoveryJobStatus.RUNNING
+        ):
+            _render_banner_stop_row(
+                message=(
+                    f"📥 Bestandsaufnahme läuft — {recovery_state.done}/"
+                    f"{recovery_state.total or '?'} beschaffte Assets"
+                ),
+                stop_key=f"global_stop_recovery_{project_id}",
+                cancel_requested=recovery_state.cancel_requested,
+                on_stop=lambda: get_supplement_recovery_job_manager().request_cancel(
+                    project_id
+                ),
+                progress=recovery_state.fraction,
+                progress_text=(
+                    f"{recovery_state.done} / {recovery_state.total or '?'} beschaffte Assets"
+                ),
+            )
+
+
+def render_analysis_jobs_banner(
+    project_id: str,
+    *,
+    skip_kinds: tuple[str, ...] | list[str] | set[str] = (),
+) -> None:
+    """Globales Banner — Clean Media, Voice, Assets, Bestandsaufnahme."""
+    skip = _banner_skip(skip_kinds)
+    skip_key = "_".join(sorted(skip)) or "all"
+    if _banner_job_running(project_id, skip):
+        poll_while_running(
+            lambda: _render_running_jobs_banner(project_id, skip),
+            lambda: _banner_job_running(project_id, skip),
+            refresh_key=f"jobs_banner_refresh_{project_id}_{skip_key}",
+        )
+        return
+
+    if "clean" not in skip:
+        clean_state = get_clean_media_job_manager().get_state(project_id)
+        if clean_state is not None and clean_state.status != CleanJobStatus.RUNNING:
+            if clean_state.status == CleanJobStatus.CANCELLED:
+                st.warning("Clean-Media-Lauf wurde abgebrochen.")
+            elif clean_state.status == CleanJobStatus.FAILED:
+                st.error(
+                    f"Clean-Media-Lauf fehlgeschlagen: {clean_state.error or 'Unbekannt'}"
+                )
+            elif clean_state.status == CleanJobStatus.COMPLETED:
+                st.success("Clean-Media-Lauf abgeschlossen.")
+            if st.button(
+                "Clean-Media-Hinweis schließen",
+                key=f"dismiss_clean_job_{project_id}",
+            ):
+                get_clean_media_job_manager().dismiss(project_id)
+                st.rerun()
+            return
+
     voice_state = get_voice_analysis_job_manager().get_state(project_id)
     asset_state = get_asset_analysis_job_manager().get_state(project_id)
 
-    if voice_state is not None and voice_state.status == JobStatus.RUNNING:
-        col_info, col_stop = st.columns([5, 1])
-        with col_info:
-            extra = " **(Stop angefordert …)**" if voice_state.cancel_requested else ""
-            st.info(
-                f"🎙️ Voice-over läuft — {_format_voice_progress_line(voice_state)}{extra}"
-            )
-        with col_stop:
-            if st.button(
-                "⏹ Stoppen",
-                key=f"global_stop_voice_{project_id}",
-                disabled=voice_state.cancel_requested,
-            ):
-                get_voice_analysis_job_manager().request_cancel(project_id)
-                st.rerun()
-        return
-
-    if asset_state is not None and asset_state.status == JobStatus.RUNNING:
-        col_info, col_stop = st.columns([5, 1])
-        with col_info:
-            extra = " **(Stop angefordert …)**" if asset_state.cancel_requested else ""
-            st.info(
-                f"⏳ Asset-Analyse läuft — {_format_asset_progress_line(asset_state)}{extra} "
-                "Du kannst zu **③ Schnittplan** wechseln."
-            )
-        with col_stop:
-            if st.button(
-                "⏹ Stoppen",
-                key=f"global_stop_assets_{project_id}",
-                disabled=asset_state.cancel_requested,
-            ):
-                get_asset_analysis_job_manager().request_cancel(project_id)
-                st.rerun()
-        return
-
-    recovery_state = get_supplement_recovery_job_manager().get_state(project_id)
-    if (
-        recovery_state is not None
-        and recovery_state.status == RecoveryJobStatus.RUNNING
-    ):
-        col_info, col_stop = st.columns([5, 1])
-        with col_info:
-            extra = (
-                " **(Stop angefordert …)**" if recovery_state.cancel_requested else ""
-            )
-            st.info(
-                f"📥 Bestandsaufnahme läuft — {recovery_state.done}/"
-                f"{recovery_state.total or '?'} beschaffte Assets analysiert"
-                f"{extra}. Läuft im Hintergrund weiter."
-            )
-        with col_stop:
-            if st.button(
-                "⏹ Stoppen",
-                key=f"global_stop_recovery_{project_id}",
-                disabled=recovery_state.cancel_requested,
-            ):
-                get_supplement_recovery_job_manager().request_cancel(project_id)
-                st.rerun()
-        return
-
-    if voice_state is not None and voice_state.status != JobStatus.RUNNING:
+    if "voice" not in skip and voice_state is not None and voice_state.status != JobStatus.RUNNING:
         if voice_state.status == JobStatus.CANCELLED:
             st.warning("Voice-over-Analyse wurde gestoppt.")
         elif voice_state.status == JobStatus.FAILED:
@@ -235,7 +339,7 @@ def render_analysis_jobs_banner(project_id: str) -> None:
             st.rerun()
         return
 
-    if asset_state is not None and asset_state.status != JobStatus.RUNNING:
+    if "assets" not in skip and asset_state is not None and asset_state.status != JobStatus.RUNNING:
         if asset_state.status == JobStatus.CANCELLED:
             st.warning("Asset-Analyse wurde gestoppt.")
         elif asset_state.status == JobStatus.FAILED:
@@ -245,6 +349,28 @@ def render_analysis_jobs_banner(project_id: str) -> None:
         if st.button("Asset-Hinweis schließen", key=f"dismiss_asset_job_{project_id}"):
             get_asset_analysis_job_manager().dismiss(project_id)
             st.rerun()
+        return
+
+    if "recovery" not in skip:
+        recovery_state = get_supplement_recovery_job_manager().get_state(project_id)
+        if (
+            recovery_state is not None
+            and recovery_state.status != RecoveryJobStatus.RUNNING
+        ):
+            if recovery_state.status == RecoveryJobStatus.CANCELLED:
+                st.warning("Bestandsaufnahme wurde gestoppt.")
+            elif recovery_state.status == RecoveryJobStatus.FAILED:
+                st.error(
+                    f"Bestandsaufnahme fehlgeschlagen: {recovery_state.error or 'Unbekannt'}"
+                )
+            elif recovery_state.status == RecoveryJobStatus.COMPLETED:
+                st.success("Bestandsaufnahme abgeschlossen.")
+            if st.button(
+                "Bestands-Hinweis schließen",
+                key=f"dismiss_recovery_job_{project_id}",
+            ):
+                get_supplement_recovery_job_manager().dismiss(project_id)
+                st.rerun()
 
 
 def _analysis_job_is_running(project_id: str) -> bool:

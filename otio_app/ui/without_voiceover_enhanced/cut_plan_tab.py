@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import time
 
 import streamlit as st
 
@@ -418,71 +417,70 @@ def _render_enhanced_cut_model(
 def _render_lightweight_funnel_monitor(project) -> None:
     """Schlanke Seite während der Funnel läuft — Abbrechen ohne schweren Rerun."""
     mgr = get_supplement_funnel_job_manager()
-    state = mgr.get_state(project.id)
-    if state is None or state.status != FunnelJobStatus.RUNNING:
-        return
 
-    st.subheader("Supplement-Funnel läuft")
-    st.progress(
-        min(1.0, max(0.0, float(state.fraction))),
-        text=(state.message or "Funnel läuft…")[:120],
-    )
-    st.info(state.message or "Funnel läuft im Hintergrund…")
-    if state.model:
-        st.caption(f"Modell: `{state.model}`")
-    if state.gap_total:
+    def _body() -> None:
+        state = mgr.get_state(project.id)
+        if state is None or state.status != FunnelJobStatus.RUNNING:
+            return
+
+        st.subheader("Supplement-Funnel läuft")
+        st.progress(
+            min(1.0, max(0.0, float(state.fraction))),
+            text=(state.message or "Funnel läuft…")[:120],
+        )
+        st.info(state.message or "Funnel läuft im Hintergrund…")
+        if state.model:
+            st.caption(f"Modell: `{state.model}`")
+        if state.gap_total:
+            st.caption(
+                f"Gap {state.gap_index}/{state.gap_total}"
+                + (f" · `{state.gap_id}`" if state.gap_id else "")
+            )
+
+        if state.cancel_requested:
+            st.warning(
+                "Abbruch angefordert. Der aktuelle Gemini-Schritt (Thumbnail-Batch "
+                "mit bis zu 10 Bildern, Timeout 120 s) wird noch beendet — danach "
+                "stoppt der Funnel. Bereits erfüllte Gaps bleiben."
+            )
+        else:
+            st.caption(
+                "Abbrechen wirkt nach dem laufenden LLM-/Download-Schritt, "
+                "nicht mitten im API-Call. Wenn Gemini hängt: UI trotzdem freigeben."
+            )
+
+        cols = st.columns(2)
+        with cols[0]:
+            if st.button(
+                "⏹ Funnel abbrechen",
+                key=f"enh_funnel_cancel_lite_{project.id}",
+                disabled=state.cancel_requested,
+                type="primary",
+            ):
+                mgr.request_cancel(project.id)
+                st.rerun()
+        with cols[1]:
+            if st.button(
+                "UI trotzdem freigeben",
+                key=f"enh_funnel_force_reset_lite_{project.id}",
+            ):
+                mgr.force_reset(project.id)
+                st.rerun()
+
+        if state.log_lines:
+            with st.expander("Letzte Fortschrittszeilen", expanded=False):
+                st.caption("\n".join(state.log_lines[-20:]))
+
         st.caption(
-            f"Gap {state.gap_index}/{state.gap_total}"
-            + (f" · `{state.gap_id}`" if state.gap_id else "")
+            "Leichte Ansicht während der Funnel läuft "
+            "(Cut-Plan-Details ausgeblendet, damit Abbrechen schnell reagiert)."
         )
 
-    if state.cancel_requested:
-        st.warning(
-            "Abbruch angefordert. Der aktuelle Gemini-Schritt (Thumbnail-Batch "
-            "mit bis zu 10 Bildern, Timeout 120 s) wird noch beendet — danach "
-            "stoppt der Funnel. Bereits erfüllte Gaps bleiben."
-        )
-    else:
-        st.caption(
-            "Abbrechen wirkt nach dem laufenden LLM-/Download-Schritt, "
-            "nicht mitten im API-Call. Wenn Gemini hängt: UI trotzdem freigeben."
-        )
-
-    cols = st.columns(3)
-    with cols[0]:
-        if st.button(
-            "⏹ Funnel abbrechen",
-            key=f"enh_funnel_cancel_lite_{project.id}",
-            disabled=state.cancel_requested,
-            type="primary",
-        ):
-            mgr.request_cancel(project.id)
-            st.rerun()
-    with cols[1]:
-        if st.button(
-            "UI trotzdem freigeben",
-            key=f"enh_funnel_force_reset_lite_{project.id}",
-        ):
-            mgr.force_reset(project.id)
-            st.rerun()
-    with cols[2]:
-        if st.button(
-            "🔄 Aktualisieren",
-            key=f"enh_funnel_refresh_lite_{project.id}",
-        ):
-            st.rerun()
-
-    if state.log_lines:
-        with st.expander("Letzte Fortschrittszeilen", expanded=False):
-            st.caption("\n".join(state.log_lines[-20:]))
-
-    st.caption(
-        "Leichte Ansicht während der Funnel läuft "
-        "(Cut-Plan-Details ausgeblendet, damit Abbrechen schnell reagiert)."
+    poll_while_running(
+        _body,
+        lambda: mgr.is_running(project.id),
+        refresh_key=f"enh_funnel_lite_poll_{project.id}",
     )
-    # Kurzes Auto-Refresh, damit Stop ohne manuelles Klicken sichtbar wird.
-    time.sleep(1.5)
-    st.rerun()
 
 
 

@@ -185,36 +185,39 @@ def render_language_sibling_actions(
 
 
 def _render_queue_status(project, queue_state, queue_manager, auto_manager) -> None:
-    total = len(queue_state.languages) or 1
-    done = len(queue_state.completed_languages)
     if queue_state.status == "running":
-        extra = " **(Stop angefordert …)**" if queue_state.cancel_requested else ""
-        current = queue_state.current_language or "—"
-        col_info, col_stop = st.columns([5, 1])
-        with col_info:
-            st.info(
-                f"▶ Sprachen-Queue sequenziell — {current} "
-                f"({queue_state.current_index + 1}/{total}, {done} fertig){extra}"
-            )
-            st.progress(min(1.0, max(0.0, done / total)))
-            if queue_state.current_project_id:
-                auto_state = auto_manager.get_state(queue_state.current_project_id)
-                if auto_state is not None:
-                    st.caption(
-                        auto_state.message
-                        or auto_state.step_label
-                        or "Auto-Lauf läuft…"
-                    )
-        with col_stop:
-            if st.button(
-                "⏹ Stoppen",
-                key=f"lang_queue_stop_{project.id}",
-                disabled=queue_state.cancel_requested,
-            ):
-                queue_manager.request_cancel(project.id)
-                st.rerun()
+        def _body() -> None:
+            state = queue_manager.get_state(project.id) or queue_state
+            total = len(state.languages) or 1
+            done = len(state.completed_languages)
+            extra = " **(Stop angefordert …)**" if state.cancel_requested else ""
+            current = state.current_language or "—"
+            col_info, col_stop = st.columns([5, 1])
+            with col_info:
+                st.info(
+                    f"▶ Sprachen-Queue sequenziell — {current} "
+                    f"({state.current_index + 1}/{total}, {done} fertig){extra}"
+                )
+                st.progress(min(1.0, max(0.0, done / total)))
+                if state.current_project_id:
+                    auto_state = auto_manager.get_state(state.current_project_id)
+                    if auto_state is not None:
+                        st.caption(
+                            auto_state.message
+                            or auto_state.step_label
+                            or "Auto-Lauf läuft…"
+                        )
+            with col_stop:
+                if st.button(
+                    "⏹ Stoppen",
+                    key=f"lang_queue_stop_{project.id}",
+                    disabled=state.cancel_requested,
+                ):
+                    queue_manager.request_cancel(project.id)
+                    st.rerun()
+
         poll_while_running(
-            lambda: None,
+            _body,
             lambda: queue_manager.is_running(project.id),
             refresh_key=f"lang_queue_refresh_{project.id}",
         )

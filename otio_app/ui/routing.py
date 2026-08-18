@@ -71,7 +71,8 @@ def _wrap_page(
     page_id: str,
     render_fn: Callable[[], None],
     *,
-    show_jobs_banner: bool = False,
+    show_jobs_banner: bool = True,
+    jobs_banner_skip: tuple[str, ...] = (),
     purge_mapping_on_enter: bool = False,
     show_auto_run_panel: bool = True,
 ) -> Callable[[], None]:
@@ -86,7 +87,7 @@ def _wrap_page(
         record_script_run(page_id)
         project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
         if show_jobs_banner and project_id:
-            render_analysis_jobs_banner(project_id)
+            render_analysis_jobs_banner(project_id, skip_kinds=jobs_banner_skip)
         if show_auto_run_panel and project_id:
             project = get_project_by_id(str(project_id))
             if (
@@ -118,24 +119,36 @@ def _build_with_voiceover_pages(
 
     return [
         st.Page(
-            render_adobe_research_import_page,
+            _wrap_page(
+                PAGE_ADOBE_IMPORT,
+                render_adobe_research_import_page,
+                show_auto_run_panel=False,
+            ),
             title=PAGE_ADOBE_IMPORT,
             url_path="adobe-stock-import",
         ),
         st.Page(
-            render_new_project,
+            _wrap_page(PAGE_NEW, render_new_project, show_auto_run_panel=False),
             title=PAGE_NEW,
             url_path="neues-projekt",
             default=True,
         ),
-        st.Page(render_project_list, title=PAGE_LIST, url_path="projekte"),
         st.Page(
-            _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, show_jobs_banner=True),
+            _wrap_page(PAGE_LIST, render_project_list, show_auto_run_panel=False),
+            title=PAGE_LIST,
+            url_path="projekte",
+        ),
+        st.Page(
+            _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, jobs_banner_skip=("clean",)),
             title=PAGE_CLEAN_MEDIA,
             url_path="clean-media",
         ),
         st.Page(
-            _wrap_page(PAGE_ANALYSIS, render_project_workbench),
+            _wrap_page(
+                PAGE_ANALYSIS,
+                render_project_workbench,
+                jobs_banner_skip=("voice", "assets", "recovery"),
+            ),
             title=PAGE_ANALYSIS,
             url_path="analysen",
         ),
@@ -159,8 +172,16 @@ def _build_with_voiceover_pages(
             title=PAGE_EDIT_PLAN,
             url_path="schnittplan",
         ),
-        st.Page(render_api_keys_page, title=PAGE_API_KEYS, url_path="api-schluessel"),
-        st.Page(render_system_status_page, title=PAGE_STATUS, url_path="systemstatus"),
+        st.Page(
+            _wrap_page(PAGE_API_KEYS, render_api_keys_page, show_auto_run_panel=False),
+            title=PAGE_API_KEYS,
+            url_path="api-schluessel",
+        ),
+        st.Page(
+            _wrap_page(PAGE_STATUS, render_system_status_page, show_auto_run_panel=False),
+            title=PAGE_STATUS,
+            url_path="systemstatus",
+        ),
     ]
 
 
@@ -187,24 +208,36 @@ def _build_without_voiceover_pages(
 
     return [
         st.Page(
-            render_adobe_research_import_page,
+            _wrap_page(
+                PAGE_ADOBE_IMPORT,
+                render_adobe_research_import_page,
+                show_auto_run_panel=False,
+            ),
             title=PAGE_ADOBE_IMPORT,
             url_path="adobe-stock-import",
         ),
         st.Page(
-            render_new_project,
+            _wrap_page(PAGE_NEW, render_new_project, show_auto_run_panel=False),
             title=PAGE_NEW,
             url_path="neues-projekt",
             default=True,
         ),
-        st.Page(render_project_list, title=PAGE_LIST, url_path="projekte"),
         st.Page(
-            _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, show_jobs_banner=True),
+            _wrap_page(PAGE_LIST, render_project_list, show_auto_run_panel=False),
+            title=PAGE_LIST,
+            url_path="projekte",
+        ),
+        st.Page(
+            _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, jobs_banner_skip=("clean",)),
             title=PAGE_CLEAN_MEDIA,
             url_path="clean-media",
         ),
         st.Page(
-            _wrap_page(PAGE_ANALYSIS, render_project_workbench),
+            _wrap_page(
+                PAGE_ANALYSIS,
+                render_project_workbench,
+                jobs_banner_skip=("voice", "assets", "recovery"),
+            ),
             title=PAGE_ANALYSIS,
             url_path="analysen",
         ),
@@ -248,8 +281,16 @@ def _build_without_voiceover_pages(
             title=PAGE_CUT_PLAN,
             url_path="cut-plan",
         ),
-        st.Page(render_api_keys_page, title=PAGE_API_KEYS, url_path="api-schluessel"),
-        st.Page(render_system_status_page, title=PAGE_STATUS, url_path="systemstatus"),
+        st.Page(
+            _wrap_page(PAGE_API_KEYS, render_api_keys_page, show_auto_run_panel=False),
+            title=PAGE_API_KEYS,
+            url_path="api-schluessel",
+        ),
+        st.Page(
+            _wrap_page(PAGE_STATUS, render_system_status_page, show_auto_run_panel=False),
+            title=PAGE_STATUS,
+            url_path="systemstatus",
+        ),
     ]
 
 
@@ -278,24 +319,36 @@ def _build_without_voiceover_enhanced_pages(
 
     return [
         st.Page(
-            render_adobe_research_import_page,
+            _wrap_page(
+                PAGE_ADOBE_IMPORT,
+                render_adobe_research_import_page,
+                show_auto_run_panel=False,
+            ),
             title=PAGE_ADOBE_IMPORT,
             url_path="adobe-stock-import",
         ),
         st.Page(
-            render_new_project,
+            _wrap_page(PAGE_NEW, render_new_project, show_auto_run_panel=False),
             title=PAGE_NEW,
             url_path="neues-projekt",
             default=True,
         ),
-        st.Page(render_project_list, title=PAGE_LIST, url_path="projekte"),
         st.Page(
-            _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, show_jobs_banner=True),
+            _wrap_page(PAGE_LIST, render_project_list, show_auto_run_panel=False),
+            title=PAGE_LIST,
+            url_path="projekte",
+        ),
+        st.Page(
+            _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, jobs_banner_skip=("clean",)),
             title=PAGE_CLEAN_MEDIA,
             url_path="clean-media",
         ),
         st.Page(
-            _wrap_page(PAGE_ANALYSIS, render_project_workbench),
+            _wrap_page(
+                PAGE_ANALYSIS,
+                render_project_workbench,
+                jobs_banner_skip=("voice", "assets", "recovery"),
+            ),
             title=PAGE_ANALYSIS,
             url_path="analysen",
         ),
@@ -348,8 +401,16 @@ def _build_without_voiceover_enhanced_pages(
             title=PAGE_FINAL_OUTPUT_ENHANCED,
             url_path="final-output",
         ),
-        st.Page(render_api_keys_page, title=PAGE_API_KEYS, url_path="api-schluessel"),
-        st.Page(render_system_status_page, title=PAGE_STATUS, url_path="systemstatus"),
+        st.Page(
+            _wrap_page(PAGE_API_KEYS, render_api_keys_page, show_auto_run_panel=False),
+            title=PAGE_API_KEYS,
+            url_path="api-schluessel",
+        ),
+        st.Page(
+            _wrap_page(PAGE_STATUS, render_system_status_page, show_auto_run_panel=False),
+            title=PAGE_STATUS,
+            url_path="systemstatus",
+        ),
     ]
 
 
@@ -498,15 +559,23 @@ def _run_legacy_pages(
             st.rerun()
 
     if page == PAGE_ADOBE_IMPORT:
-        render_adobe_research_import_page()
+        _wrap_page(
+            PAGE_ADOBE_IMPORT,
+            render_adobe_research_import_page,
+            show_auto_run_panel=False,
+        )()
     elif page == PAGE_NEW:
-        render_new_project()
+        _wrap_page(PAGE_NEW, render_new_project, show_auto_run_panel=False)()
     elif page == PAGE_LIST:
-        render_project_list()
+        _wrap_page(PAGE_LIST, render_project_list, show_auto_run_panel=False)()
     elif page == PAGE_CLEAN_MEDIA:
-        _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, show_jobs_banner=True)()
+        _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, jobs_banner_skip=("clean",))()
     elif page == PAGE_ANALYSIS:
-        _wrap_page(PAGE_ANALYSIS, render_project_workbench)()
+        _wrap_page(
+            PAGE_ANALYSIS,
+            render_project_workbench,
+            jobs_banner_skip=("voice", "assets", "recovery"),
+        )()
     elif page == PAGE_AUTO_RUN:
         _wrap_page(
             PAGE_AUTO_RUN,
@@ -551,6 +620,6 @@ def _run_legacy_pages(
     elif page == PAGE_FINAL_OUTPUT_ENHANCED:
         _wrap_page(PAGE_FINAL_OUTPUT_ENHANCED, render_enhanced_final_output_page)()
     elif page == PAGE_API_KEYS:
-        render_api_keys_page()
+        _wrap_page(PAGE_API_KEYS, render_api_keys_page, show_auto_run_panel=False)()
     elif page == PAGE_STATUS:
-        render_system_status_page()
+        _wrap_page(PAGE_STATUS, render_system_status_page, show_auto_run_panel=False)()

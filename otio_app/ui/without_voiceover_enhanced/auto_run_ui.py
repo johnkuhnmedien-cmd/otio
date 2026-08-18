@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import streamlit as st
 
 from otio_app.models import Project, ProjectMode
@@ -35,16 +33,6 @@ def auto_run_progress_fraction(state: EnhancedAutoRunJobState) -> float:
     elif state.step_index > 0:
         fraction = state.step_index / state.step_total
     return min(1.0, max(0.0, fraction))
-
-
-def _fragment_decorator(run_every: float):
-    fragment = getattr(st, "fragment", None)
-    if not callable(fragment):
-        return lambda fn: fn
-    try:
-        return fragment(run_every=run_every)
-    except TypeError:
-        return lambda fn: fn
 
 
 def render_enhanced_auto_run_sidebar() -> None:
@@ -95,42 +83,39 @@ def render_enhanced_auto_run_page_panel(project_id: str) -> None:
         render_enhanced_auto_run_embedded(project, key_scope="auto_panel")
 
 
-@_fragment_decorator(2.0)
 def _render_running_auto_run_status(project_id: str, key_scope: str) -> None:
     """Nur der laufende Fortschritt — aktualisiert sich alle 2 Sekunden selbst."""
     manager = get_enhanced_auto_run_job_manager()
-    state = manager.get_state(project_id)
-    if state is None:
-        return
-    if state.status != JobStatus.RUNNING:
-        st.rerun()
-        return
 
-    extra = " **(Stop angefordert …)**" if state.cancel_requested else ""
-    detail = state.message or state.step_label or "läuft"
-    if state.item_total > 0 and state.item_label:
-        detail = (
-            f"{state.step_label}: {state.item_label} "
-            f"({state.item_index}/{state.item_total})"
-        )
-    col_info, col_stop = st.columns([5, 1])
-    with col_info:
-        st.info(
-            f"▶ Auto-Lauf sequenziell — Schritt {state.step_index}/"
-            f"{state.step_total} · {detail}{extra}"
-        )
-        st.progress(auto_run_progress_fraction(state))
-        st.caption(f"Anzeige aktualisiert sich selbst · Stand {datetime.now().strftime('%H:%M:%S')}")
-    with col_stop:
-        if st.button(
-            "⏹ Stoppen",
-            key=f"global_stop_auto_run_{key_scope}_{project_id}",
-            disabled=state.cancel_requested,
-        ):
-            manager.request_cancel(project_id)
-            st.rerun()
+    def _body() -> None:
+        state = manager.get_state(project_id)
+        if state is None or state.status != JobStatus.RUNNING:
+            return
+        extra = " **(Stop angefordert …)**" if state.cancel_requested else ""
+        detail = state.message or state.step_label or "läuft"
+        if state.item_total > 0 and state.item_label:
+            detail = (
+                f"{state.step_label}: {state.item_label} "
+                f"({state.item_index}/{state.item_total})"
+            )
+        col_info, col_stop = st.columns([5, 1])
+        with col_info:
+            st.info(
+                f"▶ Auto-Lauf sequenziell — Schritt {state.step_index}/"
+                f"{state.step_total} · {detail}{extra}"
+            )
+            st.progress(auto_run_progress_fraction(state))
+        with col_stop:
+            if st.button(
+                "⏹ Stoppen",
+                key=f"global_stop_auto_run_{key_scope}_{project_id}",
+                disabled=state.cancel_requested,
+            ):
+                manager.request_cancel(project_id)
+                st.rerun()
+
     poll_while_running(
-        lambda: None,
+        _body,
         lambda: manager.is_running(project_id),
         refresh_key=f"auto_run_refresh_{key_scope}_{project_id}",
     )

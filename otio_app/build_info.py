@@ -67,4 +67,5 @@ def expected_feature_markers() -> list[str]:
         "OTIO starten.command: Start/Stop/Neustart inkl. git pull und Branch",
         "Nach Neustart bleibt /auto-lauf erreichbar (letztes Projekt + versteckte Route)",
         "Auto-Lauf-Fortschritt aktualisiert sich selbst (kein extra st.rerun)",
+        "Job-Status (Clean Media, Analysen, …) aktualisiert sich selbst",
     ]
