@@ -23,6 +23,7 @@ from otio_app.services.clean_media import (
 )
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_CLEAN_MEDIA, PAGE_EDIT_PLAN, PAGE_MAPPING, PAGE_SUPPLEMENT
+from otio_app.ui.active_project_session import set_active_project_id
 
 
 @dataclass(frozen=True)
@@ -114,7 +115,7 @@ def render_project_selector(label: str = "Projekt") -> Project | None:
         index=list(labels.keys()).index(default_id),
         key="global_project_selector",
     )
-    st.session_state[ACTIVE_PROJECT_KEY] = selected_id
+    set_active_project_id(selected_id)
     project = get_project_by_id(selected_id)
     if project is not None:
         # Einmalige Migration flat `_otio/` → `_otio/{LANG}/` (idempotent).

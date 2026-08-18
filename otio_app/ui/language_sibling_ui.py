@@ -23,7 +23,7 @@ from otio_app.services.voiceover_generation.project_brief_defaults_service impor
 from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job import (
     get_enhanced_auto_run_job_manager,
 )
-from otio_app.ui.navigation import ACTIVE_PROJECT_KEY
+from otio_app.ui.active_project_session import set_active_project_id
 from otio_app.ui.polling import poll_while_running
 from otio_app.ui.routing import PENDING_SWITCH_URL_PATH_KEY
 
@@ -262,7 +262,7 @@ def _create_and_start(project: Project, language: str) -> None:
     except ValueError as exc:
         st.error(str(exc))
         return
-    st.session_state[ACTIVE_PROJECT_KEY] = sibling.id
+    set_active_project_id(sibling.id)
     st.session_state["workbench_project_id"] = sibling.id
     if hasattr(st, "navigation") and hasattr(st, "switch_page"):
         st.session_state[PENDING_SWITCH_URL_PATH_KEY] = _AUTO_LAUF_URL_PATH

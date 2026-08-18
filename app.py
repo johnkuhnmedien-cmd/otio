@@ -38,7 +38,8 @@ from otio_app.project_repository import (
     update_project_video_place,
 )
 from otio_app.ui.language_sibling_ui import render_language_sibling_actions
-from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_NEW
+from otio_app.ui.active_project_session import set_active_project_id
+from otio_app.ui.navigation import PAGE_ANALYSIS
 from otio_app.ui.routing import PENDING_SWITCH_URL_PATH_KEY, run_app_navigation
 
 st.set_page_config(
@@ -717,7 +718,7 @@ def render_project_list_page() -> None:
                 )
                 if st.button("Projekt bearbeiten", key=f"open_{project.id}"):
                     # Aktives Projekt setzen (Navigation/Modus hängen daran).
-                    st.session_state[ACTIVE_PROJECT_KEY] = project.id
+                    set_active_project_id(project.id)
                     st.session_state["workbench_project_id"] = project.id
                     if hasattr(st, "navigation") and hasattr(st, "switch_page"):
                         # String-"analysen" scheitert mit st.navigation — Page-Objekt

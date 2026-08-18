@@ -16,6 +16,7 @@ from otio_app.ui.clean_media import render_clean_media_page
 from otio_app.ui.edit_plan import render_edit_plan_page
 from otio_app.ui.adobe_research_import_page import render_adobe_research_import_page
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_API_KEYS, PAGE_MAPPING, PAGE_SUPPLEMENT
+from otio_app.ui.active_project_session import restore_active_project_into_session
 from otio_app.ui.page_state import clear_page_widget_state
 from otio_app.ui.project_workbench import render_project_workbench
 from otio_app.ui.supplement_assets import render_supplement_assets_page
@@ -352,12 +353,45 @@ def _build_without_voiceover_enhanced_pages(
     ]
 
 
+def _make_page(render_fn: Callable[[], None], *, title: str, url_path: str, default: bool = False, visibility: str = "visible"):
+    """st.Page mit visibility, falls die installierte Streamlit-Version das kann."""
+    kwargs: dict = {"title": title, "url_path": url_path, "default": default}
+    try:
+        return st.Page(render_fn, visibility=visibility, **kwargs)
+    except TypeError:
+        return st.Page(render_fn, **kwargs)
+
+
+def _ensure_hidden_auto_lauf_route(pages: list) -> list:
+    """``/auto-lauf`` muss immer auflösbar sein, auch ohne Enhanced-Session.
+
+    Sonst bleibt die Fläche nach einem Neustart schwarz (Streamlit wartet auf
+    eine Seite, die in der klassischen Navigation nicht existiert).
+    """
+    existing = {
+        str(getattr(page, "url_path", "") or "").strip("/")
+        for page in pages
+    }
+    if "auto-lauf" in existing:
+        return pages
+    from otio_app.ui.navigation import PAGE_AUTO_RUN
+
+    hidden = _make_page(
+        render_enhanced_auto_run_page,
+        title=PAGE_AUTO_RUN,
+        url_path="auto-lauf",
+        visibility="hidden",
+    )
+    return list(pages) + [hidden]
+
+
 def run_app_navigation(
     *,
     render_new_project: Callable[[], None],
     render_project_list: Callable[[], None],
 ) -> None:
     """Startet st.navigation — nur die aktive Seite wird gerendert."""
+    restore_active_project_into_session()
     if not hasattr(st, "navigation"):
         _run_legacy_pages(
             render_new_project=render_new_project,
@@ -380,6 +414,8 @@ def run_app_navigation(
     else:
         pages = _build_with_voiceover_pages(render_new_project, render_project_list)
         workflow_caption = "Workflow: ⓪ → ① → ② → ②½ → ③ · API-Keys & Diagnose in der Sidebar"
+
+    pages = _ensure_hidden_auto_lauf_route(pages)
 
     with st.sidebar:
         st.caption(f"Build: **{format_build_label()}**")
