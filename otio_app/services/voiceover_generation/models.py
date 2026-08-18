@@ -57,6 +57,8 @@ from otio_app.defaults import (
     VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
     VOICEOVER_GEN_DEFAULT_MODEL,
     VOICEOVER_GEN_DEFAULT_PROVIDER,
+    VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL,
+    VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER,
     VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
     VOICEOVER_GEN_MAX_FOLDER_WORDS,
     VOICEOVER_GEN_MIN_FOLDER_WORDS,
@@ -94,6 +96,8 @@ __all__ = [
     "VO_ERROR_TYPES_LLM_REVIEW",
     "VOICEOVER_GEN_DEFAULT_MODEL",
     "VOICEOVER_GEN_DEFAULT_PROVIDER",
+    "VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL",
+    "VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER",
     "VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT",
     "VOICEOVER_GEN_MAX_FOLDER_WORDS",
     "VOICEOVER_GEN_MIN_FOLDER_WORDS",
@@ -292,6 +296,13 @@ class LlmRoleSettings(BaseModel):
     model: str = VOICEOVER_GEN_DEFAULT_MODEL
 
 
+def _default_dramaturgy_settings() -> LlmRoleSettings:
+    return LlmRoleSettings(
+        provider=VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER,
+        model=VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL,
+    )
+
+
 def _default_cut_plan_supplement_query_settings() -> LlmRoleSettings:
     return LlmRoleSettings(
         provider=VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_PROVIDER,
@@ -336,8 +347,10 @@ def _default_enhanced_sfx_planner_settings() -> LlmRoleSettings:
 
 
 class VoiceoverGenerationModelSettings(BaseModel):
+    # 1 = Dateien vor Dramaturgie-Standard GPT-5.6 Terra (fehlendes Feld).
+    settings_revision: int = 1
     style_profile: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
-    dramaturgy: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
+    dramaturgy: LlmRoleSettings = Field(default_factory=_default_dramaturgy_settings)
     voiceover_author: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     voiceover_review: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     intro: LlmRoleSettings = Field(default_factory=LlmRoleSettings)

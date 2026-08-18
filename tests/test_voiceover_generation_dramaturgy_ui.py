@@ -92,6 +92,7 @@ def test_dramaturgy_page_has_both_plan_buttons(
     assert "Max. Output-Tokens (Ceiling)" in slider_labels
     assert "Abwechslung" in captions
     assert "verblüffend" in captions or "spannendsten" in captions
+    assert "GPT-5.6 Terra" in captions
 
 
 def test_dramaturgy_page_writes_no_edit_plan_documents(

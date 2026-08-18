@@ -11,6 +11,7 @@ from otio_app.defaults import (
     DRAMATURGY_PLANNING_MODE_VARIETY,
     DRAMATURGY_TARGET_WORDS_INPUT_MAX,
     VOICEOVER_GEN_MIN_FOLDER_WORDS,
+    VOICEOVER_GEN_MODEL_LABELS,
     intro_word_window,
 )
 from otio_app.services.voiceover_generation.dramaturgy_defaults_service import (
@@ -44,6 +45,7 @@ from otio_app.services.voiceover_generation.dramaturgy_service import (
 )
 from otio_app.services.voiceover_generation.llm_trace_service import STATUS_PASS
 from otio_app.services.voiceover_generation.model_settings_service import (
+    MODEL_SETTINGS_REVISION,
     load_model_settings,
     save_model_settings,
 )
@@ -152,14 +154,24 @@ def _render_prerequisites(project: Project) -> bool:
 def _render_model_settings(project: Project) -> tuple[str, str]:
     settings = load_model_settings(project)
     with st.expander("⚙️ Modell für Dramaturgie", expanded=False):
+        st.caption("Standard für alle Projekte: **GPT-5.6 Terra**.")
         role_settings = render_llm_model_selectbox(
             label="Modell",
             role_settings=settings.dramaturgy,
             key=f"vo_dramaturgy_model_{project.id}",
             input_info=LLM_INPUT_INFO["dramaturgy"],
+            labels={
+                **VOICEOVER_GEN_MODEL_LABELS,
+                "openai:gpt-5.6-terra": "GPT-5.6 Terra — ausgewogen (Standard)",
+            },
         )
         if st.button("Speichern", key=f"vo_dramaturgy_model_save_{project.id}"):
-            updated = settings.model_copy(update={"dramaturgy": role_settings})
+            updated = settings.model_copy(
+                update={
+                    "dramaturgy": role_settings,
+                    "settings_revision": MODEL_SETTINGS_REVISION,
+                }
+            )
             save_model_settings(project, updated)
             st.success("Modell-Einstellung für Dramaturgie gespeichert.")
     return role_settings.provider, role_settings.model

@@ -10,6 +10,10 @@ from __future__ import annotations
 import json
 
 from otio_app.defaults import (
+    VOICEOVER_GEN_DEFAULT_MODEL,
+    VOICEOVER_GEN_DEFAULT_PROVIDER,
+    VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL,
+    VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER,
     VOICEOVER_GEN_MODEL_CHOICES,
     VOICEOVER_GEN_MODEL_LABELS,
     VOICEOVER_GEN_MODEL_PRESETS,
@@ -22,7 +26,11 @@ from otio_app.services.voiceover_generation.models import (
     VoiceoverGenerationModelSettings,
 )
 
+# Revision 2: Dramaturgie-Standard openai/gpt-5.6-terra statt anthropic/claude-sonnet-5.
+MODEL_SETTINGS_REVISION = 2
+
 __all__ = [
+    "MODEL_SETTINGS_REVISION",
     "VOICEOVER_GEN_PROVIDERS",
     "VOICEOVER_GEN_MODEL_PRESETS",
     "VOICEOVER_GEN_MODEL_CHOICES",
@@ -38,7 +46,34 @@ __all__ = [
 
 
 def default_model_settings() -> VoiceoverGenerationModelSettings:
-    return VoiceoverGenerationModelSettings()
+    return VoiceoverGenerationModelSettings(settings_revision=MODEL_SETTINGS_REVISION)
+
+
+def _legacy_implicit_dramaturgy(role: LlmRoleSettings) -> bool:
+    return (
+        role.provider == VOICEOVER_GEN_DEFAULT_PROVIDER
+        and role.model == VOICEOVER_GEN_DEFAULT_MODEL
+    )
+
+
+def upgrade_model_settings(
+    settings: VoiceoverGenerationModelSettings,
+) -> tuple[VoiceoverGenerationModelSettings, bool]:
+    """Hebt gespeicherte Settings auf die aktuelle Revision.
+
+    Revision 2 setzt Dramaturgie auf GPT-5.6 Terra, wenn noch der alte
+    implizite Anthropic-Standard drinsteht (oft mitgespeichert, weil jede
+    Rolle die ganze Datei schreibt).
+    """
+    if settings.settings_revision >= MODEL_SETTINGS_REVISION:
+        return settings, False
+    updates: dict = {"settings_revision": MODEL_SETTINGS_REVISION}
+    if _legacy_implicit_dramaturgy(settings.dramaturgy):
+        updates["dramaturgy"] = LlmRoleSettings(
+            provider=VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER,
+            model=VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL,
+        )
+    return settings.model_copy(update=updates), True
 
 
 def load_model_settings(project: Project) -> VoiceoverGenerationModelSettings:
@@ -47,9 +82,13 @@ def load_model_settings(project: Project) -> VoiceoverGenerationModelSettings:
         return default_model_settings()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return VoiceoverGenerationModelSettings.model_validate(payload)
+        loaded = VoiceoverGenerationModelSettings.model_validate(payload)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return default_model_settings()
+    upgraded, changed = upgrade_model_settings(loaded)
+    if changed:
+        save_model_settings(project, upgraded)
+    return upgraded
 
 
 def save_model_settings(

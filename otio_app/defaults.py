@@ -196,6 +196,10 @@ VOICEOVER_GEN_ENHANCED_SFX_PLANNER_DEFAULT_PROVIDER = "openai"
 VOICEOVER_GEN_ENHANCED_SFX_PLANNER_DEFAULT_MODEL = "gpt-5.6-sol"
 VOICEOVER_GEN_DEFAULT_PROVIDER = "anthropic"
 VOICEOVER_GEN_DEFAULT_MODEL = "claude-sonnet-5"
+# Dramaturgie: GPT-5.6 Terra für alle Projekte, unabhängig vom allgemeinen
+# Anthropic-Standard der übrigen redaktionellen Rollen.
+VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER = "openai"
+VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL = "gpt-5.6-terra"
 # Phase 11.1: Standard für die neue Rolle — bewusst Gemini 3.1 Flash Lite
 # (schnell, günstig) statt des allgemeinen Anthropic-Standards oben, da diese
 # Rolle nur kurze Suchqueries generiert, keine langen redaktionellen Texte.
