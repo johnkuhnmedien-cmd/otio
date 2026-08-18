@@ -100,7 +100,7 @@ from otio_app.services.without_voiceover_enhanced.script_rhetoric import (
 )
 
 DEFAULT_ENHANCED_SCRIPT_MODEL = "openai:gpt-5.4-mini"
-DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS = 32_768
+DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS = 50_000
 
 
 @dataclass

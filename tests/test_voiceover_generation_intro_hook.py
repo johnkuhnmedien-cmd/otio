@@ -575,7 +575,10 @@ def test_no_api_key_leak_in_trace_files(tmp_path: Path, monkeypatch: pytest.Monk
     mock_response = MagicMock(content=[block], usage=MagicMock(input_tokens=10, output_tokens=20))
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
+        stream_cm = MagicMock()
+        stream_cm.__enter__.return_value.get_final_message.return_value = mock_response
+        stream_cm.__exit__.return_value = False
+        mock_anthropic.return_value.messages.stream.return_value = stream_cm
         result = build_intro_hook_candidates(project, provider="anthropic", model="claude-sonnet-5")
 
     assert result.status == STATUS_PASS

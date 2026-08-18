@@ -47,9 +47,9 @@ from otio_app.ui.voiceover_generation._shared import (
 )
 from otio_app.ui.without_voiceover_enhanced._shared import get_enhanced_project
 
-_MAX_TOKENS_MIN = 16_384
+_MAX_TOKENS_MIN = 16_000
 _MAX_TOKENS_MAX = 100_000
-_MAX_TOKENS_STEP = 4_096
+_MAX_TOKENS_STEP = 2_000
 _MAX_TOKENS_DEFAULT = DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS
 
 

@@ -206,11 +206,11 @@ from otio_app.ui.voiceover_generation._shared import (
 )
 from otio_app.ui.without_voiceover_enhanced._shared import get_enhanced_project
 
-_ROUGH_CUT_OUTPUT_DEFAULT = 16_384
-_FINAL_CUT_OUTPUT_DEFAULT = 16_384
-_OUTPUT_TOKENS_MIN = 2_048
-_OUTPUT_TOKENS_MAX = 65_536
-_OUTPUT_TOKENS_STEP = 1_024
+_ROUGH_CUT_OUTPUT_DEFAULT = 50_000
+_FINAL_CUT_OUTPUT_DEFAULT = 50_000
+_OUTPUT_TOKENS_MIN = 2_000
+_OUTPUT_TOKENS_MAX = 100_000
+_OUTPUT_TOKENS_STEP = 1_000
 _STOCK_PASSAGE_LABEL_LEN = 110
 
 

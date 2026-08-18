@@ -50,6 +50,18 @@ def _anthropic_stream_cm(final_message):
     return cm
 
 
+def _configure_anthropic_stream(client, response=None, *, side_effect=None):
+    """Default 50k max_tokens läuft bei Anthropic immer per Stream."""
+    if side_effect is not None:
+        items = list(side_effect) if isinstance(side_effect, (list, tuple)) else [side_effect]
+        client.messages.stream.side_effect = [
+            item if isinstance(item, BaseException) else _anthropic_stream_cm(item)
+            for item in items
+        ]
+        return
+    client.messages.stream.return_value = _anthropic_stream_cm(response)
+
+
 def _gemini_stream_chunks(text: str, *, finish_reason: str = "STOP"):
     chunk = MagicMock(text=text)
     chunk.usage_metadata = MagicMock(
@@ -111,14 +123,14 @@ def test_generate_plan_text_anthropic(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_response = MagicMock(content=[block])
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
+        _configure_anthropic_stream(mock_anthropic.return_value, mock_response)
         text = generate_plan_text(
             prompt="Plan this folder",
             model="anthropic:claude-sonnet-5",
         )
 
     assert "beat_001" in text
-    call_kwargs = mock_anthropic.return_value.messages.create.call_args.kwargs
+    call_kwargs = mock_anthropic.return_value.messages.stream.call_args.kwargs
     assert call_kwargs["model"] == "claude-sonnet-5"
 
 
@@ -186,9 +198,9 @@ def test_generate_plan_text_anthropic_retries_without_proxy_on_connection_error(
         client = MagicMock()
         clients.append(client)
         if len(clients) == 1:
-            client.messages.create.side_effect = connection_error
+            client.messages.stream.side_effect = connection_error
         else:
-            client.messages.create.return_value = success
+            client.messages.stream.return_value = _anthropic_stream_cm(success)
         return client
 
     with patch("anthropic.Anthropic", side_effect=_factory):
@@ -215,7 +227,7 @@ def test_generate_plan_text_anthropic_does_not_retry_billed_disconnect(
     )
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.side_effect = connection_error
+        mock_anthropic.return_value.messages.stream.side_effect = connection_error
         with pytest.raises(PlanLlmConnectionError, match="kein automatischer Retry") as exc_info:
             generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
 
@@ -233,7 +245,7 @@ def test_generate_plan_text_anthropic_connection_error_is_actionable(
     connection_error.__cause__ = OSError("Network is unreachable")
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.side_effect = connection_error
+        mock_anthropic.return_value.messages.stream.side_effect = connection_error
         with pytest.raises(PlanLlmConnectionError, match="Anthropic-Verbindung") as exc_info:
             generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
 
@@ -257,13 +269,15 @@ def test_generate_plan_text_anthropic_retries_without_temperature_when_deprecate
     error = _bad_request_error(anthropic.BadRequestError, "temperature is deprecated for this model.")
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.side_effect = [error, success_response]
+        _configure_anthropic_stream(
+            mock_anthropic.return_value, side_effect=[error, success_response]
+        )
         text = generate_plan_text(prompt="Plan this folder", model="anthropic:claude-sonnet-5")
 
     assert text == '{"beats":[]}'
-    assert mock_anthropic.return_value.messages.create.call_count == 2
-    first_call_kwargs = mock_anthropic.return_value.messages.create.call_args_list[0].kwargs
-    retry_call_kwargs = mock_anthropic.return_value.messages.create.call_args_list[1].kwargs
+    assert mock_anthropic.return_value.messages.stream.call_count == 2
+    first_call_kwargs = mock_anthropic.return_value.messages.stream.call_args_list[0].kwargs
+    retry_call_kwargs = mock_anthropic.return_value.messages.stream.call_args_list[1].kwargs
     assert first_call_kwargs["temperature"] == 0.2
     assert "temperature" not in retry_call_kwargs
 
@@ -279,11 +293,11 @@ def test_generate_plan_text_anthropic_reraises_unrelated_bad_request_errors(
     error = _bad_request_error(anthropic.BadRequestError, "model: not-a-real-model is not a valid model ID.")
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.side_effect = error
+        mock_anthropic.return_value.messages.stream.side_effect = error
         with pytest.raises(anthropic.BadRequestError):
             generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
 
-    assert mock_anthropic.return_value.messages.create.call_count == 1
+    assert mock_anthropic.return_value.messages.stream.call_count == 1
 
 
 def test_generate_plan_text_openai_retries_without_temperature_when_deprecated(
@@ -316,12 +330,12 @@ def test_generate_plan_text_anthropic_uses_higher_max_tokens_default(
     mock_response = MagicMock(content=[block], stop_reason="end_turn")
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
+        _configure_anthropic_stream(mock_anthropic.return_value, mock_response)
         generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
 
-    call_kwargs = mock_anthropic.return_value.messages.create.call_args.kwargs
+    call_kwargs = mock_anthropic.return_value.messages.stream.call_args.kwargs
     assert call_kwargs["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
-    assert DEFAULT_MAX_OUTPUT_TOKENS > 8192
+    assert DEFAULT_MAX_OUTPUT_TOKENS == 50_000
 
 
 def test_generate_plan_text_openai_uses_higher_max_tokens_default(
@@ -338,6 +352,7 @@ def test_generate_plan_text_openai_uses_higher_max_tokens_default(
     call_kwargs = mock_openai.return_value.chat.completions.create.call_args.kwargs
     assert call_kwargs["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
     assert call_kwargs["stream"] is True
+    assert DEFAULT_MAX_OUTPUT_TOKENS == 50_000
 
 
 def test_generate_plan_text_anthropic_raises_when_truncated_at_max_tokens(
@@ -357,7 +372,7 @@ def test_generate_plan_text_anthropic_raises_when_truncated_at_max_tokens(
     )
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
+        _configure_anthropic_stream(mock_anthropic.return_value, mock_response)
         with pytest.raises(PlanLlmTruncatedResponseError, match="max_tokens"):
             generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
 
@@ -386,7 +401,7 @@ def test_generate_plan_text_anthropic_raises_when_no_text_block_returned(
     mock_response = MagicMock(content=[thinking_block], stop_reason="end_turn")
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
+        _configure_anthropic_stream(mock_anthropic.return_value, mock_response)
         with pytest.raises(PlanLlmTruncatedResponseError):
             generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
 
@@ -476,12 +491,12 @@ def test_generate_plan_text_anthropic_without_override_still_uses_default(
     mock_response = MagicMock(content=[block], stop_reason="end_turn")
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
+        _configure_anthropic_stream(mock_anthropic.return_value, mock_response)
         generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
 
-    call_kwargs = mock_anthropic.return_value.messages.create.call_args.kwargs
+    call_kwargs = mock_anthropic.return_value.messages.stream.call_args.kwargs
     assert call_kwargs["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
-    mock_anthropic.return_value.messages.stream.assert_not_called()
+    mock_anthropic.return_value.messages.create.assert_not_called()
 
 
 def test_generate_plan_text_anthropic_disable_thinking_sets_thinking_param(
@@ -492,10 +507,10 @@ def test_generate_plan_text_anthropic_disable_thinking_sets_thinking_param(
     mock_response = MagicMock(content=[block], stop_reason="end_turn")
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
+        _configure_anthropic_stream(mock_anthropic.return_value, mock_response)
         generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5", disable_thinking=True)
 
-    call_kwargs = mock_anthropic.return_value.messages.create.call_args.kwargs
+    call_kwargs = mock_anthropic.return_value.messages.stream.call_args.kwargs
     assert call_kwargs["thinking"] == {"type": "disabled"}
 
 
@@ -507,10 +522,10 @@ def test_generate_plan_text_anthropic_thinking_not_set_by_default(
     mock_response = MagicMock(content=[block], stop_reason="end_turn")
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
+        _configure_anthropic_stream(mock_anthropic.return_value, mock_response)
         generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
 
-    call_kwargs = mock_anthropic.return_value.messages.create.call_args.kwargs
+    call_kwargs = mock_anthropic.return_value.messages.stream.call_args.kwargs
     assert "thinking" not in call_kwargs
 
 

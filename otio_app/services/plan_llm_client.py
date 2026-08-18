@@ -75,20 +75,21 @@ def format_truncated_plan_response_error(
     )
 
 
-# Höher als der ursprüngliche Default (8192) — bei umfangreichen Prompts (z. B.
-# Dramaturgie-Planung über viele Ordner) reichte das nicht aus und die Antwort
-# wurde exakt bei max_tokens abgeschnitten (stop_reason="max_tokens"), was durch
-# den alten "leeres Ergebnis statt Fehler"-Fallback unbemerkt blieb.
-DEFAULT_MAX_OUTPUT_TOKENS = 16384
+# Ceiling, kein Target: ungenutzte Tokens werden nicht abgerechnet.
+# 16k reichte bei umfangreicher Dramaturgie (viele Ordner) nicht; Auto-Lauf
+# und alle Calls ohne eigenes Limit nutzen deshalb 50k.
+DEFAULT_MAX_OUTPUT_TOKENS = 50_000
 
 # Anthropic SDK: non-streaming wird abgelehnt, wenn expected_time > 10 Min
 # (Formel: 3600 * max_tokens / 128000). Ab ~21334 Tokens ist Streaming nötig.
+# Der 50k-Default liegt darüber und läuft deshalb immer per Stream.
 _ANTHROPIC_NONSTREAMING_MAX_TOKENS = 20_000
 
 # Lange Dramaturgie-/Plan-Calls: genug Spielraum gegen Idle-Timeouts, ohne
 # die Antwortqualität zu ändern (Timeout betrifft nur die HTTP-Schicht).
-_LLM_REQUEST_TIMEOUT_SEC = 600.0
-_GEMINI_HTTP_TIMEOUT_MS = 600_000
+# 50k Output braucht mehr Wandzeit als der frühere 16k-Default.
+_LLM_REQUEST_TIMEOUT_SEC = 1_200.0
+_GEMINI_HTTP_TIMEOUT_MS = 1_200_000
 
 
 @dataclass(frozen=True)
