@@ -68,6 +68,28 @@ cp .env.example .env
 
 ## App starten
 
+Doppelklick im Finder auf **`OTIO starten.command`** (einmalig: Rechtsklick → Öffnen, falls macOS blockiert).
+
+Im Launcher:
+
+- **App starten** — räumt Port 8501 und hängende Streamlit-Prozesse, dann Start
+- **Stoppen** — beendet die App auch mitten in einem LLM-Call (Prozessende, nicht nur UI-Cancel)
+- **Neu starten** — Stop + Start; optional Häkchen **Vorher git pull**
+- **Diesen Branch holen und neu starten** — `git fetch`, Checkout, `git pull --ff-only`, dann Start
+
+Die App läuft danach unabhängig vom Terminal. Das Terminal-Fenster kann zu, ohne dass Port 8501 blockiert bleibt.
+
+Alternativ im Terminal:
+
+```bash
+source .venv/bin/activate
+python scripts/otio_app_ctl.py restart --pull
+python scripts/otio_app_ctl.py restart --branch cursor/mein-branch
+python scripts/otio_app_ctl.py stop
+```
+
+Klassisch (nicht empfohlen, wenn ein LLM-Call hängt):
+
 ```bash
 source .venv/bin/activate
 streamlit run app.py

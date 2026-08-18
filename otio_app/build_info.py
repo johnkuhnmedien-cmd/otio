@@ -64,4 +64,5 @@ def expected_feature_markers() -> list[str]:
         "Schnittplan: Radio-Navigation statt Tabs",
         "OTIO Export: ein Klick ohne Pflicht-Vorschau",
         "Sidebar-Seite ▶ Auto-Lauf (Brief → Cuts)",
+        "OTIO starten.command: Start/Stop/Neustart inkl. git pull und Branch",
     ]

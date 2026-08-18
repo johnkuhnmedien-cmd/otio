@@ -14,6 +14,11 @@ from otio_app.ui.api_keys_page import render_api_keys_page
 def render_system_status_page() -> None:
     st.header("Systemstatus")
     st.caption(f"App-Build: **{format_build_label()}**")
+    st.info(
+        "Start/Stop der App (auch wenn ein LLM-Call hängt): im Projektordner "
+        "**OTIO starten.command** doppelklicken. Git-Pull und Branch-Wechsel "
+        "sind dort eigene Knöpfe."
+    )
     st.info("API-Schlüssel verwaltest du unter **🔑 API-Schlüssel** in der Sidebar.")
     with st.expander("Erwartete Merkmale dieses Stands", expanded=False):
         for marker in expected_feature_markers():

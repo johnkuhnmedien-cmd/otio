@@ -13,3 +13,4 @@ def test_expected_feature_markers_not_empty() -> None:
     assert len(markers) >= 3
     assert any("Hintergrund" in item for item in markers)
     assert any("Auto-Lauf" in item for item in markers)
+    assert any("OTIO starten.command" in item for item in markers)

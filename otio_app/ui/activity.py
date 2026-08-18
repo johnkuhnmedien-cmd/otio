@@ -82,7 +82,9 @@ def render_activity_panel(
         if run_count > 80:
             st.warning(
                 "Sehr viele Script-Läufe — oft durch Auto-Refresh oder hängende Jobs. "
-                "Unten **Alle Jobs zurücksetzen** probieren und App neu starten."
+                "Unten **Alle Jobs zurücksetzen** probieren. "
+                "Wenn die App sich nicht mehr beenden lässt: Finder **OTIO starten.command** "
+                "→ **Stoppen** oder **Neu starten** (beendet auch einen laufenden LLM-Call)."
             )
 
         activities = collect_job_activity()
@@ -131,3 +133,8 @@ def render_activity_panel(
             _append_log_file(line)
             st.success(f"{reset_count} Job(s) zurückgesetzt.")
             st.rerun()
+
+        st.caption(
+            "App lässt sich im Terminal nicht mehr beenden: im Finder "
+            "**OTIO starten.command** öffnen und **Stoppen** oder **Neu starten**."
+        )
