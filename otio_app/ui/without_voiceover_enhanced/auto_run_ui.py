@@ -150,7 +150,14 @@ def render_enhanced_auto_run_banner(project_id: str, *, key_scope: str = "page")
     if state.status == JobStatus.CANCELLED:
         st.warning(state.message or "Auto-Lauf gestoppt — Teilergebnisse bleiben.")
     elif state.status == JobStatus.FAILED:
-        st.error(f"Auto-Lauf fehlgeschlagen: {state.error or 'Unbekannt'}")
+        loc = " · ".join(
+            part for part in (state.step_label, state.item_label) if (part or "").strip()
+        )
+        detail = (state.error or "Unbekannt").strip()
+        heading = (
+            f"Auto-Lauf fehlgeschlagen — {loc}" if loc else "Auto-Lauf fehlgeschlagen"
+        )
+        st.error(f"{heading}\n\n{detail}")
     elif state.status == JobStatus.COMPLETED:
         skipped = f" · übersprungen: {len(state.skipped)}" if state.skipped else ""
         st.success(

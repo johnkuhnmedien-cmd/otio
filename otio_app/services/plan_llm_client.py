@@ -50,6 +50,31 @@ class PlanLlmConnectionError(RuntimeError):
     """Transport-/Netzwerkfehler zum LLM-Provider (kein HTTP-Status vom Modell)."""
 
 
+def format_truncated_plan_response_error(
+    *,
+    stop_reason: str,
+    max_output_tokens: int,
+    output_tokens: int | None = None,
+    provider_label: str = "",
+) -> str:
+    """Nutzertext, wenn die LLM-Antwort am Output-Token-Limit endet.
+
+    Bleibt bewusst unabhängig vom Aufrufer (Dramaturgie, Kapitel-Cut, …):
+    welcher Prozess gemeint ist, sagt der Auto-Lauf-Schritt davor.
+    """
+    reason = (stop_reason or "max_tokens").strip()
+    used = output_tokens if output_tokens is not None else max_output_tokens
+    who = f"Die {provider_label}-Antwort" if provider_label.strip() else "Die Antwort"
+    return (
+        f"{who} wurde nach {used} von max_tokens={max_output_tokens} Output-Tokens "
+        f"abgeschnitten (stop_reason={reason}). "
+        "Das Output-Token-Limit dieses einen LLM-Aufrufs war voll, bevor der Plan "
+        "vollständig war — nicht der Auto-Lauf insgesamt. "
+        "Bitte den Prompt kürzen; bei der Dramaturgie hilft z. B., weniger Ordner "
+        "gleichzeitig zu planen."
+    )
+
+
 # Höher als der ursprüngliche Default (8192) — bei umfangreichen Prompts (z. B.
 # Dramaturgie-Planung über viele Ordner) reichte das nicht aus und die Antwort
 # wurde exakt bei max_tokens abgeschnitten (stop_reason="max_tokens"), was durch
@@ -425,10 +450,12 @@ def _generate_gemini_text_with_usage(
             finish_reason = str(getattr(candidates[0], "finish_reason", "") or finish_reason)
     if "MAX_TOKENS" in finish_reason:
         raise PlanLlmTruncatedResponseError(
-            f"Die Gemini-Antwort wurde bei max_output_tokens={effective_max_tokens} "
-            "abgeschnitten (finish_reason=MAX_TOKENS). Der Prompt ist wahrscheinlich zu "
-            "umfangreich (z. B. sehr viele Ordner) für eine vollständige Antwort in diesem "
-            "Limit. Bitte weniger Ordner gleichzeitig planen oder den Prompt kürzen."
+            format_truncated_plan_response_error(
+                stop_reason="MAX_TOKENS",
+                max_output_tokens=effective_max_tokens,
+                output_tokens=token_usage.get("output_tokens"),
+                provider_label="Gemini",
+            )
         )
     text = "".join(text_parts).strip()
     if not text:
@@ -544,10 +571,11 @@ def _generate_openai_text_with_usage(
 
     if finish_reason == "length":
         raise PlanLlmTruncatedResponseError(
-            f"Die Antwort wurde bei max_tokens={effective_max_tokens} abgeschnitten "
-            "(finish_reason=length). Der Prompt ist wahrscheinlich zu umfangreich (z. B. "
-            "sehr viele Ordner) für eine vollständige Antwort in diesem Limit. Bitte "
-            "weniger Ordner gleichzeitig planen oder den Prompt kürzen."
+            format_truncated_plan_response_error(
+                stop_reason="length",
+                max_output_tokens=effective_max_tokens,
+                output_tokens=token_usage.get("output_tokens"),
+            )
         )
     if not text:
         raise PlanLlmTruncatedResponseError(
@@ -629,10 +657,11 @@ def _generate_openai_compatible_text_with_usage(
 
     if finish_reason == "length":
         raise PlanLlmTruncatedResponseError(
-            f"Die Antwort wurde bei max_tokens={effective_max_tokens} abgeschnitten "
-            "(finish_reason=length). Der Prompt ist wahrscheinlich zu umfangreich (z. B. "
-            "sehr viele Ordner) für eine vollständige Antwort in diesem Limit. Bitte "
-            "weniger Ordner gleichzeitig planen oder den Prompt kürzen."
+            format_truncated_plan_response_error(
+                stop_reason="length",
+                max_output_tokens=effective_max_tokens,
+                output_tokens=token_usage.get("output_tokens"),
+            )
         )
     if not text:
         raise PlanLlmTruncatedResponseError(
@@ -858,11 +887,11 @@ def _generate_anthropic_text_with_usage(
     # Plan" durchging. Jetzt wird das explizit als Fehler gemeldet.
     if getattr(response, "stop_reason", None) == "max_tokens":
         raise PlanLlmTruncatedResponseError(
-            f"Die Antwort wurde nach {token_usage.get('output_tokens', effective_max_tokens)} "
-            f"von max_tokens={effective_max_tokens} Output-Tokens abgeschnitten "
-            "(stop_reason=max_tokens). Der Prompt ist wahrscheinlich zu umfangreich (z. B. "
-            "sehr viele Ordner) für eine vollständige Antwort in diesem Limit. Bitte weniger "
-            "Ordner gleichzeitig planen oder den Prompt kürzen."
+            format_truncated_plan_response_error(
+                stop_reason="max_tokens",
+                max_output_tokens=effective_max_tokens,
+                output_tokens=token_usage.get("output_tokens", effective_max_tokens),
+            )
         )
     parts = [block.text for block in response.content if getattr(block, "type", "") == "text"]
     text = "\n".join(parts).strip()

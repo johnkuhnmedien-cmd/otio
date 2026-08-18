@@ -13,6 +13,7 @@ from otio_app.services.plan_llm_client import (
     PlanLlmNotConfiguredError,
     PlanLlmTruncatedResponseError,
     format_plan_model_label,
+    format_truncated_plan_response_error,
     is_plan_model_configured,
     plan_model_provider,
     resolve_plan_model,
@@ -359,6 +360,19 @@ def test_generate_plan_text_anthropic_raises_when_truncated_at_max_tokens(
         mock_anthropic.return_value.messages.create.return_value = mock_response
         with pytest.raises(PlanLlmTruncatedResponseError, match="max_tokens"):
             generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
+
+
+def test_format_truncated_plan_response_error_names_limit_not_auto_run() -> None:
+    text = format_truncated_plan_response_error(
+        stop_reason="max_tokens",
+        max_output_tokens=16384,
+        output_tokens=16384,
+    )
+    assert "nach 16384 von max_tokens=16384" in text
+    assert "stop_reason=max_tokens" in text
+    assert "dieses einen LLM-Aufrufs" in text
+    assert "Auto-Lauf insgesamt" in text
+    assert "weniger Ordner" in text
 
 
 def test_generate_plan_text_anthropic_raises_when_no_text_block_returned(

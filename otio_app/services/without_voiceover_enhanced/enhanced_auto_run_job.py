@@ -20,6 +20,7 @@ from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service impo
     EnhancedAutoRunCancelled,
     EnhancedAutoRunError,
     EnhancedAutoRunReport,
+    format_auto_run_failure_message,
     run_enhanced_auto_pipeline,
 )
 
@@ -235,15 +236,21 @@ class EnhancedAutoRunJobManager:
                     job = self._jobs.get(project_id)
                     if _owns_job(job) and job.status == JobStatus.RUNNING:
                         job.status = JobStatus.FAILED
-                        job.error = str(exc)
-                        job.message = str(exc)
+                        job.error = format_auto_run_failure_message(
+                            str(exc), job.step_label, job.item_label
+                        )
+                        job.message = job.error
             except Exception as exc:  # noqa: BLE001
                 with self._lock:
                     job = self._jobs.get(project_id)
                     if _owns_job(job) and job.status == JobStatus.RUNNING:
                         job.status = JobStatus.FAILED
-                        job.error = str(exc)
-                        job.message = str(exc)
+                        job.error = format_auto_run_failure_message(
+                            str(exc) or type(exc).__name__,
+                            job.step_label,
+                            job.item_label,
+                        )
+                        job.message = job.error
             finally:
                 with self._lock:
                     job = self._jobs.get(project_id)

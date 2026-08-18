@@ -33,7 +33,7 @@ from otio_app.services.voiceover_generation.language_defaults_catalog import (
     list_language_standard_files,
     list_shared_library_files,
 )
-from otio_app.services.voiceover_generation.llm_trace_service import STATUS_PASS
+from otio_app.services.voiceover_generation.llm_trace_service import STATUS_FAIL, STATUS_PASS
 from otio_app.services.voiceover_generation.models import (
     ConfirmedIntroHook,
     DramaturgyFolderEntry,
@@ -56,8 +56,10 @@ from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job import (
 )
 from otio_app.services.without_voiceover_enhanced import enhanced_auto_run_service as auto_run
 from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+    AutoRunProgress,
     EnhancedAutoRunCancelled,
     EnhancedAutoRunError,
+    format_auto_run_failure_message,
     pick_auto_intro_candidate,
     run_enhanced_auto_pipeline,
 )
@@ -596,14 +598,60 @@ def test_auto_run_cancel_between_steps(
         )
 
 
+def test_format_auto_run_failure_message_prefixes_step_and_item() -> None:
+    truncated = (
+        "Die Antwort wurde nach 16384 von max_tokens=16384 Output-Tokens "
+        "abgeschnitten (stop_reason=max_tokens)."
+    )
+    named = format_auto_run_failure_message(truncated, "③ Dramaturgie")
+    assert named.startswith("Schritt ③ Dramaturgie: ")
+    assert "max_tokens=16384" in named
+    assert format_auto_run_failure_message(named, "③ Dramaturgie", "Naxos") == named
+    chapter = format_auto_run_failure_message("boom", "④ Kapitel-Skripte", "Naxos")
+    assert chapter == "Schritt ④ Kapitel-Skripte · Naxos: boom"
+
+
 def test_auto_run_fails_without_title_references(tmp_path: Path) -> None:
     project = _project(tmp_path)
     save_project_brief(
         project,
         ProjectBrief(project_id=project.id, language="PT", video_title=""),
     )
-    with pytest.raises(EnhancedAutoRunError, match="Titel-Referenzen"):
+    with pytest.raises(EnhancedAutoRunError, match="Titel-Referenzen") as exc_info:
         run_enhanced_auto_pipeline(project)
+    assert "Schritt ① Project Brief" in str(exc_info.value)
+
+
+def test_auto_run_truncation_names_dramaturgy_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    _seed_brief(project, title="Titel")
+    _seed_raw_style(project)
+    truncated = (
+        "Die Antwort wurde nach 16384 von max_tokens=16384 Output-Tokens "
+        "abgeschnitten (stop_reason=max_tokens). Das Output-Token-Limit "
+        "dieses einen LLM-Aufrufs war voll."
+    )
+
+    monkeypatch.setattr(
+        auto_run,
+        "build_dramaturgy_plan",
+        lambda *_a, **_k: DramaturgyBuildResult(
+            status=STATUS_FAIL,
+            plan=None,
+            error=truncated,
+            llm_run_id="run",
+            provider="anthropic",
+            model="claude",
+        ),
+    )
+
+    with pytest.raises(EnhancedAutoRunError, match=r"Schritt ③ Dramaturgie") as exc_info:
+        run_enhanced_auto_pipeline(project, skip_done=True)
+    message = str(exc_info.value)
+    assert truncated in message
+    assert "max_tokens=16384" in message
 
 
 def test_auto_run_job_completes_in_background(
@@ -636,6 +684,49 @@ def test_auto_run_job_completes_in_background(
     manager.dismiss(project.id)
 
 
+def test_auto_run_job_failure_names_step_from_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path).model_copy(update={"id": "pt-greece-auto-fail"})
+    manager = get_enhanced_auto_run_job_manager()
+
+    def fake_pipeline(*_a, **kwargs):
+        kwargs["on_progress"](
+            AutoRunProgress(
+                step_id="dramaturgy",
+                step_label="③ Dramaturgie",
+                message="Dramaturgie wird geplant…",
+                step_index=3,
+                step_total=10,
+            )
+        )
+        raise RuntimeError(
+            "Die Antwort wurde nach 16384 von max_tokens=16384 Output-Tokens "
+            "abgeschnitten (stop_reason=max_tokens)."
+        )
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job.get_project_by_id",
+        lambda _pid: project,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job.run_enhanced_auto_pipeline",
+        fake_pipeline,
+    )
+    assert manager.start(project) is True
+    for _ in range(80):
+        state = manager.get_state(project.id)
+        if state is not None and state.status != JobStatus.RUNNING:
+            break
+        time.sleep(0.05)
+    state = manager.get_state(project.id)
+    assert state is not None
+    assert state.status == JobStatus.FAILED
+    assert "③ Dramaturgie" in (state.error or "")
+    assert "max_tokens=16384" in (state.error or "")
+    manager.dismiss(project.id)
+
+
 def test_auto_run_ui_exports_page_and_banner() -> None:
     """Regression: page_panel darf banner nicht umbenennen und dann undefiniert aufrufen."""
     from otio_app.ui.without_voiceover_enhanced import auto_run_ui as module
@@ -649,6 +740,7 @@ def test_auto_run_ui_exports_page_and_banner() -> None:
     assert 'key_scope="auto_page"' in source
     assert 'key_scope="auto_panel"' in source
     assert "_render_running_auto_run_status" in source
+    assert "Auto-Lauf fehlgeschlagen —" in source
 
 
 def test_auto_run_progress_fraction_includes_chapter_item() -> None:

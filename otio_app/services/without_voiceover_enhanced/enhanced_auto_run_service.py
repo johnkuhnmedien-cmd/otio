@@ -114,6 +114,7 @@ __all__ = [
     "EnhancedAutoRunCancelled",
     "EnhancedAutoRunError",
     "EnhancedAutoRunReport",
+    "format_auto_run_failure_message",
     "pick_auto_intro_candidate",
     "llm_cut_provider_model",
     "run_enhanced_auto_pipeline",
@@ -139,6 +140,31 @@ class EnhancedAutoRunError(RuntimeError):
 
 class EnhancedAutoRunCancelled(RuntimeError):
     """Nutzer hat Stop gedrückt."""
+
+
+_AUTO_RUN_FAILURE_PREFIX = "Schritt "
+
+
+def format_auto_run_failure_message(
+    error: str,
+    step_label: str = "",
+    item_label: str = "",
+) -> str:
+    """Hängt den aktuellen Auto-Lauf-Schritt an die Fehlermeldung.
+
+    Idempotent, falls die Meldung schon mit „Schritt …“ beginnt.
+    """
+    text = (error or "").strip() or "Unbekannter Fehler."
+    if text.startswith(_AUTO_RUN_FAILURE_PREFIX):
+        return text
+    step = (step_label or "").strip()
+    item = (item_label or "").strip()
+    if not step:
+        return text
+    where = f"{_AUTO_RUN_FAILURE_PREFIX}{step}"
+    if item:
+        where = f"{where} · {item}"
+    return f"{where}: {text}"
 
 
 @dataclass
@@ -205,9 +231,18 @@ def run_enhanced_auto_pipeline(
     """Führt die Enhanced-Schritte strikt sequenziell aus. Stoppt vor Funnel."""
     report = EnhancedAutoRunReport()
     step_total = len(AUTO_RUN_STEPS)
+    last_step_label = ""
+    last_item_label = ""
 
     def cancelled() -> bool:
         return bool(should_cancel and should_cancel())
+
+    def _remember(step_id: str, item_label: str | None = None) -> str:
+        nonlocal last_step_label, last_item_label
+        last_step_label = next(label for sid, label in AUTO_RUN_STEPS if sid == step_id)
+        if item_label is not None:
+            last_item_label = item_label
+        return last_step_label
 
     def emit(
         step_id: str,
@@ -223,7 +258,7 @@ def run_enhanced_auto_pipeline(
             for index, (sid, _) in enumerate(AUTO_RUN_STEPS, start=1)
             if sid == step_id
         )
-        label = AUTO_RUN_STEPS[step_index - 1][1]
+        label = _remember(step_id, item_label)
         event = AutoRunProgress(
             step_id=step_id,
             step_label=label,
@@ -240,6 +275,7 @@ def run_enhanced_auto_pipeline(
             on_progress(event)
 
     def checkpoint(step_id: str) -> None:
+        _remember(step_id, "")
         if cancelled():
             report.stopped = True
             emit(step_id, "Gestoppt.")
@@ -251,100 +287,113 @@ def run_enhanced_auto_pipeline(
         else:
             report.completed.append(step_id)
 
-    models = load_model_settings(project)
-    cut_provider, cut_model = llm_cut_provider_model(project)
+    try:
+        models = load_model_settings(project)
+        cut_provider, cut_model = llm_cut_provider_model(project)
 
-    checkpoint("brief")
-    _run_brief(
-        project,
-        skip_done=skip_done,
-        emit=emit,
-        provider=models.project_brief.provider,
-        model=models.project_brief.model,
-        finish=finish_step,
-    )
+        checkpoint("brief")
+        _run_brief(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            provider=models.project_brief.provider,
+            model=models.project_brief.model,
+            finish=finish_step,
+        )
 
-    checkpoint("style")
-    _run_style(
-        project,
-        skip_done=skip_done,
-        emit=emit,
-        provider=models.style_profile.provider,
-        model=models.style_profile.model,
-        finish=finish_step,
-    )
+        checkpoint("style")
+        _run_style(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            provider=models.style_profile.provider,
+            model=models.style_profile.model,
+            finish=finish_step,
+        )
 
-    checkpoint("dramaturgy")
-    _run_dramaturgy(
-        project,
-        skip_done=skip_done,
-        emit=emit,
-        provider=models.dramaturgy.provider,
-        model=models.dramaturgy.model,
-        finish=finish_step,
-    )
+        checkpoint("dramaturgy")
+        _run_dramaturgy(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            provider=models.dramaturgy.provider,
+            model=models.dramaturgy.model,
+            finish=finish_step,
+        )
 
-    checkpoint("scripts")
-    _run_scripts(
-        project,
-        skip_done=skip_done,
-        emit=emit,
-        checkpoint=checkpoint,
-        provider=models.voiceover_author.provider,
-        model=models.voiceover_author.model,
-        finish=finish_step,
-    )
+        checkpoint("scripts")
+        _run_scripts(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            checkpoint=checkpoint,
+            provider=models.voiceover_author.provider,
+            model=models.voiceover_author.model,
+            finish=finish_step,
+        )
 
-    checkpoint("script_revise")
-    _run_script_revise(
-        project,
-        skip_done=skip_done,
-        emit=emit,
-        checkpoint=checkpoint,
-        provider=models.voiceover_author.provider,
-        model=models.voiceover_author.model,
-        finish=finish_step,
-    )
+        checkpoint("script_revise")
+        _run_script_revise(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            checkpoint=checkpoint,
+            provider=models.voiceover_author.provider,
+            model=models.voiceover_author.model,
+            finish=finish_step,
+        )
 
-    checkpoint("script_lock")
-    _run_script_lock(project, skip_done=skip_done, emit=emit, finish=finish_step)
+        checkpoint("script_lock")
+        _run_script_lock(project, skip_done=skip_done, emit=emit, finish=finish_step)
 
-    checkpoint("intro")
-    _run_intro(
-        project,
-        skip_done=skip_done,
-        emit=emit,
-        provider=models.intro.provider,
-        model=models.intro.model,
-        finish=finish_step,
-    )
+        checkpoint("intro")
+        _run_intro(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            provider=models.intro.provider,
+            model=models.intro.model,
+            finish=finish_step,
+        )
 
-    checkpoint("tts")
-    _run_tts(project, skip_done=skip_done, emit=emit, finish=finish_step)
+        checkpoint("tts")
+        _run_tts(project, skip_done=skip_done, emit=emit, finish=finish_step)
 
-    checkpoint("intro_cut")
-    _run_intro_cut(
-        project,
-        skip_done=skip_done,
-        emit=emit,
-        provider=cut_provider,
-        model=cut_model,
-        finish=finish_step,
-    )
+        checkpoint("intro_cut")
+        _run_intro_cut(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            provider=cut_provider,
+            model=cut_model,
+            finish=finish_step,
+        )
 
-    checkpoint("chapter_cuts")
-    _run_chapter_cuts(
-        project,
-        skip_done=skip_done,
-        emit=emit,
-        checkpoint=checkpoint,
-        provider=cut_provider,
-        model=cut_model,
-        finish=finish_step,
-    )
+        checkpoint("chapter_cuts")
+        _run_chapter_cuts(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            checkpoint=checkpoint,
+            provider=cut_provider,
+            model=cut_model,
+            finish=finish_step,
+        )
 
-    emit("chapter_cuts", "Auto-Lauf fertig — als Nächstes manuell: Funnel / Timing.")
-    return report
+        emit("chapter_cuts", "Auto-Lauf fertig — als Nächstes manuell: Funnel / Timing.")
+        return report
+    except EnhancedAutoRunCancelled:
+        raise
+    except EnhancedAutoRunError as exc:
+        raise EnhancedAutoRunError(
+            format_auto_run_failure_message(str(exc), last_step_label, last_item_label)
+        ) from exc
+    except Exception as exc:
+        raise EnhancedAutoRunError(
+            format_auto_run_failure_message(
+                str(exc) or type(exc).__name__, last_step_label, last_item_label
+            )
+        ) from exc
 
 
 def _run_brief(
