@@ -60,13 +60,13 @@ def render_enhanced_auto_run_page() -> None:
     """Eigene Sidebar-Seite — steht in der Navigationsliste zwischen Analysen und Brief."""
     st.header("▶ Auto-Lauf")
     st.write(
-        "Ein Klick startet **nacheinander** (nie parallel) alles ab Project Brief "
+        "Ein Klick startet **Schritt für Schritt** alles ab Project Brief "
         "bis zum gewählten Ziel: **Supplement-Funnel** oder **YouTube Publish**. "
         "Kapitel-Skripte zuerst komplett, danach "
         "Freitext-Nachbearbeitung, erst dann Script Lock. **⓪ Clean Media**, "
         "**① Analysen** und **SFX** bleiben manuell. Danach: Stocksuche (Wikimedia, Openverse, "
-        "Archive.org) → alle offenen Gaps → (optional) Python Timing → ElevenLabs Music → "
-        "OTIO → YouTube (Metadaten + Quiz)."
+        "Archive.org) → alle offenen Gaps → (optional) Python Timing (Kapitel parallel) → "
+        "ElevenLabs Music → OTIO → YouTube (Metadaten + Quiz)."
     )
     from otio_app.ui.project_context import render_project_selector
 
@@ -178,14 +178,14 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
     else:
         st.subheader("▶ Auto-Lauf")
     st.caption(
-        "Ein Button, **sequenziell** (nie parallel): Brief + Titel → Style → "
+        "Ein Button, **Schritt für Schritt**: Brief + Titel → Style → "
         "Dramaturgie (auto-bestätigen) → Kapitel-Skripte → Freitext-Nachbearbeitung "
         "→ Script Lock → Intro (erste gültige Variante) → TTS → Intro-Cut → "
         "alle Kapitel-Cuts → Stocksuche (Wikimedia/Openverse/Archive.org) → "
         "alle offenen Gaps. **bis Funnel** stoppt dort; **bis YouTube** macht "
-        "weiter mit Python Timing → ElevenLabs Music → OTIO-Export → "
-        "YouTube Publish (Metadaten + Quiz). "
-        "Offene Gaps nach dem Funnel gelten als Fehler. "
+        "weiter mit Python Timing (Kapitel parallel, max. 8) → ElevenLabs Music → "
+        "OTIO-Export → YouTube Publish (Metadaten + Quiz). "
+        "LLM-/TTS-Calls bleiben einzeln. Offene Gaps nach dem Funnel gelten als Fehler. "
         "Fertige Schritte werden übersprungen."
     )
     start_disabled = running or other_running

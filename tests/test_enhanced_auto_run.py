@@ -215,7 +215,7 @@ def _stub_auto_run_tail(
         monkeypatch.setattr(auto_run, "search_supplements_for_gaps", boom)
         monkeypatch.setattr(auto_run, "run_supplement_funnel_for_gaps", boom)
         monkeypatch.setattr(auto_run, "resolve_intro_timeline", boom)
-        monkeypatch.setattr(auto_run, "resolve_chapter_timeline", boom)
+        monkeypatch.setattr(auto_run, "resolve_all_chapter_timelines", boom)
         monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
         monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", lambda _p: [])
         monkeypatch.setattr(
@@ -257,6 +257,25 @@ def _stub_auto_run_tail(
         _enter(f"timing:{name}")
         timing_done["chapters"].append(name)
 
+    def fake_all_timelines(
+        _p,
+        *,
+        progress_callback=None,
+        chapter_names=None,
+        only_open=False,
+        max_workers=None,
+        **_k,
+    ):
+        selected = list(chapter_names or fake_needing(_p))
+        results = []
+        total = len(selected)
+        for index, name in enumerate(selected, start=1):
+            fake_chapter_timing(_p, name)
+            if progress_callback is not None:
+                progress_callback(name, index, total)
+            results.append((name, MagicMock()))
+        return results
+
     def fake_needing(_p):
         return [name for name in names if name not in timing_done["chapters"]]
 
@@ -295,7 +314,7 @@ def _stub_auto_run_tail(
     monkeypatch.setattr(auto_run, "search_supplements_for_gaps", fake_search)
     monkeypatch.setattr(auto_run, "run_supplement_funnel_for_gaps", fake_funnel)
     monkeypatch.setattr(auto_run, "resolve_intro_timeline", fake_intro_timing)
-    monkeypatch.setattr(auto_run, "resolve_chapter_timeline", fake_chapter_timing)
+    monkeypatch.setattr(auto_run, "resolve_all_chapter_timelines", fake_all_timelines)
     monkeypatch.setattr(
         auto_run, "intro_timing_complete", lambda _p: timing_done["intro"]
     )
@@ -743,6 +762,63 @@ def test_auto_run_is_strictly_sequential(
     confirmed = load_confirmed_intro_hook(project)
     assert confirmed is not None
     assert confirmed.hook_id == "clean"
+
+
+def test_auto_run_python_timing_runs_chapters_in_parallel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.defaults import ENHANCED_CHAPTER_TIMING_MAX_WORKERS
+    from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+        _run_timing,
+    )
+
+    project = _project(tmp_path)
+    folders = [f"Place {index}" for index in range(5)]
+    current = 0
+    max_seen = 0
+    lock = threading.Lock()
+    finished: list[str] = []
+
+    def fake_resolve(_project, name):
+        nonlocal current, max_seen
+        with lock:
+            current += 1
+            max_seen = max(max_seen, current)
+        time.sleep(0.12)
+        with lock:
+            current -= 1
+            finished.append(name)
+        return MagicMock()
+
+    needing_calls = {"n": 0}
+
+    def fake_needing(_p):
+        needing_calls["n"] += 1
+        if needing_calls["n"] == 1:
+            return list(folders)
+        return []
+
+    monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
+    monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", fake_needing)
+    monkeypatch.setattr(
+        auto_run, "list_chapters_ready_for_python_timing", lambda _p: list(folders)
+    )
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.resolve_chapter_timeline",
+        fake_resolve,
+    )
+
+    _run_timing(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        checkpoint=lambda _step: None,
+        finish=lambda *_a, **_k: None,
+    )
+    assert set(finished) == set(folders)
+    assert max_seen > 1
+    assert max_seen <= ENHANCED_CHAPTER_TIMING_MAX_WORKERS
+    assert max_seen <= len(folders)
 
 
 def test_auto_run_revises_existing_scripts_before_lock(
