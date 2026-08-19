@@ -5,6 +5,7 @@ Karten gehören nicht zum Auto-Lauf. Rendern startet nur per Klick.
 """
 
 from otio_app.services.without_voiceover_enhanced.maps.models import (
+    COORDINATE_STATUS_CONFIRMED,
     COORDINATE_STATUS_MANUAL,
     COORDINATE_STATUS_MISSING,
     COORDINATE_STATUS_NEEDS_REVIEW,
@@ -51,6 +52,7 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     build_map_plan,
     clamp_max_parallel,
     compute_plan_hash,
+    confirm_map_place_coordinates,
     dramaturgy_fingerprint,
     load_map_coordinates,
     load_map_plan,
@@ -58,14 +60,17 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     map_heading,
     map_language_prefix,
     map_output_filename,
+    rebuild_saved_map_plan,
     save_map_coordinates,
     save_map_plan,
     save_map_settings,
+    status_after_saving_coordinates,
     unique_chapter_places,
     update_coordinate_record,
 )
 
 __all__ = [
+    "COORDINATE_STATUS_CONFIRMED",
     "COORDINATE_STATUS_MANUAL",
     "COORDINATE_STATUS_MISSING",
     "COORDINATE_STATUS_NEEDS_REVIEW",
@@ -94,6 +99,7 @@ __all__ = [
     "build_map_plan",
     "clamp_max_parallel",
     "compute_plan_hash",
+    "confirm_map_place_coordinates",
     "dramaturgy_fingerprint",
     "load_map_coordinates",
     "load_map_plan",
@@ -103,9 +109,11 @@ __all__ = [
     "map_language_prefix",
     "map_output_filename",
     "nominatim_geocode",
+    "rebuild_saved_map_plan",
     "save_map_coordinates",
     "save_map_plan",
     "save_map_settings",
+    "status_after_saving_coordinates",
     "MapRenderError",
     "MapRenderer",
     "get_map_render_job_manager",

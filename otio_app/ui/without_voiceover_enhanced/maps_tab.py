@@ -15,8 +15,9 @@ from otio_app.services.without_voiceover_enhanced.maps.map_render_job import (
     get_map_render_job_manager,
 )
 from otio_app.services.without_voiceover_enhanced.maps.models import (
-    COORDINATE_STATUS_MANUAL,
+    COORDINATE_STATUS_LABELS,
     COORDINATE_STATUS_MISSING,
+    COORDINATE_STATUS_NEEDS_REVIEW,
     MAP_HEADING_BY_LANGUAGE,
     MAP_RESOLUTION_4K,
     MAP_RESOLUTION_HD,
@@ -30,14 +31,17 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     MapPlanError,
     build_map_plan,
     clamp_max_parallel,
+    confirm_map_place_coordinates,
     dramaturgy_fingerprint,
     load_map_coordinates,
     load_map_plan,
     load_map_settings,
     map_heading,
+    rebuild_saved_map_plan,
     save_map_coordinates,
     save_map_plan,
     save_map_settings,
+    status_after_saving_coordinates,
     unique_chapter_places,
 )
 from otio_app.services.without_voiceover_enhanced.maps.render_service import MapRenderer
@@ -196,7 +200,9 @@ def render_enhanced_maps_page() -> None:
                 "Sichtbarer Name": item.localized_display_label,
                 "Modus": item.animation_mode,
                 "Von": item.from_original_chapter_label,
-                "Koordinaten": item.coordinate_status,
+                "Koordinaten": COORDINATE_STATUS_LABELS.get(
+                    item.coordinate_status, item.coordinate_status
+                ),
                 "Status": RENDER_STATUS_LABELS.get(status, status),
                 "Fortschritt": f"{int(round(progress * 100))}%",
                 "Dateiname": item.output_filename,
@@ -210,7 +216,8 @@ def render_enhanced_maps_page() -> None:
     st.caption(
         "Vorhandene Werte aus dem Projekt werden bevorzugt. "
         "Schon gefundene Orte werden nicht erneut bei Nominatim abgefragt. "
-        "Unsichere Treffer rendern nicht automatisch."
+        "Unsichere Treffer rendern nicht automatisch — bitte mit "
+        "„Koordinaten bestätigen“ oder „Koordinaten speichern“ freigeben."
     )
     geocode_note_key = f"enh_map_geocode_note_{project.id}"
     geocode_note = st.session_state.get(geocode_note_key)
@@ -242,7 +249,11 @@ def render_enhanced_maps_page() -> None:
             st.session_state[lon_key] = (
                 "" if rec.longitude is None else f"{rec.longitude:.6f}"
             )
-        with st.expander(f"{original} ({chapter_id})", expanded=not rec.has_coordinates):
+        with st.expander(
+            f"{original} ({chapter_id})",
+            expanded=rec.status
+            in {COORDINATE_STATUS_MISSING, COORDINATE_STATUS_NEEDS_REVIEW},
+        ):
             st.text_input("Sichtbarer Name (lokalisiert)", key=display_key)
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -250,9 +261,51 @@ def render_enhanced_maps_page() -> None:
             with c2:
                 st.text_input("Länge", key=lon_key)
             with c3:
-                st.write(f"Status: {rec.status}")
+                st.write(
+                    "Status: "
+                    + COORDINATE_STATUS_LABELS.get(rec.status, rec.status)
+                )
                 st.write(f"Quelle: {rec.source or '—'}")
                 st.write(f"Konfidenz: {rec.confidence:.2f}")
+            form_lat = _parse_optional_float(st.session_state.get(lat_key))
+            form_lon = _parse_optional_float(st.session_state.get(lon_key))
+            if rec.status == COORDINATE_STATUS_NEEDS_REVIEW and rec.has_coordinates:
+                st.caption(
+                    "Koordinaten sind gefunden, müssen aber bestätigt werden, "
+                    "bevor die Karte gerendert werden darf."
+                )
+            if st.button(
+                "Koordinaten bestätigen",
+                key=f"enh_map_confirm_{project.id}_{chapter_id}",
+                disabled=form_lat is None or form_lon is None,
+            ):
+                display_new = (
+                    str(st.session_state.get(display_key) or display).strip()
+                    or original
+                )
+                try:
+                    confirm_map_place_coordinates(
+                        project,
+                        chapter_id=chapter_id,
+                        original_label=original,
+                        display_label=display_new,
+                        latitude=form_lat,
+                        longitude=form_lon,
+                        note=rec.note,
+                        settings=settings,
+                        previous=plan,
+                    )
+                except MapPlanError as exc:
+                    st.warning(str(exc))
+                else:
+                    st.session_state.pop(lat_key, None)
+                    st.session_state.pop(lon_key, None)
+                    st.session_state.pop(display_key, None)
+                    st.session_state[geocode_note_key] = (
+                        "success",
+                        f"„{original}“ bestätigt. Kartenplan aktualisiert.",
+                    )
+                    st.rerun()
 
     save_c1, save_c2 = st.columns(2)
     with save_c1:
@@ -269,24 +322,9 @@ def render_enhanced_maps_page() -> None:
                 lon = _parse_optional_float(
                     st.session_state.get(f"enh_map_lon_{project.id}_{chapter_id}")
                 )
-                same_point = (
-                    rec is not None
-                    and rec.latitude == lat
-                    and rec.longitude == lon
-                    and rec.has_coordinates
+                status, confidence, source = status_after_saving_coordinates(
+                    lat, lon, rec
                 )
-                if lat is None or lon is None:
-                    status = COORDINATE_STATUS_MISSING
-                    confidence = 0.0
-                    source = rec.source if rec is not None else ""
-                elif same_point:
-                    status = rec.status
-                    confidence = rec.confidence
-                    source = rec.source
-                else:
-                    status = COORDINATE_STATUS_MANUAL
-                    confidence = 1.0
-                    source = "manual"
                 next_places[chapter_id] = MapCoordinateRecord(
                     chapter_id=chapter_id,
                     original_label=original,
@@ -305,14 +343,17 @@ def render_enhanced_maps_page() -> None:
                 places=next_places,
             )
             save_map_coordinates(project, next_coords)
-            rebuilt = build_map_plan(
+            rebuild_saved_map_plan(
                 project,
                 settings=settings,
                 coordinates=next_coords,
                 previous=plan,
             )
-            save_map_plan(project, rebuilt)
-            st.success("Koordinaten gespeichert. Kartenplan aktualisiert.")
+            st.session_state[geocode_note_key] = (
+                "success",
+                "Koordinaten gespeichert und bestätigt. Kartenplan aktualisiert.",
+            )
+            st.rerun()
     with save_c2:
         if st.button("Fehlende Koordinaten prüfen", key=f"enh_map_geocode_{project.id}"):
             progress_bar = st.progress(0.0)

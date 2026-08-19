@@ -27,6 +27,7 @@ COORDINATE_STATUS_MISSING = "missing"
 COORDINATE_STATUS_NEEDS_REVIEW = "needs_review"
 COORDINATE_STATUS_RESOLVED = "resolved"
 COORDINATE_STATUS_MANUAL = "manual"
+COORDINATE_STATUS_CONFIRMED = "confirmed"
 RENDER_STATUS_IDLE = "idle"
 RENDER_STATUS_BLOCKED = "blocked"
 RENDER_STATUS_WAITING = "waiting"
@@ -37,6 +38,14 @@ RENDER_STATUS_DONE = "done"
 RENDER_STATUS_FAILED = "failed"
 RENDER_STATUS_CANCELLED = "cancelled"
 CONFIDENCE_AUTO_RENDER_MIN = 0.75
+
+COORDINATE_STATUS_LABELS: dict[str, str] = {
+    COORDINATE_STATUS_MISSING: "fehlen",
+    COORDINATE_STATUS_NEEDS_REVIEW: "Prüfung nötig",
+    COORDINATE_STATUS_RESOLVED: "gefunden",
+    COORDINATE_STATUS_MANUAL: "manuell",
+    COORDINATE_STATUS_CONFIRMED: "bestätigt",
+}
 
 RENDER_STATUS_LABELS: dict[str, str] = {
     RENDER_STATUS_IDLE: "wartet",
@@ -137,12 +146,13 @@ class MapPlanItem(BaseModel):
 
     @property
     def coordinate_status(self) -> str:
-        """Worst-case status of start/end (missing < review < resolved < manual)."""
+        """Worst-case status of start/end (missing < review < resolved < manual/confirmed)."""
         rank = {
             COORDINATE_STATUS_MISSING: 0,
             COORDINATE_STATUS_NEEDS_REVIEW: 1,
             COORDINATE_STATUS_RESOLVED: 2,
             COORDINATE_STATUS_MANUAL: 3,
+            COORDINATE_STATUS_CONFIRMED: 3,
         }
         statuses = [self.start_coordinate_status]
         if self.animation_mode != MAP_ANIMATION_OPENING:

@@ -19,6 +19,7 @@ from otio_app.services.voiceover_generation.project_brief_defaults_service impor
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     CONFIDENCE_AUTO_RENDER_MIN,
+    COORDINATE_STATUS_CONFIRMED,
     COORDINATE_STATUS_MANUAL,
     COORDINATE_STATUS_MISSING,
     COORDINATE_STATUS_NEEDS_REVIEW,
@@ -159,7 +160,7 @@ def _record_ready(record: MapCoordinateRecord | None) -> bool:
         return False
     if record.latitude is None or record.longitude is None:
         return False
-    if record.status == COORDINATE_STATUS_MANUAL:
+    if record.status in {COORDINATE_STATUS_MANUAL, COORDINATE_STATUS_CONFIRMED}:
         return True
     if record.status == COORDINATE_STATUS_RESOLVED:
         return record.confidence >= CONFIDENCE_AUTO_RENDER_MIN
@@ -383,6 +384,84 @@ def save_map_plan(project: Project, document: MapPlanDocument) -> MapPlanDocumen
     normalized = document.model_copy(update={"project_id": project.id})
     write_json(map_plan_path(project), normalized)
     return normalized
+
+
+def status_after_saving_coordinates(
+    latitude: float | None,
+    longitude: float | None,
+    previous: MapCoordinateRecord | None = None,
+) -> tuple[str, float, str]:
+    """Gültige gespeicherte Koordinaten gelten als bestätigt, auch ohne Änderung."""
+    if latitude is None or longitude is None:
+        source = previous.source if previous is not None else ""
+        return COORDINATE_STATUS_MISSING, 0.0, source
+    same_point = (
+        previous is not None
+        and previous.has_coordinates
+        and previous.latitude == latitude
+        and previous.longitude == longitude
+    )
+    if same_point and previous is not None and previous.source:
+        source = previous.source
+    else:
+        source = "manual"
+    return COORDINATE_STATUS_CONFIRMED, 1.0, source
+
+
+def rebuild_saved_map_plan(
+    project: Project,
+    *,
+    coordinates: MapCoordinatesDocument,
+    settings: MapRenderSettings | None = None,
+    previous: MapPlanDocument | None = None,
+) -> MapPlanDocument:
+    resolved_settings = settings if settings is not None else load_map_settings(project)
+    prev = previous if previous is not None else load_map_plan(project)
+    plan = build_map_plan(
+        project,
+        settings=resolved_settings,
+        coordinates=coordinates,
+        previous=prev,
+    )
+    return save_map_plan(project, plan)
+
+
+def confirm_map_place_coordinates(
+    project: Project,
+    *,
+    chapter_id: str,
+    original_label: str,
+    display_label: str,
+    latitude: float | None,
+    longitude: float | None,
+    source: str = "confirmed",
+    note: str = "",
+    settings: MapRenderSettings | None = None,
+    previous: MapPlanDocument | None = None,
+) -> tuple[MapCoordinatesDocument, MapPlanDocument]:
+    """Bestätigt gültige Koordinaten, speichert sie und gibt den Kartenplan frei."""
+    if latitude is None or longitude is None:
+        label = (original_label or chapter_id).strip() or chapter_id
+        raise MapPlanError(f"Ort „{label}“ hat keine gültigen Koordinaten.")
+    coords = update_coordinate_record(
+        project,
+        chapter_id=chapter_id,
+        original_label=original_label,
+        display_label=display_label,
+        latitude=latitude,
+        longitude=longitude,
+        status=COORDINATE_STATUS_CONFIRMED,
+        source=source or "confirmed",
+        note=note,
+        confidence=1.0,
+    )
+    plan = rebuild_saved_map_plan(
+        project,
+        coordinates=coords,
+        settings=settings,
+        previous=previous,
+    )
+    return coords, plan
 
 
 def update_coordinate_record(
