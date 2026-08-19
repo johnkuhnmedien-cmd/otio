@@ -61,10 +61,11 @@ def render_enhanced_auto_run_page() -> None:
     st.header("▶ Auto-Lauf")
     st.write(
         "Ein Klick startet **nacheinander** (nie parallel) alles ab Project Brief "
-        "bis YouTube Publish. Kapitel-Skripte zuerst komplett, danach "
+        "bis zum gewählten Ziel: **Supplement-Funnel** oder **YouTube Publish**. "
+        "Kapitel-Skripte zuerst komplett, danach "
         "Freitext-Nachbearbeitung, erst dann Script Lock. **⓪ Clean Media**, "
         "**① Analysen** und **SFX** bleiben manuell. Danach: Stocksuche (Wikimedia, Openverse, "
-        "Archive.org) → alle offenen Gaps → Python Timing → ElevenLabs Music → "
+        "Archive.org) → alle offenen Gaps → (optional) Python Timing → ElevenLabs Music → "
         "OTIO → YouTube (Metadaten + Quiz)."
     )
     from otio_app.ui.project_context import render_project_selector
@@ -181,7 +182,8 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
         "Dramaturgie (auto-bestätigen) → Kapitel-Skripte → Freitext-Nachbearbeitung "
         "→ Script Lock → Intro (erste gültige Variante) → TTS → Intro-Cut → "
         "alle Kapitel-Cuts → Stocksuche (Wikimedia/Openverse/Archive.org) → "
-        "alle offenen Gaps → Python Timing → ElevenLabs Music → OTIO-Export → "
+        "alle offenen Gaps. **bis Funnel** stoppt dort; **bis YouTube** macht "
+        "weiter mit Python Timing → ElevenLabs Music → OTIO-Export → "
         "YouTube Publish (Metadaten + Quiz). "
         "Offene Gaps nach dem Funnel gelten als Fehler. "
         "Fertige Schritte werden übersprungen."
@@ -194,17 +196,32 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
         help_text = (
             "Ein anderer Auto-Lauf oder die Sprachen-Queue läuft — zuerst stoppen."
         )
-    if st.button(
-        "▶ Auto-Lauf starten",
-        key=f"enh_auto_run_start_{key_scope}_{project.id}",
-        type="primary",
-        disabled=start_disabled,
-        help=help_text,
-    ):
-        if manager.start(project):
-            st.rerun()
-        else:
-            st.warning("Auto-Lauf läuft bereits.")
+    col_funnel, col_youtube = st.columns(2)
+    with col_funnel:
+        if st.button(
+            "▶ bis Funnel",
+            key=f"enh_auto_run_start_funnel_{key_scope}_{project.id}",
+            disabled=start_disabled,
+            help=help_text or "Stoppt nach Stocksuche und Supplement-Funnel.",
+            use_container_width=True,
+        ):
+            if manager.start(project, stop_after="funnel"):
+                st.rerun()
+            else:
+                st.warning("Auto-Lauf läuft bereits.")
+    with col_youtube:
+        if st.button(
+            "▶ bis YouTube",
+            key=f"enh_auto_run_start_youtube_{key_scope}_{project.id}",
+            type="primary",
+            disabled=start_disabled,
+            help=help_text or "Kompletter Auto-Lauf bis YouTube Publish.",
+            use_container_width=True,
+        ):
+            if manager.start(project, stop_after="youtube"):
+                st.rerun()
+            else:
+                st.warning("Auto-Lauf läuft bereits.")
     if running:
         if st.button(
             "⏹ Auto-Lauf stoppen",

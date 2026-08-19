@@ -155,16 +155,25 @@ __all__ = [
     "AUTO_RUN_STEPS",
     "AUTO_RUN_STEP_SHORT_LABELS",
     "AUTO_RUN_STOCK_PROVIDERS",
+    "AUTO_RUN_STOP_AFTER_FUNNEL",
+    "AUTO_RUN_STOP_AFTER_LABELS",
+    "AUTO_RUN_STOP_AFTER_YOUTUBE",
     "AutoRunProgress",
+    "AutoRunStageSummary",
     "AutoRunStepStatus",
     "EnhancedAutoRunCancelled",
     "EnhancedAutoRunError",
     "EnhancedAutoRunReport",
+    "auto_run_stop_step_id",
+    "auto_run_steps_through",
     "format_auto_run_failure_message",
     "list_auto_run_step_statuses",
-    "pick_auto_intro_candidate",
     "llm_cut_provider_model",
+    "normalize_auto_run_stop_after",
+    "pick_auto_intro_candidate",
+    "pipeline_complete_through",
     "run_enhanced_auto_pipeline",
+    "summarize_auto_run_stage",
     "youtube_publish_complete",
 ]
 
@@ -205,6 +214,42 @@ AUTO_RUN_STEP_SHORT_LABELS: dict[str, str] = {
     "otio": "OTIO",
     "youtube": "YouTube",
 }
+
+AUTO_RUN_STOP_AFTER_FUNNEL = "funnel"
+AUTO_RUN_STOP_AFTER_YOUTUBE = "youtube"
+AUTO_RUN_STOP_AFTER_LABELS: dict[str, str] = {
+    AUTO_RUN_STOP_AFTER_FUNNEL: "Supplement-Funnel",
+    AUTO_RUN_STOP_AFTER_YOUTUBE: "YouTube Publish",
+}
+
+
+def normalize_auto_run_stop_after(value: str | None) -> str:
+    text = str(value or AUTO_RUN_STOP_AFTER_YOUTUBE).strip().lower()
+    if text in {
+        AUTO_RUN_STOP_AFTER_FUNNEL,
+        "supplement",
+        "supplement_funnel",
+        "bis_funnel",
+    }:
+        return AUTO_RUN_STOP_AFTER_FUNNEL
+    return AUTO_RUN_STOP_AFTER_YOUTUBE
+
+
+def auto_run_stop_step_id(stop_after: str | None) -> str:
+    if normalize_auto_run_stop_after(stop_after) == AUTO_RUN_STOP_AFTER_FUNNEL:
+        return "funnel"
+    return "youtube"
+
+
+def auto_run_steps_through(stop_after: str | None) -> tuple[str, ...]:
+    stop_id = auto_run_stop_step_id(stop_after)
+    ids: list[str] = []
+    for step_id, _label in AUTO_RUN_STEPS:
+        ids.append(step_id)
+        if step_id == stop_id:
+            break
+    return tuple(ids)
+
 
 # Auto-Lauf sucht nur die freien Anbieter — analog zur UI-Auswahl.
 AUTO_RUN_STOCK_PROVIDERS: dict[str, bool] = {
@@ -270,6 +315,18 @@ class AutoRunStepStatus:
     done: bool
 
 
+@dataclass(frozen=True)
+class AutoRunStageSummary:
+    done_count: int
+    step_total: int
+    last_done_id: str | None
+    last_done_label: str
+    next_id: str | None
+    next_label: str
+    funnel_done: bool
+    youtube_done: bool
+
+
 @dataclass
 class EnhancedAutoRunReport:
     skipped: list[str] = field(default_factory=list)
@@ -317,10 +374,12 @@ def run_enhanced_auto_pipeline(
     should_cancel: CancelCallback | None = None,
     on_progress: ProgressCallback | None = None,
     skip_done: bool = True,
+    stop_after: str = AUTO_RUN_STOP_AFTER_YOUTUBE,
 ) -> EnhancedAutoRunReport:
-    """Führt die Enhanced-Schritte strikt sequenziell aus bis YouTube Publish."""
+    """Führt die Enhanced-Schritte strikt sequenziell aus bis Funnel oder YouTube."""
     report = EnhancedAutoRunReport()
-    step_total = len(AUTO_RUN_STEPS)
+    stop_after = normalize_auto_run_stop_after(stop_after)
+    step_total = len(auto_run_steps_through(stop_after))
     last_step_label = ""
     last_item_label = ""
 
@@ -480,6 +539,9 @@ def run_enhanced_auto_pipeline(
             funnel_model=models.enhanced_supplement_funnel.model,
             finish=finish_step,
         )
+        if stop_after == AUTO_RUN_STOP_AFTER_FUNNEL:
+            emit("funnel", "Auto-Lauf bis Supplement-Funnel fertig.")
+            return report
 
         checkpoint("timing")
         _run_timing(
@@ -1124,6 +1186,62 @@ def list_auto_run_step_statuses(project: Project) -> list[AutoRunStepStatus]:
             )
         )
     return rows
+
+
+def pipeline_complete_through(
+    project: Project,
+    stop_after: str = AUTO_RUN_STOP_AFTER_YOUTUBE,
+) -> bool:
+    """True wenn jeder Schritt bis einschließlich Funnel bzw. YouTube erledigt ist."""
+    return _complete_through_rows(
+        list_auto_run_step_statuses(project),
+        stop_after,
+    )
+
+
+def _complete_through_rows(
+    rows: list[AutoRunStepStatus],
+    stop_after: str,
+) -> bool:
+    wanted = set(auto_run_steps_through(stop_after))
+    by_id = {row.step_id: row for row in rows}
+    for step_id in wanted:
+        row = by_id.get(step_id)
+        if row is None or not row.done:
+            return False
+    return True
+
+
+def summarize_auto_run_stage(project: Project) -> AutoRunStageSummary:
+    """Konsekutiver Pipeline-Stand für die Statusübersicht je Sprache."""
+    rows = list_auto_run_step_statuses(project)
+    last_done: AutoRunStepStatus | None = None
+    next_open: AutoRunStepStatus | None = None
+    consecutive = 0
+    for row in rows:
+        if next_open is not None:
+            break
+        if row.done:
+            last_done = row
+            consecutive += 1
+        else:
+            next_open = row
+    if next_open is None and last_done is not None:
+        next_label = "fertig"
+    elif next_open is not None:
+        next_label = next_open.short_label
+    else:
+        next_label = AUTO_RUN_STEP_SHORT_LABELS.get("brief", "Brief")
+    return AutoRunStageSummary(
+        done_count=consecutive,
+        step_total=len(rows),
+        last_done_id=last_done.step_id if last_done else None,
+        last_done_label=last_done.short_label if last_done else "—",
+        next_id=next_open.step_id if next_open else None,
+        next_label=next_label,
+        funnel_done=_complete_through_rows(rows, AUTO_RUN_STOP_AFTER_FUNNEL),
+        youtube_done=_complete_through_rows(rows, AUTO_RUN_STOP_AFTER_YOUTUBE),
+    )
 
 
 def _run_stock_and_funnel(

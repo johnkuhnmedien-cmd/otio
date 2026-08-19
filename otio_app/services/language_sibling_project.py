@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import re
+from typing import Sequence
 
 from otio_app.defaults import BRIEF_LANGUAGE_CHOICES
-from otio_app.models import Project, ProjectCreate
+from otio_app.models import Project, ProjectCreate, ProjectMode
 from otio_app.project_repository import (
     create_project,
     find_project_by_root_and_language,
@@ -17,11 +21,17 @@ from otio_app.services.voiceover_generation.project_brief_defaults_service impor
 )
 
 __all__ = [
+    "LanguageFamilyStatus",
     "LanguageSiblingError",
+    "SavedProjectGroup",
     "auto_run_pipeline_complete",
     "clone_project_for_language",
+    "family_display_name",
+    "family_language_statuses",
+    "group_saved_projects",
     "missing_sibling_languages",
     "open_languages_for_auto_run",
+    "pick_family_representative",
     "resolve_sibling_project",
     "selected_languages_in_order",
     "sibling_project_name",
@@ -30,6 +40,161 @@ __all__ = [
 
 class LanguageSiblingError(ValueError):
     """Geschwisterprojekt kann nicht angelegt werden."""
+
+
+@dataclass(frozen=True)
+class LanguageFamilyStatus:
+    language: str
+    exists: bool
+    project_id: str | None
+    project_name: str | None
+    done_count: int
+    step_total: int
+    last_done_label: str
+    next_label: str
+    funnel_done: bool
+    youtube_done: bool
+
+
+@dataclass(frozen=True)
+class SavedProjectGroup:
+    display_name: str
+    project_mode: ProjectMode
+    projects: tuple[Project, ...]
+    representative: Project
+    grouped: bool
+
+
+def family_display_name(name: str, language: str) -> str:
+    """IT_Test Automatic + IT → Test Automatic."""
+    lang = normalize_brief_language(language)
+    text = (name or "").strip() or lang
+    if text.upper() == lang:
+        return text
+    pattern = re.compile(rf"^{re.escape(lang)}([_\s\-])", re.IGNORECASE)
+    stripped, count = pattern.subn("", text, count=1)
+    if count:
+        return stripped.strip() or text
+    return text
+
+
+def pick_family_representative(projects: Sequence[Project]) -> Project:
+    """Ältestes Geschwisterprojekt — typisch die zuerst angelegte Sprache."""
+    if not projects:
+        raise ValueError("Keine Projekte in der Familie.")
+    return sorted(
+        projects,
+        key=lambda item: (_created_sort_key(item), str(item.id)),
+    )[0]
+
+
+def _created_sort_key(project: Project) -> str:
+    created = getattr(project, "created_at", None)
+    if isinstance(created, datetime):
+        return created.isoformat()
+    return str(created or "")
+
+
+def family_title(projects: Sequence[Project]) -> str:
+    names = [
+        family_display_name(item.name, item.language) for item in projects if item.name
+    ]
+    if not names:
+        return pick_family_representative(projects).name
+    return Counter(names).most_common(1)[0][0]
+
+
+def group_saved_projects(projects: Sequence[Project]) -> list[SavedProjectGroup]:
+    """Enhanced-Geschwister eines Ordners → eine Karte; andere Modi bleiben einzeln."""
+    enhanced_members: dict[tuple[str, str], list[Project]] = {}
+    for item in projects:
+        if item.is_without_voiceover_enhanced:
+            key = (item.project_root, item.project_mode.value)
+            enhanced_members.setdefault(key, []).append(item)
+
+    groups: list[SavedProjectGroup] = []
+    seen: set[tuple[str, str]] = set()
+    for item in projects:
+        if item.is_without_voiceover_enhanced:
+            key = (item.project_root, item.project_mode.value)
+            if key in seen:
+                continue
+            seen.add(key)
+            members = tuple(enhanced_members[key])
+            groups.append(
+                SavedProjectGroup(
+                    display_name=family_title(members),
+                    project_mode=item.project_mode,
+                    projects=members,
+                    representative=pick_family_representative(members),
+                    grouped=True,
+                )
+            )
+            continue
+        groups.append(
+            SavedProjectGroup(
+                display_name=item.name,
+                project_mode=item.project_mode,
+                projects=(item,),
+                representative=item,
+                grouped=False,
+            )
+        )
+    return groups
+
+
+def family_language_statuses(
+    projects: Sequence[Project],
+) -> list[LanguageFamilyStatus]:
+    """Eine Zeile je Katalog-Sprache: angelegt?, Funnel/YouTube, nächster Schritt."""
+    by_lang: dict[str, Project] = {}
+    for item in projects:
+        by_lang[normalize_brief_language(item.language)] = item
+    return [
+        language_family_status(lang, by_lang.get(lang))
+        for lang in BRIEF_LANGUAGE_CHOICES
+    ]
+
+
+def language_family_status(
+    language: str,
+    project: Project | None,
+) -> LanguageFamilyStatus:
+    lang = normalize_brief_language(language)
+    if project is None:
+        from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+            AUTO_RUN_STEPS,
+        )
+
+        return LanguageFamilyStatus(
+            language=lang,
+            exists=False,
+            project_id=None,
+            project_name=None,
+            done_count=0,
+            step_total=len(AUTO_RUN_STEPS),
+            last_done_label="—",
+            next_label="anlegen",
+            funnel_done=False,
+            youtube_done=False,
+        )
+    from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+        summarize_auto_run_stage,
+    )
+
+    summary = summarize_auto_run_stage(project)
+    return LanguageFamilyStatus(
+        language=lang,
+        exists=True,
+        project_id=project.id,
+        project_name=project.name,
+        done_count=summary.done_count,
+        step_total=summary.step_total,
+        last_done_label=summary.last_done_label,
+        next_label=summary.next_label,
+        funnel_done=summary.funnel_done,
+        youtube_done=summary.youtube_done,
+    )
 
 
 def sibling_project_name(
@@ -67,86 +232,39 @@ def missing_sibling_languages(
     return [lang for lang in BRIEF_LANGUAGE_CHOICES if lang not in occupied]
 
 
-def auto_run_pipeline_complete(project: Project) -> bool:
-    """True wenn Brief→YouTube für skip-done schon erledigt wären."""
+def auto_run_pipeline_complete(
+    project: Project,
+    *,
+    stop_after: str = "youtube",
+) -> bool:
+    """True wenn Brief→Funnel bzw. Brief→YouTube für skip-done schon erledigt wären."""
     try:
-        from otio_app.services.voiceover_generation.intro_hook_service import (
-            load_confirmed_intro_hook,
-        )
-        from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
-            list_chapter_audio_statuses,
-        )
-        from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
-            list_chapters_needing_python_timing,
-            list_chapters_needing_unified_cut,
-        )
-        from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service import (
-            list_music_generation_targets,
-            music_ui_status_chapter,
-            music_ui_status_intro,
-        )
-        from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
-            intro_resolved_timeline_path,
-            intro_unified_cut_plan_path,
-        )
-        from otio_app.services.without_voiceover_enhanced.io_utils import load_model
-        from otio_app.services.without_voiceover_enhanced.models import (
-            UnifiedCutPlanDocument,
-        )
-        from otio_app.services.without_voiceover_enhanced.paths import exports_dir
-        from otio_app.services.without_voiceover_enhanced.script_lock_service import (
-            load_locked_script,
-        )
-        from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
-            list_open_funnel_gap_ids,
-        )
-
-        if load_locked_script(project) is None:
-            return False
-        if load_confirmed_intro_hook(project) is None:
-            return False
-        intro = load_model(
-            intro_unified_cut_plan_path(project), UnifiedCutPlanDocument
-        )
-        if intro is None or not list(getattr(intro, "slots", None) or []):
-            return False
-        if list_chapters_needing_unified_cut(project):
-            return False
-        statuses = list_chapter_audio_statuses(project)
-        if not statuses:
-            return False
-        if any(row.is_open for row in statuses):
-            return False
-        if list_open_funnel_gap_ids(project):
-            return False
-        if not intro_resolved_timeline_path(project).is_file():
-            return False
-        if list_chapters_needing_python_timing(project):
-            return False
-        for kind, folder in list_music_generation_targets(project):
-            if kind == "intro":
-                music_status = music_ui_status_intro(project)
-            else:
-                music_status = music_ui_status_chapter(project, folder)
-            if str(music_status.get("status") or "") != "completed":
-                return False
-        otio_path = exports_dir(project) / f"{project.name}_enhanced.otio"
-        if not otio_path.is_file():
-            return False
         from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
-            youtube_publish_complete,
+            pipeline_complete_through,
         )
 
-        return youtube_publish_complete(project)
+        return bool(pipeline_complete_through(project, stop_after))
+    except TypeError:
+        return False
     except Exception:  # noqa: BLE001 — unfertiges Projekt zählt als offen
         return False
+
+
+def _is_pipeline_complete(project: Project, stop_after: str = "youtube") -> bool:
+    try:
+        return bool(auto_run_pipeline_complete(project, stop_after=stop_after))
+    except TypeError:
+        return bool(auto_run_pipeline_complete(project))
 
 
 def open_languages_for_auto_run(
     project: Project,
     siblings: list[Project] | None = None,
+    *,
+    stop_after: str = "youtube",
+    include_current: bool = False,
 ) -> list[str]:
-    """Andere Sprachen ohne fertigen Auto-Lauf (fehlend oder unfertig)."""
+    """Sprachen ohne fertigen Auto-Lauf (fehlend oder unfertig) für das Ziel."""
     current = normalize_brief_language(project.language)
     rows = siblings
     if rows is None:
@@ -159,10 +277,10 @@ def open_languages_for_auto_run(
         by_lang[key] = item
     open_langs: list[str] = []
     for lang in BRIEF_LANGUAGE_CHOICES:
-        if lang == current:
+        if lang == current and not include_current:
             continue
         existing = by_lang.get(lang)
-        if existing is None or not auto_run_pipeline_complete(existing):
+        if existing is None or not _is_pipeline_complete(existing, stop_after):
             open_langs.append(lang)
     return open_langs
 
@@ -188,6 +306,15 @@ def resolve_sibling_project(
 ) -> Project:
     """Vorhandenes Geschwisterprojekt oder neu anlegen — ohne Auto-Lauf."""
     target = normalize_brief_language(language)
+    current = normalize_brief_language(source.language)
+    if target == current:
+        existing = find_project_by_root_and_language(
+            source.project_root,
+            target,
+            db_path=db_path,
+            project_mode=source.project_mode,
+        )
+        return existing or source
     existing = find_project_by_root_and_language(
         source.project_root,
         target,

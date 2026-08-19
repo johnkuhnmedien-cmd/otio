@@ -35,6 +35,7 @@ class _FakeAuto:
         self.cancelled: list[str] = []
         self._lock = threading.Lock()
         self.started_event = threading.Event()
+        self.stop_afters: list[str] = []
 
     def any_running(self) -> bool:
         with self._lock:
@@ -56,8 +57,9 @@ class _FakeAuto:
         self._finish(project_id, "cancelled", error="gestoppt")
         return True
 
-    def start(self, project) -> bool:
+    def start(self, project, *, stop_after: str = "youtube", **_kwargs) -> bool:
         pid = project.id
+        self.stop_afters.append(stop_after)
         with self._lock:
             if self.running:
                 raise AssertionError(
@@ -131,7 +133,7 @@ def reset_queue_singleton() -> None:
 def patch_incomplete(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "otio_app.services.language_auto_run_queue.auto_run_pipeline_complete",
-        lambda _project: False,
+        lambda _project, **_kwargs: False,
     )
 
 
@@ -221,7 +223,7 @@ def test_queue_clones_remaining_languages_after_failure(
 ) -> None:
     monkeypatch.setattr(
         "otio_app.services.language_auto_run_queue.auto_run_pipeline_complete",
-        lambda _project: False,
+        lambda _project, **_kwargs: False,
     )
     work = temp_project_layout["project_root"] / "_otio_enhanced"
     source = create_project(
@@ -264,7 +266,7 @@ def test_queue_skips_already_complete_language(monkeypatch) -> None:
         "PT": SimpleNamespace(id="pt-proj", name="PT_Test", language="pt"),
     }
 
-    def fake_complete(project) -> bool:
+    def fake_complete(project, **_kwargs) -> bool:
         return project.id == "en-proj"
 
     monkeypatch.setattr(
@@ -281,16 +283,53 @@ def test_queue_skips_already_complete_language(monkeypatch) -> None:
     assert state.completed_languages == ["EN", "PT"]
 
 
-def test_queue_rejects_empty_or_current_only_languages() -> None:
+def test_queue_rejects_empty_languages() -> None:
     source = _source()
     manager = LanguageAutoRunQueueJobManager(
         auto_run_manager_factory=lambda: _FakeAuto(),
         load_project=lambda _pid: source,
     )
-    with pytest.raises(ValueError, match="Keine offenen Sprachen"):
+    with pytest.raises(ValueError, match="Keine Sprachen"):
         manager.start(source, [])
-    with pytest.raises(ValueError, match="Keine offenen Sprachen"):
-        manager.start(source, ["DE"])
+
+
+def test_queue_runs_source_language_when_selected(patch_incomplete) -> None:
+    source = _source()
+    fake = _FakeAuto()
+    manager = LanguageAutoRunQueueJobManager(
+        poll_interval_s=0.01,
+        auto_run_manager_factory=lambda: fake,
+        load_project=lambda pid: source if pid == source.id else None,
+        resolve_sibling=lambda src, lang: src
+        if normalize_brief_language(lang) == "DE"
+        else siblings_unused(lang),
+    )
+    manager.start(source, ["DE"])
+    state = _wait_queue(manager, source.id)
+    assert state is not None
+    assert state.status == "completed"
+    assert fake.started == ["de-source"]
+    assert fake.stop_afters == ["youtube"]
+    assert state.completed_languages == ["DE"]
+
+
+def siblings_unused(lang: str):
+    raise AssertionError(f"unerwartete Sprache {lang}")
+
+
+def test_queue_passes_funnel_stop_after(patch_incomplete) -> None:
+    source = _source()
+    siblings = {
+        "EN": SimpleNamespace(id="en-proj", name="EN_Test", language="en"),
+    }
+    fake = _FakeAuto()
+    manager = _manager(fake, siblings, source)
+    manager.start(source, ["EN"], stop_after="funnel")
+    state = _wait_queue(manager, source.id)
+    assert state is not None
+    assert state.status == "completed"
+    assert state.stop_after == "funnel"
+    assert fake.stop_afters == ["funnel"]
 
 
 def test_job_registry_and_auto_run_ui_include_queue() -> None:

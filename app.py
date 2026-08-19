@@ -37,7 +37,8 @@ from otio_app.project_repository import (
     list_projects,
     update_project_video_place,
 )
-from otio_app.ui.language_sibling_ui import render_language_sibling_actions
+from otio_app.ui.language_sibling_ui import render_enhanced_saved_family
+from otio_app.services.language_sibling_project import group_saved_projects
 from otio_app.ui.active_project_session import set_active_project_id
 from otio_app.ui.navigation import PAGE_ANALYSIS
 from otio_app.ui.routing import PENDING_SWITCH_URL_PATH_KEY, run_app_navigation
@@ -633,101 +634,95 @@ def render_project_list_page() -> None:
         st.info("Noch keine Projekte gespeichert.")
         return
 
-    siblings_by_key: dict[tuple[str, str], list] = {}
-    for item in projects:
-        key = (item.project_root, item.project_mode.value)
-        siblings_by_key.setdefault(key, []).append(item)
-
-    for project in projects:
+    st.caption(
+        "Enhanced-Projekte desselben Medienordners stehen auf **einer** Karte — "
+        "mit Stand je Sprache und Auto-Lauf bis Supplement-Funnel oder YouTube."
+    )
+    for group in group_saved_projects(projects):
         with st.container(border=True):
-            st.markdown(
-                f"**{project.name}** · `{project.status.value}` · "
-                f"{project.language.upper()} · "
-                f"{PROJECT_MODE_LABELS[project.project_mode.value]}"
+            if group.grouped:
+                render_enhanced_saved_family(group)
+            else:
+                _render_single_saved_project(group.representative)
+
+
+def _render_single_saved_project(project) -> None:
+    st.markdown(
+        f"**{project.name}** · `{project.status.value}` · "
+        f"{project.language.upper()} · "
+        f"{PROJECT_MODE_LABELS[project.project_mode.value]}"
+    )
+    with st.expander("Details"):
+        st.write(f"**ID:** `{project.id}`")
+        st.write(f"**Projektmodus:** {PROJECT_MODE_LABELS[project.project_mode.value]}")
+        st.write(f"**Projektordner:** `{project.project_root}`")
+        st.write(f"**Arbeitsordner:** `{project.work_dir}`")
+        if not project.is_without_voiceover:
+            st.write(f"**🎙️ Voice-over-Ordner:** `{project.voice_over_subdir}`")
+            st.write(f"**🎙️ Voice-over Audios:** `{project.voice_over_dir}`")
+        st.write(
+            f"**Gefundene Ordner ({len(project.asset_subdir_names)}):** "
+            + (
+                ", ".join(f"`{n}`" for n in project.asset_subdir_names)
+                if project.asset_subdir_names
+                else "—"
             )
-            render_language_sibling_actions(
-                project,
-                siblings=siblings_by_key.get(
-                    (project.project_root, project.project_mode.value),
-                    [project],
-                ),
+        )
+        st.write(
+            f"**Zu bearbeiten ({len(project.selected_asset_subdirs)}):** "
+            + (
+                ", ".join(f"`{n}`" for n in project.selected_asset_subdirs)
+                if project.selected_asset_subdirs
+                else "—"
             )
-            with st.expander("Details"):
-                st.write(f"**ID:** `{project.id}`")
-                st.write(f"**Projektmodus:** {PROJECT_MODE_LABELS[project.project_mode.value]}")
-                st.write(f"**Projektordner:** `{project.project_root}`")
-                st.write(f"**Arbeitsordner:** `{project.work_dir}`")
-                if not project.is_without_voiceover:
-                    st.write(f"**🎙️ Voice-over-Ordner:** `{project.voice_over_subdir}`")
-                    st.write(f"**🎙️ Voice-over Audios:** `{project.voice_over_dir}`")
-                st.write(
-                    f"**Gefundene Ordner ({len(project.asset_subdir_names)}):** "
-                    + (
-                        ", ".join(f"`{n}`" for n in project.asset_subdir_names)
-                        if project.asset_subdir_names
-                        else "—"
-                    )
-                )
-                st.write(
-                    f"**Zu bearbeiten ({len(project.selected_asset_subdirs)}):** "
-                    + (
-                        ", ".join(f"`{n}`" for n in project.selected_asset_subdirs)
-                        if project.selected_asset_subdirs
-                        else "—"
-                    )
-                )
-                try:
-                    voice_analysis_display = str(project.voice_analysis_path)
-                except OSError as exc:
-                    # z. B. externe SSD nicht gemountet / Permission denied
-                    voice_analysis_display = (
-                        f"(Pfad nicht erreichbar: {project.work_dir} — {exc})"
-                    )
-                st.write(
-                    f"**Geplante Ausgaben:** `{project.inventory_dir}/<Ordner>.json`, "
-                    f"`{voice_analysis_display}`"
-                )
-                st.write(
-                    f"**Land / Region:** {project.video_place or '—'}"
-                )
-                st.write(
-                    f"**Vorgaben:** {project.language}, {project.frames_per_shot} Frames/Shot, "
-                    f"{project.fps} fps, {project.width}×{project.height}, "
-                    f"{project.aspect_ratio}, {project.target_platform}"
-                )
-                place_key = f"list_video_place_{project.id}"
-                if place_key not in st.session_state:
-                    st.session_state[place_key] = project.video_place
-                edited_place = st.text_input(
-                    "Land / Region nachtragen",
-                    key=place_key,
-                    help="Für bestehende Projekte, die noch kein Land/Region haben.",
-                )
-                if st.button("Land / Region speichern", key=f"save_video_place_{project.id}"):
-                    if not edited_place.strip():
-                        st.error("Land / Region darf nicht leer sein.")
-                    else:
-                        update_project_video_place(project.id, edited_place)
-                        st.success("Land / Region gespeichert.")
-                        st.rerun()
-                if project.notes:
-                    st.write(f"**Notizen:** {project.notes}")
-                st.caption(
-                    f"Erstellt: {project.created_at.isoformat()} · "
-                    f"Aktualisiert: {project.updated_at.isoformat()}"
-                )
-                if st.button("Projekt bearbeiten", key=f"open_{project.id}"):
-                    # Aktives Projekt setzen (Navigation/Modus hängen daran).
-                    set_active_project_id(project.id)
-                    st.session_state["workbench_project_id"] = project.id
-                    if hasattr(st, "navigation") and hasattr(st, "switch_page"):
-                        # String-"analysen" scheitert mit st.navigation — Page-Objekt
-                        # wird in run_app_navigation aufgelöst.
-                        st.session_state[PENDING_SWITCH_URL_PATH_KEY] = "analysen"
-                        st.rerun()
-                    else:
-                        st.session_state["sidebar_nav"] = PAGE_WORK
-                        st.rerun()
+        )
+        try:
+            voice_analysis_display = str(project.voice_analysis_path)
+        except OSError as exc:
+            # z. B. externe SSD nicht gemountet / Permission denied
+            voice_analysis_display = (
+                f"(Pfad nicht erreichbar: {project.work_dir} — {exc})"
+            )
+        st.write(
+            f"**Geplante Ausgaben:** `{project.inventory_dir}/<Ordner>.json`, "
+            f"`{voice_analysis_display}`"
+        )
+        st.write(f"**Land / Region:** {project.video_place or '—'}")
+        st.write(
+            f"**Vorgaben:** {project.language}, {project.frames_per_shot} Frames/Shot, "
+            f"{project.fps} fps, {project.width}×{project.height}, "
+            f"{project.aspect_ratio}, {project.target_platform}"
+        )
+        place_key = f"list_video_place_{project.id}"
+        if place_key not in st.session_state:
+            st.session_state[place_key] = project.video_place
+        edited_place = st.text_input(
+            "Land / Region nachtragen",
+            key=place_key,
+            help="Für bestehende Projekte, die noch kein Land/Region haben.",
+        )
+        if st.button("Land / Region speichern", key=f"save_video_place_{project.id}"):
+            if not edited_place.strip():
+                st.error("Land / Region darf nicht leer sein.")
+            else:
+                update_project_video_place(project.id, edited_place)
+                st.success("Land / Region gespeichert.")
+                st.rerun()
+        if project.notes:
+            st.write(f"**Notizen:** {project.notes}")
+        st.caption(
+            f"Erstellt: {project.created_at.isoformat()} · "
+            f"Aktualisiert: {project.updated_at.isoformat()}"
+        )
+        if st.button("Projekt bearbeiten", key=f"open_{project.id}"):
+            set_active_project_id(project.id)
+            st.session_state["workbench_project_id"] = project.id
+            if hasattr(st, "navigation") and hasattr(st, "switch_page"):
+                st.session_state[PENDING_SWITCH_URL_PATH_KEY] = "analysen"
+                st.rerun()
+            else:
+                st.session_state["sidebar_nav"] = PAGE_WORK
+                st.rerun()
 
 
 # Evidence-only (ADOBE-STOCK-LICENSING-DIAG-002-R1-EVIDENCE-02):

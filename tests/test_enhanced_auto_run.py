@@ -463,6 +463,99 @@ def test_auto_run_skips_completed_steps(
     assert "youtube" in report.skipped
 
 
+def test_auto_run_stop_after_funnel_skips_timing_and_youtube(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    folders = list(project.selected_asset_subdirs)
+    _seed_brief(project, title="Schon da")
+    _seed_raw_style(project)
+    _seed_dramaturgy(project, folders)
+    _seed_scripts_and_lock(project, folders)
+    save_confirmed_intro_hook(
+        project,
+        ConfirmedIntroHook(
+            project_id=project.id,
+            language="PT",
+            hook_id="h1",
+            hook_text="Intro-Text ohne Ziffern.",
+        ),
+    )
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("LLM/TTS darf bei skip-done nicht laufen")
+
+    monkeypatch.setattr(auto_run, "generate_video_title", boom)
+    monkeypatch.setattr(auto_run, "build_dramaturgy_plan", boom)
+    monkeypatch.setattr(auto_run, "generate_enhanced_script_for_folder", boom)
+    monkeypatch.setattr(auto_run, "revise_enhanced_script_for_folder", boom)
+    monkeypatch.setattr(auto_run, "build_intro_hook_candidates", boom)
+    monkeypatch.setattr(auto_run, "synthesize_open_chapters_audio", boom)
+    monkeypatch.setattr(auto_run, "generate_intro_unified_cut", boom)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", boom)
+    monkeypatch.setattr(
+        auto_run,
+        "list_chapter_audio_statuses",
+        lambda _p: [MagicMock(is_open=False)],
+    )
+    monkeypatch.setattr(auto_run, "list_chapters_needing_unified_cut", lambda _p: [])
+
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        intro_unified_cut_plan_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+    from otio_app.services.without_voiceover_enhanced.models import (
+        CutBoundary,
+        CutSlot,
+        UnifiedCutPlanDocument,
+    )
+
+    write_json(
+        intro_unified_cut_plan_path(project),
+        UnifiedCutPlanDocument(
+            script_version="script-v1",
+            boundaries=[
+                CutBoundary(
+                    cut_id="intro_cut_000",
+                    sentence_id="s1",
+                    position="start",
+                ),
+                CutBoundary(
+                    cut_id="intro_cut_001",
+                    sentence_id="s1",
+                    position="end",
+                ),
+            ],
+            slots=[
+                CutSlot(
+                    slot_id="intro_slot_001",
+                    local_asset_id="a1",
+                    asset_fit="strong",
+                    asset_fit_reason="test",
+                    visual_intent="open",
+                )
+            ],
+        ),
+    )
+    _stub_auto_run_tail(monkeypatch, skip_all=True)
+
+    def too_far(*_args, **_kwargs):
+        raise AssertionError("nach Funnel darf nichts mehr laufen")
+
+    monkeypatch.setattr(auto_run, "_run_timing", too_far)
+    monkeypatch.setattr(auto_run, "_run_music", too_far)
+    monkeypatch.setattr(auto_run, "_run_otio", too_far)
+    monkeypatch.setattr(auto_run, "_run_youtube", too_far)
+    report = run_enhanced_auto_pipeline(
+        project, skip_done=True, stop_after="funnel"
+    )
+    assert report.stopped is False
+    assert "funnel" in report.skipped
+    assert "timing" not in report.skipped
+    assert "youtube" not in report.skipped
+    assert "youtube" not in report.completed
+
+
 def test_auto_run_is_strictly_sequential(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -839,6 +932,16 @@ def test_auto_run_steps_include_tail_through_youtube() -> None:
     assert ids[-2] == "otio"
 
 
+def test_auto_run_stop_after_helpers() -> None:
+    assert auto_run.normalize_auto_run_stop_after("supplement_funnel") == "funnel"
+    assert auto_run.normalize_auto_run_stop_after(None) == "youtube"
+    funnel_ids = auto_run.auto_run_steps_through("funnel")
+    assert funnel_ids[-1] == "funnel"
+    assert "timing" not in funnel_ids
+    assert "youtube" not in funnel_ids
+    assert auto_run.auto_run_steps_through("youtube")[-1] == "youtube"
+
+
 def test_auto_run_status_overview_covers_every_step(tmp_path: Path) -> None:
     project = _project(tmp_path)
     rows = auto_run.list_auto_run_step_statuses(project)
@@ -1025,6 +1128,8 @@ def test_auto_run_ui_exports_page_and_banner() -> None:
     assert "_render_auto_run_status_overview" in source
     assert "Statusübersicht" in source
     assert "YouTube Publish" in source
+    assert "bis Funnel" in source
+    assert "bis YouTube" in source
     assert "Auto-Lauf fehlgeschlagen —" in source
 
 

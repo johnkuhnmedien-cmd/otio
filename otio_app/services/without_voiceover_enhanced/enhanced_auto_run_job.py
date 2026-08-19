@@ -16,11 +16,14 @@ from otio_app.services.analysis_cancel import (
 )
 from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
     AUTO_RUN_STEPS,
+    AUTO_RUN_STOP_AFTER_YOUTUBE,
     AutoRunProgress,
     EnhancedAutoRunCancelled,
     EnhancedAutoRunError,
     EnhancedAutoRunReport,
+    auto_run_steps_through,
     format_auto_run_failure_message,
+    normalize_auto_run_stop_after,
     run_enhanced_auto_pipeline,
 )
 
@@ -53,6 +56,7 @@ class EnhancedAutoRunJobState:
     error: str | None = None
     report: EnhancedAutoRunReport | None = None
     run_id: int = 0
+    stop_after: str = AUTO_RUN_STOP_AFTER_YOUTUBE
 
 
 class EnhancedAutoRunJobManager:
@@ -141,8 +145,14 @@ class EnhancedAutoRunJobManager:
                 self._cancel_events.pop(project_id, None)
                 self._threads.pop(project_id, None)
 
-    def start(self, project: Project) -> bool:
+    def start(
+        self,
+        project: Project,
+        *,
+        stop_after: str = AUTO_RUN_STOP_AFTER_YOUTUBE,
+    ) -> bool:
         self.reconcile_stuck_job(project.id)
+        stop_after = normalize_auto_run_stop_after(stop_after)
         with self._lock:
             for pid, job in self._jobs.items():
                 if pid == project.id or job.status != JobStatus.RUNNING:
@@ -165,7 +175,9 @@ class EnhancedAutoRunJobManager:
                 project_id=project.id,
                 status=JobStatus.RUNNING,
                 message="Auto-Lauf startet…",
+                step_total=len(auto_run_steps_through(stop_after)),
                 run_id=run_id,
+                stop_after=stop_after,
             )
 
         clear_cancel_flag(project, JOB_KIND)
@@ -207,6 +219,7 @@ class EnhancedAutoRunJobManager:
                     should_cancel=should_cancel,
                     on_progress=on_progress,
                     skip_done=True,
+                    stop_after=stop_after,
                 )
                 with self._lock:
                     job = self._jobs.get(project_id)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -19,6 +19,10 @@ from otio_app.services.language_sibling_project import (
 )
 from otio_app.services.voiceover_generation.project_brief_defaults_service import (
     normalize_brief_language,
+)
+from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+    AUTO_RUN_STOP_AFTER_YOUTUBE,
+    normalize_auto_run_stop_after,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +56,7 @@ class LanguageAutoRunQueueState:
     finished_at: str | None = None
     status: str = "idle"
     cancel_requested: bool = False
+    stop_after: str = AUTO_RUN_STOP_AFTER_YOUTUBE
 
 
 class LanguageAutoRunQueueBusyError(RuntimeError):
@@ -91,6 +96,8 @@ class LanguageAutoRunQueueJobManager:
         self,
         source: Project,
         languages: list[str] | None = None,
+        *,
+        stop_after: str = AUTO_RUN_STOP_AFTER_YOUTUBE,
     ) -> LanguageAutoRunQueueState:
         if not source.is_without_voiceover_enhanced:
             raise LanguageSiblingError(
@@ -101,17 +108,20 @@ class LanguageAutoRunQueueJobManager:
                 "Kein Land/Region am Projekt — zuerst unter Gespeicherte Projekte eintragen."
             )
         source_id = str(source.id)
-        source_lang = normalize_brief_language(source.language)
+        stop_after = normalize_auto_run_stop_after(stop_after)
         if languages is None:
-            languages = open_languages_for_auto_run(source)
+            languages = open_languages_for_auto_run(
+                source,
+                stop_after=stop_after,
+                include_current=True,
+            )
         languages = [
             normalize_brief_language(lang)
             for lang in languages
             if str(lang).strip()
         ]
-        languages = [lang for lang in languages if lang != source_lang]
         if not languages:
-            raise ValueError("Keine offenen Sprachen für den sequenziellen Auto-Lauf.")
+            raise ValueError("Keine Sprachen für den sequenziellen Auto-Lauf.")
 
         auto_manager = self._auto_manager()
         if _manager_any_running(auto_manager):
@@ -134,6 +144,7 @@ class LanguageAutoRunQueueJobManager:
                 current_index=0,
                 started_at=_now_iso(),
                 status="running",
+                stop_after=stop_after,
             )
             self._states[source_id] = state
             self._cancel[source_id] = False
@@ -206,7 +217,24 @@ class LanguageAutoRunQueueJobManager:
                 finished_at=state.finished_at,
                 status=state.status,
                 cancel_requested=state.cancel_requested,
+                stop_after=state.stop_after,
             )
+
+    def get_state_for_projects(
+        self,
+        projects: Sequence[Project],
+    ) -> LanguageAutoRunQueueState | None:
+        """Queue-Stand für eine Familie — laufend vor abgeschlossen."""
+        fallback: LanguageAutoRunQueueState | None = None
+        for project in projects:
+            state = self.get_state(str(project.id))
+            if state is None:
+                continue
+            if state.status == "running":
+                return state
+            if fallback is None:
+                fallback = state
+        return fallback
 
     def thread_alive(self, source_project_id: str) -> bool | None:
         with self._lock:
@@ -277,6 +305,7 @@ class LanguageAutoRunQueueJobManager:
                 return
             with self._lock:
                 languages = list(self._states[source_id].languages)
+                stop_after = self._states[source_id].stop_after
             for index, language in enumerate(languages):
                 if self._is_cancelled(source_id):
                     self._mark_cancelled(source_id)
@@ -297,7 +326,7 @@ class LanguageAutoRunQueueJobManager:
                     continue
                 with self._lock:
                     self._states[source_id].current_project_id = sibling.id
-                if auto_run_pipeline_complete(sibling):
+                if _pipeline_complete(sibling, stop_after):
                     with self._lock:
                         self._states[source_id].completed_languages.append(language)
                     continue
@@ -305,7 +334,7 @@ class LanguageAutoRunQueueJobManager:
                     self._mark_cancelled(source_id)
                     return
                 try:
-                    started = auto_manager.start(sibling)
+                    started = _start_auto_run(auto_manager, sibling, stop_after)
                 except Exception as exc:  # noqa: BLE001
                     logger.exception(
                         "Sprachen-Queue: Auto-Lauf für %s konnte nicht starten",
@@ -432,6 +461,21 @@ class LanguageAutoRunQueueJobManager:
                 state.error = None
             state.finished_at = _now_iso()
             self._threads.pop(source_id, None)
+
+
+def _pipeline_complete(project: Project, stop_after: str) -> bool:
+    try:
+        return bool(auto_run_pipeline_complete(project, stop_after=stop_after))
+    except TypeError:
+        return bool(auto_run_pipeline_complete(project))
+
+
+def _start_auto_run(manager: object, project: Project, stop_after: str) -> bool:
+    start = getattr(manager, "start")
+    try:
+        return bool(start(project, stop_after=stop_after))
+    except TypeError:
+        return bool(start(project))
 
 
 def _manager_any_running(manager: object) -> bool:
