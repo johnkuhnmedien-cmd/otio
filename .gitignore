@@ -26,6 +26,10 @@ proxies/
 exports/
 *.otio
 
+# Vendored Remotion map renderer (install/cache only)
+otio_app/services/without_voiceover_enhanced/maps/remotion_renderer/node_modules/
+otio_app/services/without_voiceover_enhanced/maps/remotion_renderer/.cache/
+
 # OS / IDE
 .DS_Store
 .idea/

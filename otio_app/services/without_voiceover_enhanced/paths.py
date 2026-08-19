@@ -62,6 +62,8 @@ MAP_PLAN_FILENAME = "map_plan.json"
 MAP_COORDINATES_FILENAME = "map_coordinates.json"
 MAP_SETTINGS_FILENAME = "map_settings.json"
 MAP_OUTPUT_SUBDIR = "output"
+MAP_RENDER_JOB_FILENAME = "map_render_job.json"
+MAP_RENDER_CACHE_SUBDIR = "render-cache"
 
 
 def assert_enhanced_work_root(project: Project) -> Path:
@@ -177,6 +179,26 @@ def map_settings_path(project: Project) -> Path:
 
 def map_output_dir(project: Project) -> Path:
     return maps_dir(project) / MAP_OUTPUT_SUBDIR
+
+
+def map_render_job_path(project: Project, *, create: bool = False) -> Path:
+    """Pfad zur Karten-Jobdatei.
+
+    ``create=False`` (Default, Job-Reconcile/Status): kein mkdir, keine
+    Language-Migration. Sonst legt jeder Tabwechsel Ordner für alle Projekte an.
+    """
+    if create:
+        return maps_dir(project) / MAP_RENDER_JOB_FILENAME
+    from otio_app.project_layout import get_language_work_dir
+
+    work = project.work_dir_path
+    if work.name != DEFAULT_ENHANCED_WORK_SUBDIR:
+        return work / MAPS_SUBDIR / MAP_RENDER_JOB_FILENAME
+    return get_language_work_dir(work, project.language) / MAPS_SUBDIR / MAP_RENDER_JOB_FILENAME
+
+
+def map_render_cache_dir(project: Project) -> Path:
+    return maps_dir(project) / MAP_RENDER_CACHE_SUBDIR
 
 
 def exports_dir(project: Project) -> Path:

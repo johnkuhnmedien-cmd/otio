@@ -1,14 +1,11 @@
-"""Kartenplanung für OTIO Enhanced — isoliert, ohne Auto-Lauf.
-
-Phase 1 erzeugt nur den deterministischen Plan und die Koordinaten-UI.
-Rendern (Remotion/Thomas) kommt in Phase 2 und startet nur per Klick.
+"""Kartenplanung und -render für OTIO Enhanced — isoliert, ohne Auto-Lauf.
 
 Kapitel-ID ist der Original-``folder_name`` aus der bestätigten Dramaturgie.
-Karten gehören nicht zum Auto-Lauf, damit nichts ohne ausdrücklichen Klick
-gerendert oder überschrieben wird.
+Karten gehören nicht zum Auto-Lauf. Rendern startet nur per Klick.
 """
 
 from otio_app.services.without_voiceover_enhanced.maps.models import (
+    COORDINATE_STATUS_CONFIRMED,
     COORDINATE_STATUS_MANUAL,
     COORDINATE_STATUS_MISSING,
     COORDINATE_STATUS_NEEDS_REVIEW,
@@ -22,6 +19,7 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
     MAP_MAX_PARALLEL_HD,
     MAP_RESOLUTION_4K,
     MAP_RESOLUTION_HD,
+    RENDER_STATUS_LABELS,
     MapCoordinateRecord,
     MapCoordinatesDocument,
     MapPlanDocument,
@@ -30,8 +28,23 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
 )
 from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
     GeocodeError,
+    GeocodeProgress,
+    friendly_geocode_error,
     lookup_missing_coordinates,
     nominatim_geocode,
+    NOMINATIM_USER_AGENT,
+)
+from otio_app.services.without_voiceover_enhanced.maps.map_render_job import (
+    get_map_render_job_manager,
+)
+from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
+    remotion_payload,
+)
+from otio_app.services.without_voiceover_enhanced.maps.render_service import (
+    MapRenderError,
+    MapRenderer,
+    packaged_renderer_root,
+    selectable_maps,
 )
 from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     MapPlanError,
@@ -39,6 +52,7 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     build_map_plan,
     clamp_max_parallel,
     compute_plan_hash,
+    confirm_map_place_coordinates,
     dramaturgy_fingerprint,
     load_map_coordinates,
     load_map_plan,
@@ -46,14 +60,17 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     map_heading,
     map_language_prefix,
     map_output_filename,
+    rebuild_saved_map_plan,
     save_map_coordinates,
     save_map_plan,
     save_map_settings,
+    status_after_saving_coordinates,
     unique_chapter_places,
     update_coordinate_record,
 )
 
 __all__ = [
+    "COORDINATE_STATUS_CONFIRMED",
     "COORDINATE_STATUS_MANUAL",
     "COORDINATE_STATUS_MISSING",
     "COORDINATE_STATUS_NEEDS_REVIEW",
@@ -67,10 +84,14 @@ __all__ = [
     "MAP_MAX_PARALLEL_HD",
     "MAP_RESOLUTION_4K",
     "MAP_RESOLUTION_HD",
+    "RENDER_STATUS_LABELS",
     "MapCoordinateRecord",
     "MapCoordinatesDocument",
     "MapPlanDocument",
     "GeocodeError",
+    "GeocodeProgress",
+    "NOMINATIM_USER_AGENT",
+    "friendly_geocode_error",
     "MapPlanError",
     "MapPlanItem",
     "MapRenderSettings",
@@ -78,6 +99,7 @@ __all__ = [
     "build_map_plan",
     "clamp_max_parallel",
     "compute_plan_hash",
+    "confirm_map_place_coordinates",
     "dramaturgy_fingerprint",
     "load_map_coordinates",
     "load_map_plan",
@@ -87,9 +109,17 @@ __all__ = [
     "map_language_prefix",
     "map_output_filename",
     "nominatim_geocode",
+    "rebuild_saved_map_plan",
     "save_map_coordinates",
     "save_map_plan",
     "save_map_settings",
+    "status_after_saving_coordinates",
+    "MapRenderError",
+    "MapRenderer",
+    "get_map_render_job_manager",
+    "packaged_renderer_root",
+    "remotion_payload",
+    "selectable_maps",
     "unique_chapter_places",
     "update_coordinate_record",
 ]

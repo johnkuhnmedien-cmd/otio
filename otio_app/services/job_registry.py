@@ -18,6 +18,9 @@ from otio_app.services.language_auto_run_queue import (
 from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job import (
     get_enhanced_auto_run_job_manager,
 )
+from otio_app.services.without_voiceover_enhanced.maps.map_render_job import (
+    get_map_render_job_manager,
+)
 from otio_app.services.without_voiceover_enhanced.supplement_funnel_job import (
     get_supplement_funnel_job_manager,
 )
@@ -57,13 +60,24 @@ def reconcile_all_jobs() -> None:
         pass
     clean_manager = get_clean_media_job_manager()
     for project in list_projects():
-        clean_manager.reconcile_stuck_job(project.id)
-        get_voice_analysis_job_manager().reconcile_stuck_job(project.id)
-        get_asset_analysis_job_manager().reconcile_stuck_job(project.id)
-        get_otio_export_job_manager().reconcile_stuck_job(project.id)
-        get_supplement_funnel_job_manager().reconcile_stuck_job(project.id)
-        get_enhanced_auto_run_job_manager().reconcile_stuck_job(project.id)
-        get_language_auto_run_queue_manager().reconcile_stuck_job(project.id)
+        for reconcile in (
+            clean_manager.reconcile_stuck_job,
+            get_voice_analysis_job_manager().reconcile_stuck_job,
+            get_asset_analysis_job_manager().reconcile_stuck_job,
+            get_otio_export_job_manager().reconcile_stuck_job,
+            get_supplement_funnel_job_manager().reconcile_stuck_job,
+            get_enhanced_auto_run_job_manager().reconcile_stuck_job,
+            get_language_auto_run_queue_manager().reconcile_stuck_job,
+        ):
+            try:
+                reconcile(project.id)
+            except Exception:  # noqa: BLE001 — ein Projekt darf Tabwechsel nicht crashen
+                continue
+        if project.is_without_voiceover_enhanced:
+            try:
+                get_map_render_job_manager().reconcile_stuck_job(project.id)
+            except Exception:  # noqa: BLE001
+                continue
 
 
 def any_job_running(project_id: str | None = None, *, reconcile: bool = True) -> bool:
@@ -76,6 +90,7 @@ def any_job_running(project_id: str | None = None, *, reconcile: bool = True) ->
         get_otio_export_job_manager(),
         get_supplement_funnel_job_manager(),
         get_enhanced_auto_run_job_manager(),
+        get_map_render_job_manager(),
         get_language_auto_run_queue_manager(),
     )
     if project_id is None:
@@ -187,6 +202,26 @@ def collect_job_activity() -> list[JobActivity]:
                 )
             )
 
+        map_state = None
+        if project.is_without_voiceover_enhanced:
+            try:
+                map_state = get_map_render_job_manager().get_state(project_id)
+            except Exception:  # noqa: BLE001
+                map_state = None
+        if map_state is not None:
+            done = sum(1 for item in map_state.items.values() if item.status == "done")
+            total = max(len(map_state.items), 1)
+            detail = map_state.message or f"{done}/{total} Karten"
+            activities.append(
+                JobActivity(
+                    kind="Karten",
+                    project_id=project_id,
+                    status=map_state.status.value,
+                    detail=detail,
+                    thread_alive=get_map_render_job_manager().thread_alive(project_id),
+                )
+            )
+
         queue_state = get_language_auto_run_queue_manager().get_state(project_id)
         if queue_state is not None:
             current = queue_state.current_language or "—"
@@ -218,6 +253,7 @@ def force_reset_all_jobs() -> int:
     otio_manager = get_otio_export_job_manager()
     funnel_manager = get_supplement_funnel_job_manager()
     auto_manager = get_enhanced_auto_run_job_manager()
+    map_manager = get_map_render_job_manager()
     queue_manager = get_language_auto_run_queue_manager()
     count += queue_manager.force_reset_all()
 
@@ -240,6 +276,9 @@ def force_reset_all_jobs() -> int:
             count += 1
         if auto_manager.is_running(project_id):
             auto_manager.force_reset(project_id)
+            count += 1
+        if map_manager.is_running(project_id):
+            map_manager.force_reset(project_id)
             count += 1
     return count
 
