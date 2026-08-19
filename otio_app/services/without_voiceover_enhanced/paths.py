@@ -57,6 +57,11 @@ SOUND_EFFECTS_CHAPTERS_SUBDIR = "chapters"
 SOUND_EFFECTS_AUDIO_SUBDIR = "audio"
 SFX_PLAN_FILENAME = "sfx_plan.json"
 SFX_RESULT_FILENAME = "sfx_result.json"
+MAPS_SUBDIR = "maps"
+MAP_PLAN_FILENAME = "map_plan.json"
+MAP_COORDINATES_FILENAME = "map_coordinates.json"
+MAP_SETTINGS_FILENAME = "map_settings.json"
+MAP_OUTPUT_SUBDIR = "output"
 
 
 def assert_enhanced_work_root(project: Project) -> Path:
@@ -150,6 +155,28 @@ def stock_providers_config_path(project: Project) -> Path:
 
 def cut_plan_options_path(project: Project) -> Path:
     return config_dir(project) / CUT_PLAN_OPTIONS_FILENAME
+
+
+def maps_dir(project: Project) -> Path:
+    """``_otio_enhanced/{LANG}/maps`` — Pläne, Koordinaten, spätere MP4s."""
+    assert_enhanced_work_root(project)
+    return project.language_work_dir_path / MAPS_SUBDIR
+
+
+def map_plan_path(project: Project) -> Path:
+    return maps_dir(project) / MAP_PLAN_FILENAME
+
+
+def map_coordinates_path(project: Project) -> Path:
+    return maps_dir(project) / MAP_COORDINATES_FILENAME
+
+
+def map_settings_path(project: Project) -> Path:
+    return maps_dir(project) / MAP_SETTINGS_FILENAME
+
+
+def map_output_dir(project: Project) -> Path:
+    return maps_dir(project) / MAP_OUTPUT_SUBDIR
 
 
 def exports_dir(project: Project) -> Path:

@@ -44,6 +44,7 @@ from otio_app.ui.without_voiceover_enhanced.auto_run_ui import (
 from otio_app.ui.without_voiceover_enhanced.folder_voiceovers_tab import (
     render_enhanced_folder_voiceovers_page,
 )
+from otio_app.ui.without_voiceover_enhanced.maps_tab import render_enhanced_maps_page
 
 
 _CURRENT_PAGE_KEY = "_otio_current_page"
@@ -311,6 +312,7 @@ def _build_without_voiceover_enhanced_pages(
         PAGE_FOLDER_VOICEOVERS,
         PAGE_INTRO,
         PAGE_LIST,
+        PAGE_MAPS,
         PAGE_NEW,
         PAGE_PROJECT_BRIEF,
         PAGE_STATUS,
@@ -375,6 +377,11 @@ def _build_without_voiceover_enhanced_pages(
             _wrap_page(PAGE_DRAMATURGY, render_dramaturgy_page),
             title=PAGE_DRAMATURGY,
             url_path="dramaturgie",
+        ),
+        st.Page(
+            _wrap_page(PAGE_MAPS, render_enhanced_maps_page),
+            title=PAGE_MAPS,
+            url_path="karten",
         ),
         st.Page(
             _wrap_page(PAGE_FOLDER_VOICEOVERS, render_enhanced_folder_voiceovers_page),
@@ -466,7 +473,7 @@ def run_app_navigation(
             render_new_project, render_project_list
         )
         workflow_caption = (
-            "Workflow (Enhanced MVP): ⓪ → ① → Brief → ② → ③ → ④ → ⑤ → "
+            "Workflow (Enhanced MVP): ⓪ → ① → Brief → ② → ③ → ③½ Karten → ④ → ⑤ → "
             "⑥ Audio → ⑦ Cut Plan → ⑧ Final Output"
         )
     elif mode == ProjectMode.WITHOUT_VOICEOVER:
@@ -521,6 +528,7 @@ def _run_legacy_pages(
         PAGE_FOLDER_VOICEOVERS,
         PAGE_INTRO,
         PAGE_LIST,
+        PAGE_MAPS,
         PAGE_MAPPING,
         PAGE_NEW,
         PAGE_PROJECT_BRIEF,
@@ -599,6 +607,8 @@ def _run_legacy_pages(
         _wrap_page(PAGE_STYLE_REFERENCES, render_style_references_page)()
     elif page == PAGE_DRAMATURGY:
         _wrap_page(PAGE_DRAMATURGY, render_dramaturgy_page)()
+    elif page == PAGE_MAPS:
+        _wrap_page(PAGE_MAPS, render_enhanced_maps_page)()
     elif page == PAGE_FOLDER_VOICEOVERS:
         if mode == ProjectMode.WITHOUT_VOICEOVER_ENHANCED:
             _wrap_page(PAGE_FOLDER_VOICEOVERS, render_enhanced_folder_voiceovers_page)()

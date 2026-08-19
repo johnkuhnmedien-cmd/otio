@@ -120,6 +120,7 @@ def test_without_voiceover_pages_replace_mapping_supplement_editplan() -> None:
     assert "② Zuordnung" not in titles
     assert "②½ Supplement Assets" not in titles
     assert "③ Schnittplan" not in titles
+    assert "③½ Karten" not in titles
 
 
 def test_without_voiceover_reuses_clean_media_and_analysis() -> None:
@@ -235,6 +236,7 @@ def test_enhanced_pages_cut_plan_before_final_output() -> None:
         "① Project Brief",
         "② Style References",
         "③ Dramaturgie",
+        "③½ Karten",
         "④ Folder Voice-overs",
         "⑤ Intro",
         "⑥ Audio / ElevenLabs",
@@ -245,6 +247,10 @@ def test_enhanced_pages_cut_plan_before_final_output() -> None:
     ]
     assert titles.index("⑦ Cut Plan") < titles.index("⑧ Final Output")
     assert titles.index("▶ Auto-Lauf") == titles.index("① Analysen") + 1
+    assert titles.index("③½ Karten") == titles.index("③ Dramaturgie") + 1
+    assert titles.index("④ Folder Voice-overs") == titles.index("③½ Karten") + 1
+    url_paths = [page.url_path for page in pages]
+    assert url_paths[url_paths.index("dramaturgie") + 1] == "karten"
 
 
 def test_active_project_mode_reads_enhanced_project(
