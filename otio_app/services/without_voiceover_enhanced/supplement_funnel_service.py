@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from otio_app.defaults import resolve_funnel_gemini_model
 from otio_app.models import Project
 from otio_app.services.api_keys import get_api_key, is_api_key_set
 from otio_app.services.gemini_client import describe_and_validate_supplement_asset
@@ -881,7 +882,7 @@ def run_supplement_funnel_for_gaps(
     )
     max_downloads = max(1, min(3, max_downloads))
     enabled = set(enabled_provider_names(project))
-    funnel_model = (model or DEFAULT_FUNNEL_MODEL).strip() or DEFAULT_FUNNEL_MODEL
+    funnel_model = resolve_funnel_gemini_model(model)
     if text_llm is None:
         text_llm = lambda prompt: default_funnel_text_llm(
             prompt, model=funnel_model

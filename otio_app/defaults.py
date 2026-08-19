@@ -252,6 +252,21 @@ ENHANCED_FUNNEL_LLM_MODEL_LABELS: dict[str, str] = {
     "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview — teurer, höchste Qualität",
 }
 
+
+def resolve_funnel_gemini_model(model: str | None) -> str:
+    """Nur die Funnel-Dropdown-IDs. Tote Aliase nicht an Gemini schicken.
+
+    ``gemini-1.5-flash`` steht nicht in der Funnel-Auswahl, kann aber noch in
+    ``model_settings.json`` oder in Streamlit-Session-State liegen. Der Job-
+    Monitor zeigt genau diese Zeichenkette — unabhängig vom Dropdown.
+    Ungültige IDs fallen auf den Funnel-Standard (3.5 Flash), nicht auf das
+    Analyse-Env-Modell (Flash Lite).
+    """
+    raw = (model or "").strip()
+    if raw in ENHANCED_FUNNEL_LLM_MODEL_CHOICES:
+        return raw
+    return VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_MODEL
+
 # --- Vereinfachte Modellauswahl: EIN Dropdown je Rolle (kein Freitext, keine
 # separate Provider-Spalte). Die IDs folgen exakt der Konvention von
 # resolve_llm_model_id()/split_llm_model_id()

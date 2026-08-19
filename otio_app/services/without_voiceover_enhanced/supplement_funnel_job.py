@@ -7,6 +7,7 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum
 
+from otio_app.defaults import resolve_funnel_gemini_model
 from otio_app.models import Project
 from otio_app.project_repository import get_project_by_id
 from otio_app.services.analysis_cancel import (
@@ -159,7 +160,7 @@ class SupplementFunnelJobManager:
                 project_id=project.id,
                 status=JobStatus.RUNNING,
                 gap_ids=list(gap_ids),
-                model=(model or "").strip(),
+                model=resolve_funnel_gemini_model(model),
                 message="Funnel startet…",
                 run_id=run_id,
             )
@@ -200,7 +201,9 @@ class SupplementFunnelJobManager:
 
                 with self._lock:
                     state = self._jobs.get(project_id)
-                    job_model = (state.model if state is not None else "").strip()
+                    job_model = resolve_funnel_gemini_model(
+                        state.model if state is not None else ""
+                    )
                     job_gaps = list(state.gap_ids) if state is not None else []
 
                 # Modulattribut: Smoke-/Monkeypatches auf funnel_svc greifen.

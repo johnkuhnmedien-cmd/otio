@@ -14,12 +14,14 @@ from otio_app.defaults import (
     VOICEOVER_GEN_DEFAULT_PROVIDER,
     VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL,
     VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER,
+    VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_PROVIDER,
     VOICEOVER_GEN_INTRO_DEFAULT_MODEL,
     VOICEOVER_GEN_INTRO_DEFAULT_PROVIDER,
     VOICEOVER_GEN_MODEL_CHOICES,
     VOICEOVER_GEN_MODEL_LABELS,
     VOICEOVER_GEN_MODEL_PRESETS,
     VOICEOVER_GEN_PROVIDERS,
+    resolve_funnel_gemini_model,
 )
 from otio_app.models import Project
 from otio_app.project_layout import get_model_settings_path
@@ -89,6 +91,30 @@ def upgrade_model_settings(
     return settings.model_copy(update=updates), True
 
 
+def _normalize_enhanced_funnel_role(
+    settings: VoiceoverGenerationModelSettings,
+) -> tuple[VoiceoverGenerationModelSettings, bool]:
+    """Ersetzt tote Funnel-IDs (z. B. gemini-1.5-flash) durch den Funnel-Standard.
+
+    Cut-Modelle bleiben unangetastet — nur ``enhanced_supplement_funnel``.
+    """
+    role = settings.enhanced_supplement_funnel
+    resolved = resolve_funnel_gemini_model(role.model)
+    if (
+        role.provider == VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_PROVIDER
+        and role.model == resolved
+    ):
+        return settings, False
+    return settings.model_copy(
+        update={
+            "enhanced_supplement_funnel": LlmRoleSettings(
+                provider=VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_PROVIDER,
+                model=resolved,
+            )
+        }
+    ), True
+
+
 def load_model_settings(project: Project) -> VoiceoverGenerationModelSettings:
     path = get_model_settings_path(project.language_work_dir_path)
     if not path.is_file():
@@ -99,7 +125,8 @@ def load_model_settings(project: Project) -> VoiceoverGenerationModelSettings:
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return default_model_settings()
     upgraded, changed = upgrade_model_settings(loaded)
-    if changed:
+    upgraded, funnel_changed = _normalize_enhanced_funnel_role(upgraded)
+    if changed or funnel_changed:
         save_model_settings(project, upgraded)
     return upgraded
 

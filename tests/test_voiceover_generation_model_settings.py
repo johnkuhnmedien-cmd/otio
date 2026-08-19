@@ -266,3 +266,40 @@ def test_load_keeps_explicit_intro_after_revision(tmp_path: Path) -> None:
     loaded = load_model_settings(project)
     assert loaded.intro.provider == "anthropic"
     assert loaded.intro.model == "claude-sonnet-5"
+
+
+def test_load_replaces_retired_funnel_gemini_15_without_touching_cut_models(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    path = get_model_settings_path(project.language_work_dir_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "settings_revision": MODEL_SETTINGS_REVISION,
+                "enhanced_supplement_funnel": {
+                    "provider": "gemini",
+                    "model": "gemini-1.5-flash",
+                },
+                "enhanced_rough_cut": {
+                    "provider": "openai",
+                    "model": "gpt-5.6-terra",
+                },
+                "enhanced_final_cut": {
+                    "provider": "openai",
+                    "model": "gpt-5.6-sol",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_model_settings(project)
+    assert loaded.enhanced_supplement_funnel.provider == "gemini"
+    assert loaded.enhanced_supplement_funnel.model == "gemini-3.5-flash"
+    assert loaded.enhanced_rough_cut.model == "gpt-5.6-terra"
+    assert loaded.enhanced_final_cut.model == "gpt-5.6-sol"
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["enhanced_supplement_funnel"]["model"] == "gemini-3.5-flash"
+    assert persisted["enhanced_rough_cut"]["model"] == "gpt-5.6-terra"
+    assert persisted["enhanced_final_cut"]["model"] == "gpt-5.6-sol"

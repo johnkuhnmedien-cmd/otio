@@ -12,6 +12,8 @@ from otio_app.defaults import (
     ENHANCED_CUT_LLM_MODEL_LABELS,
     ENHANCED_FUNNEL_LLM_MODEL_CHOICES,
     ENHANCED_FUNNEL_LLM_MODEL_LABELS,
+    VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_MODEL,
+    resolve_funnel_gemini_model,
 )
 from otio_app.services.voiceover_generation.llm_pricing import (
     estimate_call_cost_usd,
@@ -439,14 +441,17 @@ def _render_lightweight_funnel_monitor(project) -> None:
 
         if state.cancel_requested:
             st.warning(
-                "Abbruch angefordert. Der aktuelle Gemini-Schritt (Thumbnail-Batch "
-                "mit bis zu 10 Bildern, Timeout 120 s) wird noch beendet — danach "
-                "stoppt der Funnel. Bereits erfüllte Gaps bleiben."
+                "Abbruch angefordert. Der aktuelle Gemini-Schritt "
+                "(Textprüfung oder Thumbnail-Batch, hartes Limit 120 s) "
+                "wird noch beendet — danach stoppt der Funnel. "
+                "Bereits erfüllte Gaps bleiben."
             )
         else:
             st.caption(
-                "Abbrechen wirkt nach dem laufenden LLM-/Download-Schritt, "
-                "nicht mitten im API-Call. Wenn Gemini hängt: UI trotzdem freigeben."
+                "Ein Gemini-Call gilt nach 120 s als fehlgeschlagen — "
+                "dann geht es mit der nächsten Gap weiter. "
+                "Abbrechen wirkt nach dem laufenden Schritt. "
+                "Wenn es trotzdem hängt: UI trotzdem freigeben."
             )
 
         cols = st.columns(2)
@@ -2780,6 +2785,7 @@ def _render_section_funnel(project) -> None:
             options=ENHANCED_FUNNEL_LLM_MODEL_CHOICES,
             labels=ENHANCED_FUNNEL_LLM_MODEL_LABELS,
             show_estimated_costs=True,
+            fallback_if_unknown=VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_MODEL,
         )
         if st.button(
             "Funnel-Modell speichern",
@@ -2796,7 +2802,7 @@ def _render_section_funnel(project) -> None:
             f"Aktiv: **{funnel_updated.model}** · "
             "Für günstige Tests: Gemini 3.1 Flash Lite."
         )
-    funnel_model_id = funnel_updated.model
+    funnel_model_id = resolve_funnel_gemini_model(funnel_updated.model)
 
     gap_by_id = {g.gap_id: g for g in (coverage.gaps if coverage else [])}
     select_key = f"enh_funnel_gap_multiselect_{project.id}"
