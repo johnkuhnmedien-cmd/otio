@@ -44,6 +44,23 @@ def test_register_shutdown_handlers_skips_signals_off_main_thread(monkeypatch):
     assert shutdown._handlers_registered
 
 
+def test_register_shutdown_handlers_registers_sighup_on_main_thread(monkeypatch):
+    monkeypatch.setattr(shutdown, "_handlers_registered", False)
+    monkeypatch.setattr(shutdown.threading, "current_thread", shutdown.threading.main_thread)
+    registered: list[int] = []
+
+    def capture(signum, handler):  # noqa: ARG001
+        registered.append(signum)
+
+    with patch.object(shutdown.signal, "signal", side_effect=capture):
+        shutdown.register_shutdown_handlers()
+
+    assert shutdown.signal.SIGINT in registered
+    assert shutdown.signal.SIGTERM in registered
+    if hasattr(shutdown.signal, "SIGHUP"):
+        assert shutdown.signal.SIGHUP in registered
+
+
 def test_register_shutdown_handlers_tolerates_signal_value_error(monkeypatch):
     monkeypatch.setattr(shutdown, "_handlers_registered", False)
     monkeypatch.setattr(shutdown.threading, "current_thread", shutdown.threading.main_thread)

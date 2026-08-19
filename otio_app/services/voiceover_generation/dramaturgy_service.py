@@ -11,16 +11,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from otio_app.defaults import (
-    DRAMATURGY_PLANNING_MODE_VARIETY,
     DRAMATURGY_ROLE_CONTRAST,
     DRAMATURGY_ROLE_SETUP,
     DRAMATURGY_ROLES,
     DRAMATURGY_STATUS_CONFIRMED,
     DRAMATURGY_STATUS_DRAFT,
-    VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
-    VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
     VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
-    VOICEOVER_GEN_FOLDER_WORD_TOLERANCE,
+    VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
 )
 from otio_app.models import Project
 from otio_app.project_layout import (
@@ -50,13 +47,29 @@ from otio_app.services.voiceover_generation.model_settings_service import resolv
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
     DramaturgyPlan,
+    DramaturgySettings,
     FolderInventorySummary,
     LlmRunManifest,
     as_str_list,
 )
+from otio_app.services.voiceover_generation.dramaturgy_settings_service import (
+    DramaturgyWordBand,
+    load_dramaturgy_settings,
+    word_band_from_settings,
+)
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.prompts import build_dramaturgy_prompt
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
+
+
+def _default_word_band() -> DramaturgyWordBand:
+    return word_band_from_settings(
+        DramaturgySettings(
+            project_id="",
+            target_words=VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+            word_tolerance_percent=VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
+        )
+    )
 
 __all__ = [
     "DramaturgyBuildResult",
@@ -229,12 +242,14 @@ def _entry_from_inventory_summary(
     summary: FolderInventorySummary,
     *,
     order_index: int,
+    word_band: DramaturgyWordBand | None = None,
 ) -> DramaturgyFolderEntry:
+    band = word_band or _default_word_band()
     target, min_words, max_words = _normalize_recommended_word_targets(
-        summary.estimated_voiceover_word_count
-        or VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
-        summary.estimated_min_words or VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
-        summary.estimated_max_words or VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+        summary.estimated_voiceover_word_count or band.target_words,
+        summary.estimated_min_words or band.min_words,
+        summary.estimated_max_words or band.max_words,
+        band=band,
     )
     return DramaturgyFolderEntry(
         folder_name=summary.folder_name,
@@ -257,6 +272,8 @@ def _entry_from_inventory_summary(
 def ensure_all_inventory_folders(
     entries: list[DramaturgyFolderEntry],
     folder_summaries: list[FolderInventorySummary],
+    *,
+    word_band: DramaturgyWordBand | None = None,
 ) -> tuple[list[DramaturgyFolderEntry], list[str]]:
     """Fügt fehlende Inventory-Ordner ein (LLM-Truncation), ohne LLM-Reihenfolge zu zerstören.
 
@@ -308,6 +325,7 @@ def ensure_all_inventory_folders(
         new_entry = _entry_from_inventory_summary(
             summary_by_name[name],
             order_index=insert_at + 1,
+            word_band=word_band,
         )
         result.insert(insert_at, new_entry)
 
@@ -339,6 +357,7 @@ def confirm_dramaturgy_plan(project: Project, edited_plan: DramaturgyPlan) -> Dr
     entries, missing_names = ensure_all_inventory_folders(
         list(edited_plan.recommended_folder_order),
         _inventory_summaries_for_project(project),
+        word_band=word_band_from_settings(load_dramaturgy_settings(project)),
     )
     enabled_entries = sorted(
         (entry for entry in entries if entry.enabled),
@@ -462,12 +481,15 @@ def _normalize_recommended_word_targets(
     target: int,
     min_words: int,
     max_words: int,
+    *,
+    band: DramaturgyWordBand | None = None,
 ) -> tuple[int, int, int]:
-    """Hält Zielwortzahl im Band 150±30 (120–180) und leitet min/max ab."""
-    band_min = VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS
-    band_max = VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
-    baseline = VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
-    tolerance = VOICEOVER_GEN_FOLDER_WORD_TOLERANCE
+    """Hält Zielwortzahl im konfigurierten Band (Ziel ± Toleranz) und leitet min/max ab."""
+    resolved = band or _default_word_band()
+    band_min = resolved.min_words
+    band_max = resolved.max_words
+    baseline = resolved.target_words
+    tolerance = resolved.tolerance_words
 
     if target <= 0:
         target = baseline
@@ -479,8 +501,7 @@ def _normalize_recommended_word_targets(
     else:
         min_words = max(band_min, min(min_words, target))
         max_words = min(band_max, max(max_words, target))
-        # Zu enge LLM-Spannen (z. B. ±10%) auf ±tolerance aufweiten, solange
-        # im Band — sonst wirkt die Tabelle wieder starr.
+        # Zu enge LLM-Spannen auf ±Toleranz aufweiten, solange im Band.
         if max_words - min_words < tolerance:
             min_words = max(band_min, target - tolerance)
             max_words = min(band_max, target + tolerance)
@@ -488,15 +509,22 @@ def _normalize_recommended_word_targets(
     return target, min_words, max_words
 
 
-def _folder_entry_from_payload(entry: dict, *, default_order: int) -> DramaturgyFolderEntry | None:
+def _folder_entry_from_payload(
+    entry: dict,
+    *,
+    default_order: int,
+    word_band: DramaturgyWordBand | None = None,
+) -> DramaturgyFolderEntry | None:
     folder_name = str(entry.get("folder_name", "")).strip()
     if not folder_name:
         return None
 
+    band = word_band or _default_word_band()
     target, min_words, max_words = _normalize_recommended_word_targets(
-        _int_field(entry, "recommended_word_count", VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS),
-        _int_field(entry, "recommended_min_words", VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS),
-        _int_field(entry, "recommended_max_words", VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS),
+        _int_field(entry, "recommended_word_count", band.target_words),
+        _int_field(entry, "recommended_min_words", band.min_words),
+        _int_field(entry, "recommended_max_words", band.max_words),
+        band=band,
     )
 
     # Craft-Flags/Hints kommen bewusst NICHT mehr aus dem LLM-Prompt.
@@ -543,12 +571,19 @@ def build_dramaturgy_plan(
     planning_mode steuert die Prompt-Strategie:
     - geography: Reihenfolge primär nach Geographie / Reiseverlauf
     - variety: Reihenfolge primär nach Abwechslung / Kontrast
+    - spectacle_first: visuell stärkste Orte zuerst (Default / Auto-Lauf)
 
     max_output_tokens/disable_thinking erlauben es, für sehr umfangreiche
     Projekte (viele Ordner) das Output-Token-Limit gezielt zu erhöhen bzw. das
     interne "Thinking" des Modells abzuschalten, falls die Antwort sonst bei
     max_tokens abgeschnitten wird (siehe plan_llm_client.PlanLlmTruncatedResponseError)."""
-    resolved_mode = (planning_mode or DRAMATURGY_PLANNING_MODE_VARIETY).strip().lower()
+    from otio_app.services.voiceover_generation.dramaturgy_defaults_service import (
+        resolve_dramaturgy_planning_mode,
+    )
+
+    resolved_mode = resolve_dramaturgy_planning_mode(planning_mode)
+    word_settings = load_dramaturgy_settings(project)
+    word_band = word_band_from_settings(word_settings)
 
     project_brief = load_project_brief(project)
     style_profile = load_style_profile(project)
@@ -565,6 +600,8 @@ def build_dramaturgy_plan(
         folder_summaries=folder_summaries,
         planning_mode=resolved_mode,
         style_context_text=style_context_text_for_prompts(project),
+        target_words=word_band.target_words,
+        word_tolerance_percent=word_band.tolerance_percent,
     )
     prompt_hash = content_hash(prompt)
     write_llm_prompt(run_dir, prompt)
@@ -644,7 +681,9 @@ def build_dramaturgy_plan(
         for index, raw_entry in enumerate(raw_entries, start=1):
             if not isinstance(raw_entry, dict):
                 continue
-            parsed_entry = _folder_entry_from_payload(raw_entry, default_order=index)
+            parsed_entry = _folder_entry_from_payload(
+                raw_entry, default_order=index, word_band=word_band
+            )
             if parsed_entry is not None:
                 entries.append(parsed_entry)
 
@@ -653,7 +692,9 @@ def build_dramaturgy_plan(
     valid_folder_names = {summary.folder_name for summary in folder_summaries}
     entries = [entry for entry in entries if entry.folder_name in valid_folder_names]
     # Fehlende Inventory-Ordner wieder anhängen (LLM-Truncation / Auslassungen).
-    entries, missing_names = ensure_all_inventory_folders(entries, folder_summaries)
+    entries, missing_names = ensure_all_inventory_folders(
+        entries, folder_summaries, word_band=word_band
+    )
     entries = rebalance_contrast_roles(entries)
 
     risks = as_str_list(payload.get("risks"))

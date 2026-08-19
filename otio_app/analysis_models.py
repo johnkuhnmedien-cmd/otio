@@ -141,6 +141,12 @@ class AssetMediaAnalysis(BaseModel):
     is_16_9: bool = False
     supplement_validation_status: str = ""
     supplement_validation_score: float = 0.0
+    # Woher das beschaffte Asset kam (``funnel``, ``inbox``, ``manual``, …) und
+    # die Begründung der Beschaffung. Die Begründung gehört bewusst NICHT in
+    # ``description``: dort steht ausschließlich die Bildbeschreibung aus der
+    # regulären Asset-Analyse.
+    supplement_intake_source: str = ""
+    supplement_intake_note: str = ""
     approved_for_cut_plan: bool = False
     generated_prompt: str = ""
     search_query: str = ""
@@ -171,6 +177,31 @@ class AssetMediaAnalysis(BaseModel):
     description_model_resolved: str = ""
     # Nur bei parse_ok=False diagnostisch (begrenzt); bei Erfolg leer.
     analysis_raw_response: str = ""
+
+
+#: ``asset_origin`` lokal gedrehter Originale. Alles andere ist beschafftes
+#: Material (Stock, Inbox, generiert) und lebt außerhalb des Medienordners.
+LOCAL_ORIGINAL_ASSET_ORIGIN = "local_original"
+
+
+def is_supplement_asset(asset: "AssetMediaAnalysis") -> bool:
+    """True für beschafftes Material — unabhängig vom Ablageort.
+
+    Bewusst über ``asset_origin`` statt über den Pfad: Clean Media legt auch
+    Originale unter ``_otio*/clean/`` ab, und jeder neue Funnel bringt einen
+    neuen Ablageort mit.
+    """
+    origin = (getattr(asset, "asset_origin", "") or "").strip()
+    return bool(origin) and origin != LOCAL_ORIGINAL_ASSET_ORIGIN
+
+
+def supplement_asset_paths(folder: "AssetFolderAnalysis") -> set[str]:
+    """Pfade aller Supplement-Zeilen eines Ordner-Inventars."""
+    return {
+        asset.path
+        for asset in (folder.assets or [])
+        if asset.path and is_supplement_asset(asset)
+    }
 
 
 class AssetFolderAnalysis(BaseModel):

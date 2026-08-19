@@ -104,6 +104,7 @@ VOICEOVER_STYLE_REFERENCES_FILENAME = "voiceover_style_references.json"
 VOICEOVER_STYLE_PROFILE_FILENAME = "voiceover_style_profile.json"
 DRAMATURGY_PLAN_DRAFT_FILENAME = "dramaturgy_plan.draft.json"
 DRAMATURGY_PLAN_CONFIRMED_FILENAME = "dramaturgy_plan.confirmed.json"
+DRAMATURGY_SETTINGS_FILENAME = "dramaturgy_settings.json"
 FOLDER_VOICEOVER_SETTINGS_FILENAME = "folder_voiceover_settings.json"
 FOLDER_VOICEOVERS_DRAFT_FILENAME = "folder_voiceovers.draft.json"
 FOLDER_VOICEOVER_VALIDATION_REPORT_FILENAME = "folder_voiceover_validation_report.json"
@@ -113,6 +114,12 @@ INTRO_HOOK_CONFIRMED_FILENAME = "intro_hook.confirmed.json"
 ELEVENLABS_SETTINGS_FILENAME = "elevenlabs_settings.json"
 # Globale Voice-Defaults pro Sprache unter data/ (nicht projektspezifisch).
 ELEVENLABS_VOICE_DEFAULTS_FILENAME = "elevenlabs_voice_defaults.json"
+# Globale Project-Brief-Defaults pro Sprache unter data/.
+PROJECT_BRIEF_DEFAULTS_FILENAME = "project_brief_defaults.json"
+PROJECT_BRIEF_TITLE_REFERENCE_SLOTS = 3
+# Globale Style-Reference-Defaults pro Sprache unter data/.
+STYLE_REFERENCE_DEFAULTS_FILENAME = "style_reference_defaults.json"
+STYLE_REFERENCE_DEFAULT_SLOTS = 3
 VOICEOVER_AUDIO_MANIFEST_FILENAME = "voiceover_audio_manifest.json"
 VOICEOVER_AUDIO_QA_REPORT_FILENAME = "voiceover_audio_qa_report.json"
 CONFIRMED_VOICEOVER_PROJECT_PLAN_FILENAME = "confirmed_voiceover_project_plan.json"
@@ -153,6 +160,7 @@ VOICEOVER_GEN_ROLE_INTRO = "intro"
 # Kandidaten suchen“ im Cut-Plan-Tab erfolgt.
 VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY = "cut_plan_supplement_query"
 VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH = "youtube_publish"
+VOICEOVER_GEN_ROLE_PROJECT_BRIEF = "project_brief"
 VOICEOVER_GEN_ROLE_ENHANCED_ROUGH_CUT = "enhanced_rough_cut"
 VOICEOVER_GEN_ROLE_ENHANCED_FINAL_CUT = "enhanced_final_cut"
 VOICEOVER_GEN_ROLE_ENHANCED_SUPPLEMENT_FUNNEL = "enhanced_supplement_funnel"
@@ -164,6 +172,7 @@ VOICEOVER_GEN_ROLES = (
     VOICEOVER_GEN_ROLE_VOICEOVER_AUTHOR,
     VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW,
     VOICEOVER_GEN_ROLE_INTRO,
+    VOICEOVER_GEN_ROLE_PROJECT_BRIEF,
     VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY,
     VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH,
     VOICEOVER_GEN_ROLE_ENHANCED_ROUGH_CUT,
@@ -176,6 +185,7 @@ VOICEOVER_GEN_ROLE_LABELS = {
     VOICEOVER_GEN_ROLE_VOICEOVER_AUTHOR: "Voice-over Autor",
     VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW: "Voice-over Review",
     VOICEOVER_GEN_ROLE_INTRO: "Intro",
+    VOICEOVER_GEN_ROLE_PROJECT_BRIEF: "Project Brief / Videotitel",
     VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY: "Cut Plan Suchqueries",
     VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH: "YouTube Publish",
     VOICEOVER_GEN_ROLE_ENHANCED_ROUGH_CUT: "Enhanced Rough Cut (LLM 2)",
@@ -186,6 +196,14 @@ VOICEOVER_GEN_ENHANCED_SFX_PLANNER_DEFAULT_PROVIDER = "openai"
 VOICEOVER_GEN_ENHANCED_SFX_PLANNER_DEFAULT_MODEL = "gpt-5.6-sol"
 VOICEOVER_GEN_DEFAULT_PROVIDER = "anthropic"
 VOICEOVER_GEN_DEFAULT_MODEL = "claude-sonnet-5"
+# Dramaturgie: GPT-5.6 Terra für alle Projekte, unabhängig vom allgemeinen
+# Anthropic-Standard der übrigen redaktionellen Rollen.
+VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER = "openai"
+VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL = "gpt-5.6-terra"
+# Intro-Skript (Hook-Varianten): GPT-5.6 Terra. Cut-Modelle bleiben
+# pro Sprache in den Cut Plan Settings — hier nicht überschreiben.
+VOICEOVER_GEN_INTRO_DEFAULT_PROVIDER = "openai"
+VOICEOVER_GEN_INTRO_DEFAULT_MODEL = "gpt-5.6-terra"
 # Phase 11.1: Standard für die neue Rolle — bewusst Gemini 3.1 Flash Lite
 # (schnell, günstig) statt des allgemeinen Anthropic-Standards oben, da diese
 # Rolle nur kurze Suchqueries generiert, keine langen redaktionellen Texte.
@@ -233,6 +251,21 @@ ENHANCED_FUNNEL_LLM_MODEL_LABELS: dict[str, str] = {
     "gemini-3.5-flash": "Gemini 3.5 Flash — Standard Funnel",
     "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview — teurer, höchste Qualität",
 }
+
+
+def resolve_funnel_gemini_model(model: str | None) -> str:
+    """Nur die Funnel-Dropdown-IDs. Tote Aliase nicht an Gemini schicken.
+
+    ``gemini-1.5-flash`` steht nicht in der Funnel-Auswahl, kann aber noch in
+    ``model_settings.json`` oder in Streamlit-Session-State liegen. Der Job-
+    Monitor zeigt genau diese Zeichenkette — unabhängig vom Dropdown.
+    Ungültige IDs fallen auf den Funnel-Standard (3.5 Flash), nicht auf das
+    Analyse-Env-Modell (Flash Lite).
+    """
+    raw = (model or "").strip()
+    if raw in ENHANCED_FUNNEL_LLM_MODEL_CHOICES:
+        return raw
+    return VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_MODEL
 
 # --- Vereinfachte Modellauswahl: EIN Dropdown je Rolle (kein Freitext, keine
 # separate Provider-Spalte). Die IDs folgen exakt der Konvention von
@@ -360,6 +393,8 @@ VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS = 150
 VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS = 120
 VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS = 180
 VOICEOVER_GEN_FOLDER_WORD_TOLERANCE = 30
+# Obergrenze für das Ziel-Eingabefeld in ③ Dramaturgie (Fenster kommt aus Ziel ± %).
+DRAMATURGY_TARGET_WORDS_INPUT_MAX = 400
 
 # --- Asset-bewusste Cut-Plan-Vorbereitung, Phase 2: reine Diagnose-Heuristik
 # für die Folder-Voice-over-Asset-Readiness (siehe
@@ -435,6 +470,10 @@ DRAMATURGY_PLANNING_MODE_LABELS = {
         "Visuell stärkste Orte zuerst planen"
     ),
 }
+# Automatischer Durchlauf und Aufrufe ohne expliziten Modus.
+DRAMATURGY_PLANNING_MODE_DEFAULT = DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST
+# Globaler Dramaturgie-Standard unter data/ (nicht pro Sprache).
+DRAMATURGY_DEFAULTS_FILENAME = "dramaturgy_defaults.json"
 
 # --- Folder Voice-overs (Phase 4) ---
 MAX_VOICEOVER_REVIEW_ATTEMPTS = 3
@@ -548,9 +587,25 @@ VO_ERROR_TYPES_ALL = VO_ERROR_TYPES_DETERMINISTIC + VO_ERROR_TYPES_LLM_REVIEW
 
 # --- Intro Hook (Phase 5) ---
 INTRO_HOOK_SETTINGS_FILENAME = "intro_hook_settings.json"
+# Globale Intro-Settings-Defaults pro Sprache unter data/.
+INTRO_HOOK_DEFAULTS_FILENAME = "intro_hook_defaults.json"
+# Globale Enhanced-Cut-Plan-Settings pro Sprache unter data/.
+CUT_PLAN_OPTIONS_DEFAULTS_FILENAME = "cut_plan_options_defaults.json"
 INTRO_HOOK_DEFAULT_TARGET_WORDS = 70
-INTRO_HOOK_DEFAULT_MIN_WORDS = 60
-INTRO_HOOK_DEFAULT_MAX_WORDS = 80
+
+
+def intro_word_window(target_words: int, tolerance_percent: int) -> tuple[int, int]:
+    """Min/Max-Wörter aus Ziel ± Toleranz in Prozent."""
+    target = max(0, int(target_words or 0))
+    pct = max(0, min(100, int(tolerance_percent or 0)))
+    delta = int(round(target * pct / 100.0))
+    return max(0, target - delta), target + delta
+
+
+INTRO_HOOK_DEFAULT_MIN_WORDS, INTRO_HOOK_DEFAULT_MAX_WORDS = intro_word_window(
+    INTRO_HOOK_DEFAULT_TARGET_WORDS,
+    VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
+)
 INTRO_HOOK_CANDIDATE_COUNT = 3
 INTRO_HOOK_TYPE_MYSTERY = "mystery"
 INTRO_HOOK_TYPE_CONTRAST = "contrast"

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import (
     get_style_references_uploads_dir,
@@ -43,7 +45,13 @@ def _make_project(tmp_path: Path) -> Project:
     )
 
 
-def test_default_style_references_are_empty(tmp_path: Path) -> None:
+def test_default_style_references_are_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "otio_app.services.voiceover_generation.style_reference_defaults_service.ensure_data_dir",
+        lambda: tmp_path / "data",
+    )
     project = _make_project(tmp_path)
     refs = default_style_references(project)
     assert refs.intro_reference_texts == []
@@ -68,7 +76,13 @@ def test_save_and_load_style_references_roundtrip(tmp_path: Path) -> None:
     assert loaded.uploaded_file_texts == ["Some uploaded content."]
 
 
-def test_load_style_references_returns_default_when_missing(tmp_path: Path) -> None:
+def test_load_style_references_returns_default_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "otio_app.services.voiceover_generation.style_reference_defaults_service.ensure_data_dir",
+        lambda: tmp_path / "data",
+    )
     project = _make_project(tmp_path)
     loaded = load_style_references(project)
     assert loaded.intro_reference_texts == []

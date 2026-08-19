@@ -17,6 +17,8 @@ from otio_app.defaults import (
     CUT_PLAN_DEFAULT_SHOT_MAX_SEC,
     CUT_PLAN_DEFAULT_SHOT_MIN_SEC,
     CUT_PLAN_DEFAULT_VIDEO_HEAD_TRIM_SEC,
+    VOICEOVER_GEN_ENHANCED_CUT_DEFAULT_MODEL,
+    VOICEOVER_GEN_ENHANCED_CUT_DEFAULT_PROVIDER,
 )
 from otio_app.models import Project
 from otio_app.services.still_image_export_style import (
@@ -114,11 +116,19 @@ DEFAULT_INTRO_VOICEOVER_PREROLL_SEC = 4.0
 DEFAULT_INTRO_VOICEOVER_POSTROLL_SEC = 6.5
 DEFAULT_INTRO_VOICEOVER_POSTROLL_MIN_SEC = 5.0
 DEFAULT_INTRO_VOICEOVER_POSTROLL_MAX_SEC = 8.0
-CUT_PLAN_OPTIONS_SCHEMA_VERSION = "1.11"
+CUT_PLAN_OPTIONS_SCHEMA_VERSION = "1.12"
 DEFAULT_MAX_SFX_PER_CHAPTER = 3
 MAX_SFX_PER_CHAPTER_MIN = 0
 MAX_SFX_PER_CHAPTER_MAX = 5
 DEFAULT_SFX_PLANNER_MODEL = "openai:gpt-5.6-sol"
+DEFAULT_LLM_CUT_MODEL = (
+    f"{VOICEOVER_GEN_ENHANCED_CUT_DEFAULT_PROVIDER}:"
+    f"{VOICEOVER_GEN_ENHANCED_CUT_DEFAULT_MODEL}"
+)
+# ElevenLabs Music: total pieces including Intro. 4 = Intro + first 3 body chapters.
+DEFAULT_ELEVENLABS_MUSIC_COUNT = 4
+ELEVENLABS_MUSIC_COUNT_MIN = 1
+ELEVENLABS_MUSIC_COUNT_MAX = 40
 
 
 class CutPlanOptions(BaseModel):
@@ -133,6 +143,8 @@ class CutPlanOptions(BaseModel):
     # Phase 6: optionaler Mini-Repair nach Gap-Merge (Default aus).
     enable_unified_mini_repair: bool = False
     unified_mini_repair_threshold: float = Field(default=0.20, ge=0.0, le=1.0)
+    # Combined id (openai:gpt-5.6-terra). Empty = inherit from model_settings.
+    llm_cut_model: str = ""
     # ElevenLabs SFX MVP: planner model (independent of Final/Unified Cut model).
     sfx_planner_model: str = DEFAULT_SFX_PLANNER_MODEL
     # Hard maximum per chapter/intro scope — not a target. Prefer fewer.
@@ -140,6 +152,13 @@ class CutPlanOptions(BaseModel):
         default=DEFAULT_MAX_SFX_PER_CHAPTER,
         ge=MAX_SFX_PER_CHAPTER_MIN,
         le=MAX_SFX_PER_CHAPTER_MAX,
+    )
+    # ElevenLabs Music pieces to generate: Intro counts as 1, then body chapters
+    # in film order. 4 = Intro + first 3 chapters. 1 = Intro only.
+    elevenlabs_music_count: int = Field(
+        default=DEFAULT_ELEVENLABS_MUSIC_COUNT,
+        ge=ELEVENLABS_MUSIC_COUNT_MIN,
+        le=ELEVENLABS_MUSIC_COUNT_MAX,
     )
     include_middle_frames: bool = False
     max_middle_frames_per_chapter: int = Field(
@@ -437,6 +456,7 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             lo=0.0,
             hi=1.0,
         ),
+        llm_cut_model=str(raw.get("llm_cut_model") or "").strip(),
         sfx_planner_model=str(
             raw.get("sfx_planner_model", defaults.sfx_planner_model)
             or defaults.sfx_planner_model
@@ -447,6 +467,12 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             default=defaults.max_sfx_per_chapter,
             lo=MAX_SFX_PER_CHAPTER_MIN,
             hi=MAX_SFX_PER_CHAPTER_MAX,
+        ),
+        elevenlabs_music_count=_clamp_int(
+            raw.get("elevenlabs_music_count", defaults.elevenlabs_music_count),
+            default=defaults.elevenlabs_music_count,
+            lo=ELEVENLABS_MUSIC_COUNT_MIN,
+            hi=ELEVENLABS_MUSIC_COUNT_MAX,
         ),
         include_middle_frames=bool(
             raw.get("include_middle_frames", defaults.include_middle_frames)
@@ -691,7 +717,11 @@ def intro_hold_timings(
 def load_cut_plan_options(project: Project) -> CutPlanOptions:
     path = cut_plan_options_path(project)
     if not path.is_file():
-        return default_cut_plan_options()
+        from otio_app.services.without_voiceover_enhanced.cut_plan_options_defaults_service import (
+            default_cut_plan_options_for_project,
+        )
+
+        return default_cut_plan_options_for_project(project)
     loaded = load_model(path, CutPlanOptions)
     if loaded is None:
         try:
@@ -711,6 +741,91 @@ def save_cut_plan_options(project: Project, options: CutPlanOptions) -> CutPlanO
         options = options.model_copy(update={"shot_max_sec": options.shot_min_sec})
     write_json(cut_plan_options_path(project), options)
     return options
+
+
+def _fallback_llm_cut_model_id(project: Project) -> str:
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        combined_model_id,
+        load_model_settings,
+    )
+
+    settings = load_model_settings(project)
+    for role in (settings.enhanced_rough_cut, settings.enhanced_final_cut):
+        combined = combined_model_id(role)
+        if combined:
+            return combined
+    return DEFAULT_LLM_CUT_MODEL
+
+
+def resolve_llm_cut_model_id(project: Project) -> str:
+    """Unified/Intro/Kapitel-LLM-Cut: CutPlanOptions, sonst model_settings."""
+    configured = str(load_cut_plan_options(project).llm_cut_model or "").strip()
+    if configured:
+        return configured
+    return _fallback_llm_cut_model_id(project)
+
+
+def persist_cut_plan_options(project: Project, options: CutPlanOptions) -> CutPlanOptions:
+    """Speichert Cut Plan Settings und spiegelt LLM-Cut + SFX in model_settings."""
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        load_model_settings,
+        save_model_settings,
+        split_llm_model_id,
+    )
+    from otio_app.services.voiceover_generation.models import LlmRoleSettings
+
+    llm_id = str(options.llm_cut_model or "").strip()
+    if not llm_id:
+        llm_id = _fallback_llm_cut_model_id(project)
+        options = options.model_copy(update={"llm_cut_model": llm_id})
+    saved = save_cut_plan_options(project, options)
+    _mirror_llm_cut_roles(project, llm_id)
+
+    sfx_id = str(saved.sfx_planner_model or "").strip()
+    if sfx_id:
+        settings = load_model_settings(project)
+        sfx_prov, sfx_mod = split_llm_model_id(sfx_id)
+        save_model_settings(
+            project,
+            settings.model_copy(
+                update={
+                    "enhanced_sfx_planner": LlmRoleSettings(
+                        provider=sfx_prov, model=sfx_mod
+                    )
+                }
+            ),
+        )
+    return saved
+
+
+def persist_llm_cut_model(project: Project, model_id: str) -> CutPlanOptions:
+    """Nur das LLM-Cut-Modell schreiben — SFX-Planner in model_settings bleibt."""
+    llm_id = str(model_id or "").strip() or _fallback_llm_cut_model_id(project)
+    saved = save_cut_plan_options(
+        project,
+        load_cut_plan_options(project).model_copy(update={"llm_cut_model": llm_id}),
+    )
+    _mirror_llm_cut_roles(project, llm_id)
+    return saved
+
+
+def _mirror_llm_cut_roles(project: Project, model_id: str) -> None:
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        load_model_settings,
+        save_model_settings,
+        split_llm_model_id,
+    )
+    from otio_app.services.voiceover_generation.models import LlmRoleSettings
+
+    provider, model = split_llm_model_id(model_id)
+    role = LlmRoleSettings(provider=provider, model=model)
+    settings = load_model_settings(project)
+    save_model_settings(
+        project,
+        settings.model_copy(
+            update={"enhanced_rough_cut": role, "enhanced_final_cut": role}
+        ),
+    )
 
 
 def format_shot_constraints_for_prompt(options: CutPlanOptions) -> str:

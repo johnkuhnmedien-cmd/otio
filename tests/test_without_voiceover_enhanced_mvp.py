@@ -96,6 +96,7 @@ from otio_app.services.without_voiceover_enhanced.script_author_service import (
     list_enabled_dramaturgy_folders,
     merge_folder_script_into_document,
     parse_enhanced_script_response,
+    revise_all_enhanced_scripts,
     revise_enhanced_script_for_folder,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
@@ -1081,6 +1082,9 @@ def test_revision_prompt_contains_only_instructions_and_script() -> None:
     assert "The canyon glows red at dusk." in prompt
     assert "[pause 3 seconds]" in prompt
     assert "copy 1:1" in prompt.lower() or "Keep every such marker exactly" in prompt
+    assert "SPOKEN NUMBERS" in prompt
+    assert "Arabic digits" in prompt
+    assert "do not spell those out" in prompt
     assert "Antelope Canyon" in prompt
     assert "Project Brief" not in prompt
     assert "DRAMATURGY" not in prompt
@@ -1147,6 +1151,81 @@ def test_revise_enhanced_script_for_folder_uses_only_freetext_and_script(
     assert chapter_display_text_for_folder(draft, "Canyon").count("[pause 3 seconds]") == 1
 
 
+def test_revise_all_enhanced_scripts_runs_present_folders_in_order(
+    tmp_path: Path,
+) -> None:
+    folders = ["Canyon", "Desert", "Harbor"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            segments=[
+                ScriptSegment(
+                    segment_id="c1",
+                    text="Old canyon.",
+                    sequence_index=1,
+                    folder_name="Canyon",
+                    folder_order_index=0,
+                ),
+                ScriptSegment(
+                    segment_id="d1",
+                    text="Old desert.",
+                    sequence_index=2,
+                    folder_name="Desert",
+                    folder_order_index=1,
+                ),
+            ]
+        ),
+    )
+
+    seen: list[str] = []
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        assert "make warmer" in prompt
+        if "Old canyon." in prompt:
+            seen.append("Canyon")
+            return "Warm canyon."
+        if "Old desert." in prompt:
+            seen.append("Desert")
+            return "Warm desert."
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    results = revise_all_enhanced_scripts(
+        project,
+        editor_instructions="make warmer",
+        llm_callable=fake_llm,
+    )
+    assert [result.folder_name for result in results] == ["Canyon", "Desert"]
+    assert all(result.status == "PASS" for result in results)
+    assert seen == ["Canyon", "Desert"]
+    draft = load_script_draft(project)
+    assert chapter_narration_text(draft, "Canyon") == "Warm canyon."
+    assert chapter_narration_text(draft, "Desert") == "Warm desert."
+    assert "Harbor" not in folders_present_in_script(draft)
+
+
+def test_revise_all_enhanced_scripts_skips_when_no_scripts(tmp_path: Path) -> None:
+    project = _project(tmp_path, folders=["Canyon"])
+    _confirm_dramaturgy(project, ["Canyon"])
+    called = False
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del prompt, model, max_output_tokens
+        nonlocal called
+        called = True
+        return "unused"
+
+    results = revise_all_enhanced_scripts(
+        project,
+        editor_instructions="make warmer",
+        llm_callable=fake_llm,
+    )
+    assert results == []
+    assert called is False
+
+
 def test_default_revision_instructions_mention_pause_tags() -> None:
     from otio_app.services.without_voiceover_enhanced.script_prompts import (
         DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS,
@@ -1155,6 +1234,8 @@ def test_default_revision_instructions_mention_pause_tags() -> None:
     text = DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS
     assert "more human" in text
     assert "pause tags" in text
+    assert "Spell out every number" in text
+    assert "1879" in text
     assert "AI Detectors" in text
 
 
@@ -1183,6 +1264,8 @@ def test_folder_script_prompt_binds_to_dramaturgy_chapter() -> None:
     assert "silent orientation only" in prompt
     assert "transition to next: FORBIDDEN" in prompt
     assert "THIS CHAPTER DRAMATURGY:" in prompt
+    assert "SPOKEN NUMBERS" in prompt
+    assert "never Arabic digits" in prompt
     assert "LOCAL ASSETS" not in prompt
     assert "visual_intents" not in prompt
     for phrase in FORBIDDEN_PHRASES:

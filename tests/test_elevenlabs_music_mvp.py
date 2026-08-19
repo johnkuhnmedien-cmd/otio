@@ -13,6 +13,10 @@ import pytest
 
 from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
 from otio_app.models import Project, ProjectMode
+from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    CutPlanOptions,
+    save_cut_plan_options,
+)
 from otio_app.services.without_voiceover_enhanced.elevenlabs_music_client import (
     MUSIC_MODEL_ID,
     ElevenLabsMusicError,
@@ -20,12 +24,17 @@ from otio_app.services.without_voiceover_enhanced.elevenlabs_music_client import
     compose_music,
 )
 from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service import (
+    MUSIC_MVP_MAX_BODY_CHAPTERS,
     MusicServiceError,
     convert_and_normalize_to_wav,
+    generate_music_for_allowed_targets,
     generate_music_for_chapter,
     generate_music_for_intro,
     is_music_mvp_chapter_allowed,
+    list_music_generation_targets,
+    music_bulk_button_label,
     music_length_ms_from_seconds,
+    music_out_of_scope_message,
     music_ui_status_chapter,
     music_ui_status_intro,
     resolve_chapter_narration_end_seconds,
@@ -521,6 +530,81 @@ def test_g_only_first_three_chapters_and_intro(tmp_path: Path) -> None:
         # Intro allowed
         generate_music_for_intro(project, compose_callable=_compose)
         assert called["n"] == 1
+
+
+def test_g_settings_count_allows_more_body_chapters(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    names = ["Yosemite", "Caddo", "Zion", "Bryce"]
+    assert MUSIC_MVP_MAX_BODY_CHAPTERS == 3
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.list_body_chapter_names",
+        return_value=names,
+    ):
+        assert list_music_generation_targets(project) == [
+            ("intro", ""),
+            ("chapter", "Yosemite"),
+            ("chapter", "Caddo"),
+            ("chapter", "Zion"),
+        ]
+        assert "erste 3 Kapitel" in music_bulk_button_label(project)
+        assert "1–3" in music_out_of_scope_message(project)
+        save_cut_plan_options(project, CutPlanOptions(elevenlabs_music_count=5))
+        assert is_music_mvp_chapter_allowed(project, "Bryce")
+        assert list_music_generation_targets(project)[-1] == ("chapter", "Bryce")
+        assert "erste 4 Kapitel" in music_bulk_button_label(project)
+        save_cut_plan_options(project, CutPlanOptions(elevenlabs_music_count=1))
+        assert not is_music_mvp_chapter_allowed(project, "Yosemite")
+        assert list_music_generation_targets(project) == [("intro", "")]
+        ui = music_ui_status_chapter(project, "Yosemite")
+        assert ui["enabled"] is False
+        assert "nur Intro" in ui["message"]
+
+
+def test_g_bulk_skips_completed_and_out_of_scope(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    names = ["Yosemite", "Caddo", "Zion", "Bryce"]
+    called: list[str] = []
+
+    def _fake_intro(project, *, compose_callable=None):
+        called.append("intro")
+        return SimpleNamespace(status="completed", message="ok")
+
+    def _fake_chapter(project, folder, *, compose_callable=None):
+        called.append(folder)
+        return SimpleNamespace(status="completed", message="ok")
+
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.list_body_chapter_names",
+            return_value=names,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.music_ui_status_intro",
+            return_value={"status": "completed"},
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.music_ui_status_chapter",
+            side_effect=lambda _project, folder, status=None: {
+                "status": "completed" if folder == "Yosemite" else "missing"
+            },
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.generate_music_for_intro",
+            side_effect=_fake_intro,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.generate_music_for_chapter",
+            side_effect=_fake_chapter,
+        ),
+    ):
+        batch = generate_music_for_allowed_targets(project, skip_completed=True)
+    assert called == ["Caddo", "Zion"]
+    assert [item["label"] for item in batch["generated"]] == ["Caddo", "Zion"]
+    skipped_labels = [item["label"] for item in batch["skipped"]]
+    assert "Intro" in skipped_labels
+    assert "Yosemite" in skipped_labels
+    assert "Bryce" not in called
+    assert batch["target_count"] == 4
 
 
 # --- H/I/J WAV contract ----------------------------------------------------
@@ -1108,6 +1192,81 @@ def test_r_ui_helpers_disabled_without_timing(tmp_path: Path) -> None:
         )
     assert intro_ui["enabled"] is False
     assert ch_ui["enabled"] is False
+
+
+def test_r_intro_music_enabled_after_timing_with_opener_closing(
+    tmp_path: Path,
+) -> None:
+    """Opener/Closing are envelope shots — they must not block Intro Music."""
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        intro_resolved_matches_plan,
+    )
+
+    project = _project(tmp_path)
+    _write_locked(project)
+    plan = _plan("Intro")
+    write_json(intro_unified_cut_plan_path(project), plan)
+    resolved = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=12.0,
+        shots=[
+            ResolvedShot(
+                shot_id="Intro_preroll",
+                asset_id="opener",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=4.0,
+                source_start_seconds=0.0,
+                source_end_seconds=4.0,
+                folder_name="Intro",
+                chapter_id="Intro",
+                editorial_function="technical_chapter_preroll",
+            ),
+            ResolvedShot(
+                shot_id="Intro_slot_001",
+                asset_id="a1",
+                timeline_start_seconds=4.0,
+                timeline_end_seconds=9.0,
+                source_start_seconds=0.0,
+                source_end_seconds=5.0,
+                folder_name="Intro",
+                chapter_id="Intro",
+            ),
+            ResolvedShot(
+                shot_id="Intro_postroll",
+                asset_id="closer",
+                timeline_start_seconds=9.0,
+                timeline_end_seconds=12.0,
+                source_start_seconds=0.0,
+                source_end_seconds=3.0,
+                folder_name="Intro",
+                chapter_id="Intro",
+                editorial_function="technical_chapter_postroll",
+            ),
+        ],
+        chapters=[
+            ResolvedChapterEnvelope(
+                chapter_id="Intro",
+                folder_name="Intro",
+                chapter_video_start=0.0,
+                chapter_audio_start=4.0,
+                chapter_audio_end=9.0,
+                chapter_video_end=12.0,
+                first_shot_id="Intro_preroll",
+                last_shot_id="Intro_postroll",
+                segment_ids=["intro_1"],
+            )
+        ],
+    )
+    write_json(intro_resolved_timeline_path(project), resolved)
+    assert intro_resolved_matches_plan(plan, resolved, project=project) is True
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.is_elevenlabs_music_configured",
+        return_value=True,
+    ):
+        ui = music_ui_status_intro(project)
+    assert ui["enabled"] is True
+    assert ui.get("help") != "Zuerst aktuelles Intro: Python Timing."
 
 
 # --- R2: chapter outro only after narration ---------------------------------

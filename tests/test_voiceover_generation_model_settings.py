@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from otio_app.defaults import VOICEOVER_GEN_MODEL_CHOICES, VOICEOVER_GEN_MODEL_L
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import get_model_settings_path, get_voiceover_generation_dir
 from otio_app.services.voiceover_generation.model_settings_service import (
+    MODEL_SETTINGS_REVISION,
     combined_model_id,
     default_model_settings,
     format_voiceover_gen_model_label,
@@ -50,6 +52,12 @@ def test_default_model_settings_has_all_roles() -> None:
         if role == "cut_plan_supplement_query":
             assert role_settings.provider == "gemini"
             assert role_settings.model == "gemini-3.1-flash-lite"
+        elif role == "dramaturgy":
+            assert role_settings.provider == "openai"
+            assert role_settings.model == "gpt-5.6-terra"
+        elif role == "intro":
+            assert role_settings.provider == "openai"
+            assert role_settings.model == "gpt-5.6-terra"
         elif role in {"enhanced_rough_cut", "enhanced_final_cut"}:
             assert role_settings.provider == "openai"
             assert role_settings.model == "gpt-5.6-terra"
@@ -65,6 +73,11 @@ def test_load_model_settings_returns_default_when_missing(tmp_path: Path) -> Non
     project = _make_project(tmp_path)
     settings = load_model_settings(project)
     assert settings.style_profile.provider == "anthropic"
+    assert settings.dramaturgy.provider == "openai"
+    assert settings.dramaturgy.model == "gpt-5.6-terra"
+    assert settings.intro.provider == "openai"
+    assert settings.intro.model == "gpt-5.6-terra"
+    assert settings.settings_revision == MODEL_SETTINGS_REVISION
 
 
 def test_save_and_load_model_settings_roundtrip(tmp_path: Path) -> None:
@@ -88,7 +101,7 @@ def test_save_model_settings_writes_only_under_voiceover_generation_dir(
 ) -> None:
     project = _make_project(tmp_path)
     save_model_settings(project, default_model_settings())
-    path = get_model_settings_path(project.work_dir_path)
+    path = get_model_settings_path(project.language_work_dir_path)
     assert path.is_file()
     assert path.is_relative_to(get_voiceover_generation_dir(project.language_work_dir_path))
 
@@ -171,3 +184,122 @@ def test_openrouter_grok_45_is_available_in_voiceover_model_choices() -> None:
         combined_model_id(LlmRoleSettings(provider="openrouter", model="x-ai/grok-4.5"))
         == "openrouter:x-ai/grok-4.5"
     )
+
+
+def test_load_upgrades_legacy_implicit_dramaturgy_to_terra(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    path = get_model_settings_path(project.language_work_dir_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "style_profile": {"provider": "openai", "model": "gpt-5.5"},
+                "dramaturgy": {"provider": "anthropic", "model": "claude-sonnet-5"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_model_settings(project)
+    assert loaded.dramaturgy.provider == "openai"
+    assert loaded.dramaturgy.model == "gpt-5.6-terra"
+    assert loaded.style_profile.model == "gpt-5.5"
+    assert loaded.settings_revision == MODEL_SETTINGS_REVISION
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["dramaturgy"]["model"] == "gpt-5.6-terra"
+
+
+def test_load_keeps_explicit_dramaturgy_after_revision(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    save_model_settings(
+        project,
+        VoiceoverGenerationModelSettings(
+            settings_revision=MODEL_SETTINGS_REVISION,
+            dramaturgy=LlmRoleSettings(provider="anthropic", model="claude-sonnet-5"),
+        ),
+    )
+    loaded = load_model_settings(project)
+    assert loaded.dramaturgy.provider == "anthropic"
+    assert loaded.dramaturgy.model == "claude-sonnet-5"
+
+
+def test_load_upgrades_legacy_implicit_intro_to_terra(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    path = get_model_settings_path(project.language_work_dir_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "settings_revision": 2,
+                "intro": {"provider": "anthropic", "model": "claude-sonnet-5"},
+                "enhanced_rough_cut": {
+                    "provider": "anthropic",
+                    "model": "claude-opus-5",
+                },
+                "enhanced_final_cut": {
+                    "provider": "openai",
+                    "model": "gpt-5.6-sol",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_model_settings(project)
+    assert loaded.intro.provider == "openai"
+    assert loaded.intro.model == "gpt-5.6-terra"
+    assert loaded.enhanced_rough_cut.model == "claude-opus-5"
+    assert loaded.enhanced_final_cut.model == "gpt-5.6-sol"
+    assert loaded.settings_revision == MODEL_SETTINGS_REVISION
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["intro"]["model"] == "gpt-5.6-terra"
+    assert persisted["enhanced_rough_cut"]["model"] == "claude-opus-5"
+
+
+def test_load_keeps_explicit_intro_after_revision(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    save_model_settings(
+        project,
+        VoiceoverGenerationModelSettings(
+            settings_revision=MODEL_SETTINGS_REVISION,
+            intro=LlmRoleSettings(provider="anthropic", model="claude-sonnet-5"),
+        ),
+    )
+    loaded = load_model_settings(project)
+    assert loaded.intro.provider == "anthropic"
+    assert loaded.intro.model == "claude-sonnet-5"
+
+
+def test_load_replaces_retired_funnel_gemini_15_without_touching_cut_models(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    path = get_model_settings_path(project.language_work_dir_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "settings_revision": MODEL_SETTINGS_REVISION,
+                "enhanced_supplement_funnel": {
+                    "provider": "gemini",
+                    "model": "gemini-1.5-flash",
+                },
+                "enhanced_rough_cut": {
+                    "provider": "openai",
+                    "model": "gpt-5.6-terra",
+                },
+                "enhanced_final_cut": {
+                    "provider": "openai",
+                    "model": "gpt-5.6-sol",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_model_settings(project)
+    assert loaded.enhanced_supplement_funnel.provider == "gemini"
+    assert loaded.enhanced_supplement_funnel.model == "gemini-3.5-flash"
+    assert loaded.enhanced_rough_cut.model == "gpt-5.6-terra"
+    assert loaded.enhanced_final_cut.model == "gpt-5.6-sol"
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["enhanced_supplement_funnel"]["model"] == "gemini-3.5-flash"
+    assert persisted["enhanced_rough_cut"]["model"] == "gpt-5.6-terra"
+    assert persisted["enhanced_final_cut"]["model"] == "gpt-5.6-sol"

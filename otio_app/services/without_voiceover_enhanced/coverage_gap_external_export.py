@@ -14,6 +14,7 @@ from pathlib import Path
 from otio_app.defaults import CLEAN_MEDIA_OUTPUT_SUBDIR
 from otio_app.models import Project
 from otio_app.project_layout import get_folder_inventory_path, safe_folder_slug
+from otio_app.services.supplement_inventory import INTAKE_SOURCE_INBOX
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.models import (
     AcceptedSupplementsDocument,
@@ -330,7 +331,10 @@ def ingest_coverage_gap_inbox(project: Project) -> list[CoverageGapInboxIngestRe
             continue
         try:
             assigned = assign_local_file_to_open_gap(
-                project, gap_id=gid, source_path=str(media)
+                project,
+                gap_id=gid,
+                source_path=str(media),
+                intake_source=INTAKE_SOURCE_INBOX,
             )
             results.append(
                 CoverageGapInboxIngestResult(

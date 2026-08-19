@@ -55,6 +55,17 @@ def test_ui_new_negative_rules_are_checked_by_default(tmp_path: Path, monkeypatc
     assert checkboxes_by_label["Voice-over darf nicht nach KI klingen"].value is True
 
 
+def test_ui_shows_title_reference_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    at = _run_repro(tmp_path, monkeypatch)
+    labels = {field.label for field in at.text_input}
+    assert "Referenz-Titel 1" in labels
+    assert "Referenz-Titel 2" in labels
+    assert "Referenz-Titel 3" in labels
+    button_labels = {button.label for button in at.button}
+    assert "Videotitel erzeugen" in button_labels
+    assert any("Als Standard für" in label for label in button_labels)
+
+
 def test_ui_shows_explanation_of_three_mechanisms(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     at = _run_repro(tmp_path, monkeypatch)
     combined_captions = " ".join(caption.value for caption in at.caption)
@@ -69,6 +80,22 @@ def test_ui_forbidden_phrases_and_freetext_have_help_text(tmp_path: Path, monkey
     assert text_areas_by_label["Verbotene Wörter / Phrasen (eine pro Zeile)"].help
     assert text_areas_by_label["Globale Negativregeln — Freitext"].help
     assert text_areas_by_label["Globaler Zusatzprompt"].help
+
+
+def test_generate_title_fills_field_without_session_state_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REPRO_FAKE_TITLE", "As maravilhas da Grécia")
+    at = _run_repro(tmp_path, monkeypatch)
+    ref = next(field for field in at.text_input if field.label == "Referenz-Titel 1")
+    at = ref.set_value("As maravilhas de Itália").run()
+    assert not at.exception, at.exception
+    generate = next(button for button in at.button if button.label == "Videotitel erzeugen")
+    at = generate.click().run()
+    assert not at.exception, at.exception
+    title = next(field for field in at.text_input if field.label == "Video-Titel")
+    assert title.value == "As maravilhas da Grécia"
+    assert any("Titel: As maravilhas da Grécia" in str(item.value) for item in at.success)
 
 
 def test_save_persists_new_negative_rule_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

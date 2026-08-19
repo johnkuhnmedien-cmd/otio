@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -27,6 +28,7 @@ from otio_app.services.gemini_client import (
     ASSET_DESCRIPTION_PROMPT_VERSION,
     GeminiNotConfiguredError,
     analyze_media_from_frames,
+    is_transient_api_error,
     resolve_gemini_model,
 )
 from otio_app.services.inventory_loader import (
@@ -34,6 +36,8 @@ from otio_app.services.inventory_loader import (
     sync_folder_inventory_with_status,
 )
 from otio_app.services.media_inventory_cache import (
+    CACHE_SCOPE_PRIMARY,
+    CACHE_SCOPE_SUPPLEMENT,
     discover_folder_media_paths,
     has_successful_asset_cache,
     list_assets_missing_successful_cache,
@@ -42,6 +46,7 @@ from otio_app.services.media_inventory_cache import (
     media_file_is_accessible,
     media_stem_slug,
     resolve_media_for_analysis,
+    scope_subdir,
     _save_cached_media_safe,
 )
 from otio_app.services.media_utils import (
@@ -62,13 +67,18 @@ def _bounded_analysis_raw_response(raw: str) -> str:
     return text[:_ANALYSIS_RAW_RESPONSE_MAX_CHARS].rstrip() + "\n…[truncated]"
 
 
-def _frames_dir(project: Project, folder_name: str, media_path: Path) -> Path:
-    return (
-        project.work_dir_path
-        / "frames"
-        / safe_folder_slug(folder_name)
-        / safe_folder_slug(media_path.stem)
-    )
+def _frames_dir(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+    *,
+    scope: str = CACHE_SCOPE_PRIMARY,
+) -> Path:
+    root = project.work_dir_path / "frames" / safe_folder_slug(folder_name)
+    subdir = scope_subdir(scope)
+    if subdir:
+        root = root / subdir
+    return root / safe_folder_slug(media_path.stem)
 
 
 def _folder_summary(assets: list[AssetMediaAnalysis]) -> str:
@@ -84,6 +94,7 @@ def _count_media_to_analyze(
     folder_names: list[str],
     *,
     model: Optional[str] = None,
+    include_supplements: bool = True,
 ) -> int:
     total = 0
     for folder_name in folder_names:
@@ -91,6 +102,8 @@ def _count_media_to_analyze(
             project, folder_name, model=model
         )
         total += len(missing)
+        if include_supplements:
+            total += _count_open_supplements(project, folder_name, model=model)
     return total
 
 
@@ -110,9 +123,12 @@ def _analyze_single_media(
     use_api: bool,
     model: Optional[str],
     should_cancel: ShouldCancel | None = None,
+    scope: str = CACHE_SCOPE_PRIMARY,
 ) -> tuple[AssetMediaAnalysis, str]:
-    resolved_path = resolve_media_for_analysis(project, folder_name, media_path)
-    cache_file = media_cache_path(project, folder_name, resolved_path)
+    resolved_path = resolve_media_for_analysis(
+        project, folder_name, media_path, scope=scope
+    )
+    cache_file = media_cache_path(project, folder_name, resolved_path, scope=scope)
     per_file = max(1, project.frames_per_shot)
 
     _log(
@@ -125,9 +141,11 @@ def _analyze_single_media(
     resolved_model = resolve_gemini_model(model)
 
     if has_successful_asset_cache(
-        project, folder_name, resolved_path, model=resolved_model
+        project, folder_name, resolved_path, model=resolved_model, scope=scope
     ):
-        cached = load_cached_media_for_asset(project, folder_name, resolved_path)
+        cached = load_cached_media_for_asset(
+            project, folder_name, resolved_path, scope=scope
+        )
         assert cached is not None
         _log(project, f"SKIP (Cache ok) {folder_name}/{resolved_path.name}")
         return cached, "cache"
@@ -146,7 +164,7 @@ def _analyze_single_media(
         _log(project, f"ABBRUCH vor Start {folder_name}/{resolved_path.name}")
         raise AnalysisCancelledError()
 
-    frames_dir = _frames_dir(project, folder_name, resolved_path)
+    frames_dir = _frames_dir(project, folder_name, resolved_path, scope=scope)
     frame_count = 1 if is_image_media(resolved_path) else per_file
 
     frames = extract_frames(resolved_path, frames_dir, frame_count, should_cancel=should_cancel)
@@ -188,12 +206,13 @@ def _analyze_single_media(
         raise AnalysisCancelledError()
     if use_api:
         try:
-            analysis = analyze_media_from_frames(
-                resolved_path.name,
+            analysis = _analyze_frames_with_retry(
+                project,
                 folder_name,
+                resolved_path.name,
                 frames,
-                project.language,
-                model=resolved_model,
+                resolved_model=resolved_model,
+                should_cancel=should_cancel,
             )
             entry.description_model_requested = requested_model
             entry.description_model_resolved = resolved_model
@@ -280,6 +299,35 @@ def _analyze_single_media(
     return entry, "fehler"
 
 
+def analyze_supplement_media(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+    *,
+    use_api: bool = True,
+    model: Optional[str] = None,
+    should_cancel: ShouldCancel | None = None,
+) -> tuple[AssetMediaAnalysis, str]:
+    """Beschafftes Asset mit derselben Analyse wie ein Original beschreiben.
+
+    Identischer Prompt, identisches v3-Schema, identische Signatur — nur Cache
+    und Frames liegen im Supplement-Scope, damit die Ordner-Discovery aus dem
+    Dateinamen kein fehlendes Original ableitet.
+
+    Returns:
+        ``(entry, outcome)`` mit outcome ``cache`` | ``neu`` | ``fehler``.
+    """
+    return _analyze_single_media(
+        project,
+        folder_name,
+        Path(media_path),
+        use_api=use_api,
+        model=model,
+        should_cancel=should_cancel,
+        scope=CACHE_SCOPE_SUPPLEMENT,
+    )
+
+
 def _build_folder_assets(
     project: Project,
     folder_name: str,
@@ -300,6 +348,124 @@ def _build_folder_assets(
     return assets
 
 
+#: Ein vorübergehender Serverfehler darf keinen Ordner entwerten.
+ASSET_ANALYSIS_MAX_ATTEMPTS = 3
+ASSET_ANALYSIS_RETRY_SECONDS = (4.0, 12.0)
+
+
+def _sleep_cancellable(seconds: float, should_cancel: ShouldCancel | None) -> None:
+    """Warten in kleinen Scheiben, damit Stop nicht blockiert wird."""
+    remaining = seconds
+    while remaining > 0:
+        if _is_cancelled(should_cancel):
+            return
+        step = min(0.5, remaining)
+        time.sleep(step)
+        remaining -= step
+
+
+def _analyze_frames_with_retry(
+    project: Project,
+    folder_name: str,
+    media_name: str,
+    frames: list[Path],
+    *,
+    resolved_model: str,
+    should_cancel: ShouldCancel | None,
+):
+    """Frame-Analyse mit begrenzten Wiederholungen bei transienten Fehlern.
+
+    Ohne Wiederholung macht ein einzelner 503 den Ordner unvollständig und sein
+    Inventar wird beim folgenden Sync entfernt — ein teurer Nebeneffekt für ein
+    Problem, das beim zweiten Versuch meist weg ist.
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, ASSET_ANALYSIS_MAX_ATTEMPTS + 1):
+        try:
+            return analyze_media_from_frames(
+                media_name,
+                folder_name,
+                frames,
+                project.language,
+                model=resolved_model,
+            )
+        except GeminiNotConfiguredError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if not is_transient_api_error(exc):
+                raise
+            if attempt >= ASSET_ANALYSIS_MAX_ATTEMPTS or _is_cancelled(should_cancel):
+                raise
+            wait = ASSET_ANALYSIS_RETRY_SECONDS[
+                min(attempt - 1, len(ASSET_ANALYSIS_RETRY_SECONDS) - 1)
+            ]
+            _log(
+                project,
+                f"RETRY {attempt}/{ASSET_ANALYSIS_MAX_ATTEMPTS - 1} "
+                f"{folder_name}/{media_name} nach {wait:.0f}s: {exc}",
+            )
+            _sleep_cancellable(wait, should_cancel)
+    assert last_error is not None
+    raise last_error
+
+
+def _count_open_supplements(
+    project: Project,
+    folder_name: str,
+    *,
+    model: Optional[str],
+) -> int:
+    from otio_app.services.supplement_inventory import (
+        count_supplements_needing_analysis,
+    )
+
+    try:
+        return count_supplements_needing_analysis(project, [folder_name], model=model)
+    except Exception:  # noqa: BLE001
+        # Zählung ist nur Steuerung des Laufs — nie Grund für einen Abbruch.
+        return 0
+
+
+def _analyze_open_supplements(
+    project: Project,
+    folder_name: str,
+    *,
+    use_api: bool,
+    model: Optional[str],
+    should_cancel: ShouldCancel | None,
+    on_progress: ProgressCallback,
+    report: AnalysisRunReport | None,
+) -> None:
+    """Holt die reguläre Analyse für beschaffte Assets ohne v3-Signatur nach.
+
+    Betrifft Zeilen aus Funnel und Inbox, die vor dieser Änderung importiert
+    wurden oder ohne API-Schlüssel angekommen sind.
+    """
+    from otio_app.services.supplement_inventory import analyze_supplements_for_folder
+
+    supplement_report = analyze_supplements_for_folder(
+        project,
+        folder_name,
+        use_api=use_api,
+        model=model,
+        should_cancel=should_cancel,
+        on_progress=lambda event, payload: on_progress(event, payload),
+    )
+    if supplement_report.analyzed or supplement_report.failed:
+        _log(
+            project,
+            f"SUPPLEMENTS {folder_name}: {supplement_report.analyzed} analysiert, "
+            f"{supplement_report.cached} aus Cache, {supplement_report.failed} fehlerhaft",
+        )
+    if report is None:
+        return
+    report.media_analyzed += supplement_report.analyzed
+    report.media_cached += supplement_report.cached
+    report.media_failed += supplement_report.failed
+    report.failures.extend(supplement_report.failures)
+
+
 def _analyze_folder(
     project: Project,
     folder_name: str,
@@ -311,20 +477,27 @@ def _analyze_folder(
     folder_index: int = 0,
     folder_count: int = 1,
     report: AnalysisRunReport | None = None,
+    analyze_supplements: bool = True,
 ) -> AssetFolderAnalysis:
     media_paths = discover_folder_media_paths(project, folder_name)
     missing_cache = list_assets_missing_successful_cache(
         project, folder_name, model=model
+    )
+    open_supplements = (
+        _count_open_supplements(project, folder_name, model=model)
+        if analyze_supplements
+        else 0
     )
 
     _log(
         project,
         f"ORDNER {folder_name}: {len(media_paths)} Medien, "
         f"{len(missing_cache)} ohne JSON: "
-        + ", ".join(path.name for path in missing_cache),
+        + ", ".join(path.name for path in missing_cache)
+        + (f" | {open_supplements} Supplements offen" if open_supplements else ""),
     )
 
-    if not missing_cache:
+    if not missing_cache and not open_supplements:
         existing = should_skip_folder_analysis(project, folder_name, media_paths)
         if existing is not None:
             _log(project, f"ORDNER-SKIP {folder_name}: alle JSONs vorhanden")
@@ -458,6 +631,17 @@ def _analyze_folder(
     if not assets:
         item.description = NO_ANALYZABLE_MEDIA_DESCRIPTION
 
+    if analyze_supplements and not cancelled_mid_folder:
+        _analyze_open_supplements(
+            project,
+            folder_name,
+            use_api=use_api,
+            model=model,
+            should_cancel=should_cancel,
+            on_progress=on_progress,
+            report=report,
+        )
+
     inventory_saved = sync_folder_inventory_with_status(project, folder_name)
     _log(
         project,
@@ -488,11 +672,19 @@ def analyze_asset_folders(
     model: Optional[str] = None,
     on_progress: ProgressCallback = noop_progress,
     should_cancel: ShouldCancel | None = None,
+    analyze_supplements: bool = True,
 ) -> tuple[InventoryDocument, AnalysisRunReport]:
-    """Analysiert fehlende Assets in Ordnern; Inventar-JSON nur bei vollständigem Ordner."""
+    """Analysiert fehlende Assets in Ordnern; Inventar-JSON nur bei vollständigem Ordner.
+
+    ``analyze_supplements`` holt zusätzlich beschaffte Assets (Funnel, Inbox)
+    nach, die noch keine aktuelle v3-Analyse haben — mit demselben Prompt wie
+    Originale, damit das Inventar sprachübergreifend einheitlich bleibt.
+    """
     selected = validate_asset_selection(project.asset_subdir_names, folder_names)
     report = AnalysisRunReport()
-    total_media = _count_media_to_analyze(project, selected, model=model)
+    total_media = _count_media_to_analyze(
+        project, selected, model=model, include_supplements=analyze_supplements
+    )
     if total_media == 0:
         total_media = sum(
             len(discover_folder_media_paths(project, folder_name))
@@ -526,6 +718,7 @@ def analyze_asset_folders(
                 folder_index=folder_index,
                 folder_count=len(selected),
                 report=report,
+                analyze_supplements=analyze_supplements,
             )
         )
         if _is_cancelled(should_cancel):

@@ -97,27 +97,27 @@ def test_stale_when_prompt_version_changes(tmp_path: Path) -> None:
     assert "prompt_mismatch" in status.reasons
 
 
-def test_v3_editorial_r1_cache_stale_under_r2_prompt(
+def test_v3_editorial_r2_cache_stale_under_r3_prompt(
     tmp_path: Path,
 ) -> None:
-    """v3-r1-Caches bleiben usable, sind aber bei aktueller r2-Version stale."""
+    """Ältere v3-Caches bleiben usable, sind aber bei aktueller r3-Version stale."""
     media = _write_media(tmp_path / "clip.mp4")
-    assert ASSET_DESCRIPTION_PROMPT_VERSION == "asset_v3_editorial_r2"
+    assert ASSET_DESCRIPTION_PROMPT_VERSION == "asset_v3_editorial_r3"
     assert ANALYSIS_SCHEMA_VERSION == "asset-analysis-v3"
     assert ASSET_SAMPLER_VERSION == "uniform-v1"
 
-    r1_signature = build_analysis_signature(
+    r2_signature = build_analysis_signature(
         media,
         resolved_model_id="gemini-test",
-        prompt_version="asset_v3_editorial",
+        prompt_version="asset_v3_editorial_r2",
     )
     entry = AssetMediaAnalysis(
         path=str(media),
-        description="R1 Analyse usable",
+        description="R2 Analyse usable",
         analysis_parse_ok=True,
         analysis_schema_version=ANALYSIS_SCHEMA_VERSION,
-        description_prompt_version="asset_v3_editorial",
-        analysis_signature=r1_signature,
+        description_prompt_version="asset_v3_editorial_r2",
+        analysis_signature=r2_signature,
     )
     status = classify_asset_cache_status(
         entry, media, resolved_model_id="gemini-test"
@@ -397,7 +397,7 @@ def test_freshness_uses_effective_clean_media_path(
 
     monkeypatch.setattr(
         "otio_app.services.media_inventory_cache.resolve_media_for_analysis",
-        lambda project, folder_name, media_path: clean,
+        lambda project, folder_name, media_path, **_kwargs: clean,
     )
     signature = build_analysis_signature(clean, resolved_model_id="gemini-test")
     # Signatur/Fingerprint vom Clean-Medium; Freshness muss denselben Pfad nutzen.

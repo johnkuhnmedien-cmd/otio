@@ -21,7 +21,7 @@ from otio_app.defaults import (
     MATCH_QUALITY_UNPASSEND,
 )
 
-ASSET_DESCRIPTION_PROMPT_VERSION = "asset_v3_editorial_r2"
+ASSET_DESCRIPTION_PROMPT_VERSION = "asset_v3_editorial_r3"
 _CAPTION_MAX_CHARS = 180
 _ALLOWED_MOTION = frozenset(
     {"static", "pan", "tilt", "tracking", "drone", "handheld", "zoom", "unknown"}
@@ -64,6 +64,40 @@ class GeminiNotConfiguredError(RuntimeError):
     """GEMINI_API_KEY fehlt."""
 
 
+#: Vorübergehende Serverzustände — ein erneuter Versuch ist sinnvoll.
+_TRANSIENT_HTTP_CODES = frozenset({408, 429, 500, 502, 503, 504})
+_TRANSIENT_STATUS_NAMES = frozenset(
+    {
+        "UNAVAILABLE",
+        "RESOURCE_EXHAUSTED",
+        "DEADLINE_EXCEEDED",
+        "INTERNAL",
+        "ABORTED",
+    }
+)
+
+
+def is_transient_api_error(exc: BaseException) -> bool:
+    """True bei Fehlern, die ein Wiederholen rechtfertigen.
+
+    Ein 503 „Deadline expired" ist kein Befund über die Mediendatei. Ohne diese
+    Unterscheidung landet er als dauerhafter Analysefehler im Cache, der Ordner
+    gilt nicht mehr als vollständig — und sein Inventar wird entfernt.
+    """
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and code in _TRANSIENT_HTTP_CODES:
+        return True
+    status = str(getattr(exc, "status", "") or "").strip().upper()
+    if status in _TRANSIENT_STATUS_NAMES:
+        return True
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    text = str(exc).upper()
+    if any(name in text for name in _TRANSIENT_STATUS_NAMES):
+        return True
+    return any(f" {http_code} " in f" {text} " for http_code in ("429", "503", "504"))
+
+
 def resolve_gemini_model(model: Optional[str] = None) -> str:
     """Ermittelt das zu nutzende Modell (UI-Auswahl > .env > Standard)."""
     if model and model.strip() in GEMINI_MODEL_CHOICES:
@@ -81,7 +115,7 @@ def format_gemini_model_label(model_id: str) -> str:
     return GEMINI_MODEL_LABELS.get(model_id, model_id)
 
 
-def _get_client():
+def _get_client(*, timeout_ms: int | None = None):
     api_key = get_api_key("GEMINI_API_KEY")
     if not api_key:
         raise GeminiNotConfiguredError(
@@ -90,20 +124,39 @@ def _get_client():
         )
     from google import genai
 
-    return genai.Client(api_key=api_key)
+    if timeout_ms is None:
+        return genai.Client(api_key=api_key)
+    from google.genai import types
+
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=int(timeout_ms)),
+    )
 
 
 def _extract_json(text: str) -> Any:
-    cleaned = text.strip()
+    """Parse JSON from an LLM reply.
+
+    Gemini often puts literal newlines/tabs inside long string fields
+    (YouTube descriptions). ``json.loads`` rejects those by default
+    (``Invalid control character``); ``strict=False`` keeps the text.
+    """
+    cleaned = (text or "").strip()
     fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL)
     if fence_match:
-        cleaned = fence_match.group(1)
-    return json.loads(cleaned)
+        cleaned = fence_match.group(1).strip()
+    try:
+        return json.loads(cleaned, strict=False)
+    except json.JSONDecodeError:
+        match = re.search(r"(\{.*\}|\[.*\])", cleaned, re.DOTALL)
+        if match is None:
+            raise
+        return json.loads(match.group(1), strict=False)
 
 
 @dataclass(frozen=True)
 class MediaFrameAnalysis:
-    """Strukturierte Asset-Frame-Analyse (asset_v3_editorial_r2)."""
+    """Strukturierte Asset-Frame-Analyse (asset_v3_editorial_r3)."""
 
     description: str = ""
     caption: str = ""
@@ -203,28 +256,44 @@ class MediaFrameAnalysis:
         )
 
 
+def _chapter_location_hint(folder_name: str) -> str:
+    """Kapitel-/Ordnername als einzeiliger Orts-Hinweis, ohne Prompt-Umbrüche."""
+    return " ".join(str(folder_name or "").split())[:120]
+
+
 def build_asset_frame_analysis_prompt(
     media_name: str, folder_name: str, language: str
 ) -> str:
-    """Baut den Asset-Frame-Prompt (v3 editorial r2).
+    """Baut den Asset-Frame-Prompt (v3 editorial r3).
 
-    ``media_name`` und ``folder_name`` bleiben aus Kompatibilitätsgründen Parameter,
-    werden aber bewusst nicht in den inhaltlichen Prompt interpoliert — sie sind
-    nur technische Identifikatoren und keine visuelle Evidenz.
+    ``folder_name`` ist der Kapitelort — ein Identifikationshinweis, kein Beweis.
+    ``media_name`` bleibt absichtlich draußen: Dateinamen sind keine visuelle Evidenz.
     """
-    del media_name, folder_name
+    del media_name
+    chapter = _chapter_location_hint(folder_name)
+    location_line = (
+        f"Kapitelort (Hinweis, kein Beweis): {chapter}\n"
+        if chapter
+        else "Kapitelort: nicht angegeben.\n"
+    )
     return (
-        "Du analysierst ausschließlich die bereitgestellten Frames einer Mediendatei. "
-        f"Sprache für Freitext: {language}.\n\n"
-        "WICHTIG — Keine Metadaten als Inhalt:\n"
-        "- Dateiname, Ordnername, Projektname und Pfad sind keine visuelle Evidenz.\n"
-        "- Niemals Ort, Motiv, Person, Ereignis oder Inhalt aus solchen Identifikatoren "
-        "ableiten.\n"
-        "- Nur beschreiben, was in den Frames sichtbar ist.\n"
-        "- Ortsnamen nur nennen, wenn sie im Bild selbst lesbar sind oder ein visuell "
-        "unverwechselbares Wahrzeichen mit hoher Sicherheit erkannt wird.\n"
-        "- Bei Unsicherheit generisch bleiben (z. B. Berglandschaft, historisches Dorf, "
-        "Sumpflandschaft).\n\n"
+        "Du analysierst die bereitgestellten Frames einer Mediendatei. "
+        f"Sprache für Freitext: {language}.\n"
+        f"{location_line}\n"
+        "WICHTIG — Frames zuerst, Kapitelort als Identifikationshilfe:\n"
+        "- Beschreibe nur, was in den Frames sichtbar ist.\n"
+        "- Dateiname und Pfad sind keine visuelle Evidenz. Niemals Motiv, Person, "
+        "Ereignis oder Inhalt aus dem Dateinamen ableiten.\n"
+        "- Der Kapitelort ist Kontext: nutze ihn, um sichtbare Orte, Bauwerke und "
+        "Wahrzeichen mit dem gebräuchlichen Eigennamen zu benennen, wenn die Frames "
+        "dazu passen.\n"
+        "- Mehrere ähnliche Motive am selben Ort unterscheiden (welche Festung, "
+        "welcher Tempel, welches Schloss). Nicht jedes passende Motiv auf das "
+        "berühmteste Wahrzeichen des Kapitels legen.\n"
+        "- Wenn die Frames kein bestimmtes Wahrzeichen stützen: visuell genau "
+        "beschreiben und den Kapitelort nur als Lage nennen — keinen berühmten "
+        "Namen raten.\n"
+        "- Nichts erfinden, was nicht sichtbar ist.\n\n"
         "Antworte NUR mit einem JSON-Objekt in exakt dieser Struktur.\n"
         "Die Platzhalter <string>, <int_0_100>, <float_0_1>, <enum_...> und null sind "
         "Formhinweise — keine Beispielwerte zum Kopieren und keine Score-Anker:\n\n"
@@ -289,14 +358,16 @@ def build_asset_frame_analysis_prompt(
         "schwersten defects-Eintrag.\n\n"
         "Freitextfelder (unterschiedliche Aufgaben):\n"
         "- description: 2–3 sachliche Sätze zu räumlichem Aufbau, zentralen Motiven, "
-        "Licht, Atmosphäre und sichtbarer Handlung. Keine Taglisten wiederholen, "
-        "keine spekulativen Orte.\n"
-        "- caption: ein kurzer Retrieval-Satz, maximal 180 Zeichen; primäres Motiv + "
-        "Perspektive + wichtigste sichtbare Handlung; keine Werbesprache, keine "
-        "Dateimetadaten.\n"
-        "- content_tags: 3–8 kurze Suchbegriffe; keine vollständigen Sätze; keine "
-        "Ortsnamen ohne sichtbaren Beleg; keine redundanten Singular-/Plural- oder "
-        "Synonymvarianten; keine Qualitätsurteile (schön, hochwertig, cinematisch).\n\n"
+        "Licht, Atmosphäre und sichtbarer Handlung. Eigennamen von Ort und Wahrzeichen "
+        "nennen, wenn Kapitelort und Frames sie stützen. Keine Taglisten wiederholen, "
+        "keine unsichtbaren Details erfinden.\n"
+        "- caption: ein kurzer Retrieval-Satz, maximal 180 Zeichen; primäres Motiv mit "
+        "spezifischer Identität (welches Bauwerk, welcher Ort) + Perspektive + "
+        "wichtigste sichtbare Handlung; keine Werbesprache, keine Dateimetadaten.\n"
+        "- content_tags: 3–8 kurze Suchbegriffe; keine vollständigen Sätze; "
+        "Orts- und Wahrzeichennamen erlaubt, wenn Kapitelort und Frames sie stützen; "
+        "keine redundanten Singular-/Plural- oder Synonymvarianten; keine "
+        "Qualitätsurteile (schön, hochwertig, cinematisch).\n\n"
         "framing.type = Perspektive / dominanter Aufnahmetyp "
         "(close|medium|wide|aerial|pov):\n"
         "- aerial: eindeutig erhöhte Luft-/Drohnenperspektive\n"

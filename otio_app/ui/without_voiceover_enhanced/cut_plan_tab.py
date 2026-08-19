@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import time
 
 import streamlit as st
 
@@ -13,6 +12,8 @@ from otio_app.defaults import (
     ENHANCED_CUT_LLM_MODEL_LABELS,
     ENHANCED_FUNNEL_LLM_MODEL_CHOICES,
     ENHANCED_FUNNEL_LLM_MODEL_LABELS,
+    VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_MODEL,
+    resolve_funnel_gemini_model,
 )
 from otio_app.services.voiceover_generation.llm_pricing import (
     estimate_call_cost_usd,
@@ -23,14 +24,21 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
     resolve_llm_model_id,
     save_model_settings,
+    split_llm_model_id,
 )
-from otio_app.services.voiceover_generation.models import LlmRoleSettings
+from otio_app.services.voiceover_generation.project_brief_defaults_service import (
+    normalize_brief_language,
+)
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     CUT_PLAN_MODE_CHOICES,
     CUT_PLAN_MODE_LEGACY,
     CUT_PLAN_MODE_UNIFIED,
+    CUT_PLAN_OPTIONS_SCHEMA_VERSION,
+    DEFAULT_ELEVENLABS_MUSIC_COUNT,
     DEFAULT_MAX_SFX_PER_CHAPTER,
     DEFAULT_SFX_PLANNER_MODEL,
+    ELEVENLABS_MUSIC_COUNT_MAX,
+    ELEVENLABS_MUSIC_COUNT_MIN,
     MAX_SFX_PER_CHAPTER_MAX,
     MAX_SFX_PER_CHAPTER_MIN,
     STILL_BACKGROUND_CHOICES,
@@ -48,8 +56,19 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     is_keyword_flow_unified_style,
     is_keyword_sync_unified_style,
     load_cut_plan_options,
+    persist_cut_plan_options,
+    resolve_llm_cut_model_id,
     save_cut_plan_options,
 )  # TIMING_MODE_* used in settings UI labels/defaults
+from otio_app.services.without_voiceover_enhanced.cut_plan_options_defaults_service import (
+    apply_language_defaults_to_options,
+    default_cut_plan_options_for_project,
+    load_language_cut_plan_defaults,
+    save_language_cut_plan_defaults,
+)
+from otio_app.ui.voiceover_generation.language_standards_ui import (
+    render_language_standard_path_caption,
+)
 from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
     ChapterCutError,
     export_all_chapters_otio,
@@ -143,8 +162,10 @@ from otio_app.services.without_voiceover_enhanced.otio_export_service import (
 )
 from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service import (
     MusicServiceError,
+    generate_music_for_allowed_targets,
     generate_music_for_chapter,
     generate_music_for_intro,
+    music_bulk_button_label,
     music_ui_status_chapter,
     music_ui_status_intro,
 )
@@ -186,11 +207,11 @@ from otio_app.ui.voiceover_generation._shared import (
 )
 from otio_app.ui.without_voiceover_enhanced._shared import get_enhanced_project
 
-_ROUGH_CUT_OUTPUT_DEFAULT = 16_384
-_FINAL_CUT_OUTPUT_DEFAULT = 16_384
-_OUTPUT_TOKENS_MIN = 2_048
-_OUTPUT_TOKENS_MAX = 65_536
-_OUTPUT_TOKENS_STEP = 1_024
+_ROUGH_CUT_OUTPUT_DEFAULT = 100_000
+_FINAL_CUT_OUTPUT_DEFAULT = 100_000
+_OUTPUT_TOKENS_MIN = 2_000
+_OUTPUT_TOKENS_MAX = 100_000
+_OUTPUT_TOKENS_STEP = 1_000
 _STOCK_PASSAGE_LABEL_LEN = 110
 
 
@@ -335,10 +356,18 @@ def _render_cost_caption(
     )
 
 
+def _live_llm_cut_model_id(project, options: CutPlanOptions | None = None) -> str:
+    """Live-Wert aus den Cut Plan Settings, sonst persistierter Sprach-/Projektwert."""
+    if options is not None:
+        configured = str(options.llm_cut_model or "").strip()
+        if configured:
+            return configured
+    return resolve_llm_cut_model_id(project)
+
+
 def _render_enhanced_cut_model(
     project,
     *,
-    role_attr: str,
     label: str,
     key_prefix: str,
     input_info: str,
@@ -347,25 +376,19 @@ def _render_enhanced_cut_model(
     chapter_count: int = 1,
     cost_scope_label: str = "Kapitel-Call(s)",
     cost_note: str = "",
+    model_id: str | None = None,
 ) -> tuple[str, str, int]:
-    settings = load_model_settings(project)
-    role_settings: LlmRoleSettings = getattr(settings, role_attr)
-    with st.expander(f"⚙️ {label}", expanded=True):
-        updated = render_llm_model_selectbox(
-            label=label,
-            role_settings=role_settings,
-            key=f"{key_prefix}_model_{project.id}",
-            input_info=input_info,
-            options=ENHANCED_CUT_LLM_MODEL_CHOICES,
-            labels=ENHANCED_CUT_LLM_MODEL_LABELS,
-            show_estimated_costs=True,
+    """Kosten/Tokens für den LLM-Cut — Modell nur in Cut Plan Settings."""
+    resolved = str(model_id or "").strip() or resolve_llm_cut_model_id(project)
+    provider, model = split_llm_model_id(resolved)
+    pretty = ENHANCED_CUT_LLM_MODEL_LABELS.get(resolved, resolved)
+    with st.expander("Kosten & Output-Tokens", expanded=True):
+        st.caption(
+            f"**{label}:** {pretty}. Modell nur in **Cut Plan Settings** "
+            "(Intro, Kapitel und Auto-Lauf)."
         )
-        if st.button("Modell speichern", key=f"{key_prefix}_model_save_{project.id}"):
-            save_model_settings(
-                project, settings.model_copy(update={role_attr: updated})
-            )
-            st.success(f"{label} gespeichert.")
-
+        if input_info:
+            render_llm_input_info(input_info)
         token_key = f"{key_prefix}_max_tokens_{project.id}"
         if token_key not in st.session_state:
             st.session_state[token_key] = default_output_tokens
@@ -382,78 +405,87 @@ def _render_enhanced_cut_model(
             ),
         )
         _render_cost_caption(
-            provider=updated.provider,
-            model=updated.model,
+            provider=provider,
+            model=model,
             input_tokens=input_tokens,
             output_ceiling=int(max_tokens),
             chapter_count=chapter_count,
             scope_label=cost_scope_label,
             note=cost_note,
         )
-    return updated.provider, updated.model, int(max_tokens)
+    return provider, model, int(max_tokens)
 
 
 def _render_lightweight_funnel_monitor(project) -> None:
     """Schlanke Seite während der Funnel läuft — Abbrechen ohne schweren Rerun."""
     mgr = get_supplement_funnel_job_manager()
-    state = mgr.get_state(project.id)
-    if state is None or state.status != FunnelJobStatus.RUNNING:
-        return
 
-    st.subheader("Supplement-Funnel läuft")
-    st.progress(
-        min(1.0, max(0.0, float(state.fraction))),
-        text=(state.message or "Funnel läuft…")[:120],
-    )
-    st.info(state.message or "Funnel läuft im Hintergrund…")
-    if state.model:
-        st.caption(f"Modell: `{state.model}`")
-    if state.gap_total:
+    def _body() -> None:
+        state = mgr.get_state(project.id)
+        if state is None or state.status != FunnelJobStatus.RUNNING:
+            return
+
+        st.subheader("Supplement-Funnel läuft")
+        st.progress(
+            min(1.0, max(0.0, float(state.fraction))),
+            text=(state.message or "Funnel läuft…")[:120],
+        )
+        st.info(state.message or "Funnel läuft im Hintergrund…")
+        if state.model:
+            st.caption(f"Modell: `{state.model}`")
+        if state.gap_total:
+            st.caption(
+                f"Gap {state.gap_index}/{state.gap_total}"
+                + (f" · `{state.gap_id}`" if state.gap_id else "")
+            )
+
+        if state.cancel_requested:
+            st.warning(
+                "Abbruch angefordert. Der aktuelle Gemini-Schritt "
+                "(Textprüfung oder Thumbnail-Batch, hartes Limit 120 s) "
+                "wird noch beendet — danach stoppt der Funnel. "
+                "Bereits erfüllte Gaps bleiben."
+            )
+        else:
+            st.caption(
+                "Ein Gemini-Call gilt nach 120 s als fehlgeschlagen — "
+                "dann geht es mit der nächsten Gap weiter. "
+                "Abbrechen wirkt nach dem laufenden Schritt. "
+                "Wenn es trotzdem hängt: UI trotzdem freigeben."
+            )
+
+        cols = st.columns(2)
+        with cols[0]:
+            if st.button(
+                "⏹ Funnel abbrechen",
+                key=f"enh_funnel_cancel_lite_{project.id}",
+                disabled=state.cancel_requested,
+                type="primary",
+            ):
+                mgr.request_cancel(project.id)
+                st.rerun()
+        with cols[1]:
+            if st.button(
+                "UI trotzdem freigeben",
+                key=f"enh_funnel_force_reset_lite_{project.id}",
+            ):
+                mgr.force_reset(project.id)
+                st.rerun()
+
+        if state.log_lines:
+            with st.expander("Letzte Fortschrittszeilen", expanded=False):
+                st.caption("\n".join(state.log_lines[-20:]))
+
         st.caption(
-            f"Gap {state.gap_index}/{state.gap_total}"
-            + (f" · `{state.gap_id}`" if state.gap_id else "")
+            "Leichte Ansicht während der Funnel läuft "
+            "(Cut-Plan-Details ausgeblendet, damit Abbrechen schnell reagiert)."
         )
 
-    if state.cancel_requested:
-        st.warning(
-            "Abbruch angefordert. Der aktuelle Gemini-/Download-Schritt "
-            "(oft Thumbnail-Batch mit bis zu 10 Bildern) wird noch beendet — "
-            "danach stoppt der Funnel. Bereits erfüllte Gaps bleiben."
-        )
-    else:
-        st.caption(
-            "Abbrechen wirkt nach dem laufenden LLM-/Download-Schritt, "
-            "nicht mitten im API-Call."
-        )
-
-    cols = st.columns(2)
-    with cols[0]:
-        if st.button(
-            "⏹ Funnel abbrechen",
-            key=f"enh_funnel_cancel_lite_{project.id}",
-            disabled=state.cancel_requested,
-            type="primary",
-        ):
-            mgr.request_cancel(project.id)
-            st.rerun()
-    with cols[1]:
-        if st.button(
-            "🔄 Aktualisieren",
-            key=f"enh_funnel_refresh_lite_{project.id}",
-        ):
-            st.rerun()
-
-    if state.log_lines:
-        with st.expander("Letzte Fortschrittszeilen", expanded=False):
-            st.caption("\n".join(state.log_lines[-20:]))
-
-    st.caption(
-        "Leichte Ansicht während der Funnel läuft "
-        "(Cut-Plan-Details ausgeblendet, damit Abbrechen schnell reagiert)."
+    poll_while_running(
+        _body,
+        lambda: mgr.is_running(project.id),
+        refresh_key=f"enh_funnel_lite_poll_{project.id}",
     )
-    # Kurzes Auto-Refresh, damit Stop ohne manuelles Klicken sichtbar wird.
-    time.sleep(1.5)
-    st.rerun()
 
 
 
@@ -541,12 +573,61 @@ def _default_cut_section(project) -> str:
     return _SECTION_ROUGH
 
 
+def _cut_plan_settings_reload_key(project_id: str) -> str:
+    return f"_enh_opt_reload_{project_id}"
+
+
+def _clear_cut_plan_settings_widgets(project_id: str) -> None:
+    """Widget-Keys löschen, bevor die Settings-Widgets neu entstehen."""
+    suffix = f"_{project_id}"
+    stale = [
+        key
+        for key in list(st.session_state.keys())
+        if isinstance(key, str) and key.startswith("enh_opt_") and key.endswith(suffix)
+    ]
+    for prefix in ("enh_unified_model", "enh_rough_model", "enh_final_model"):
+        stale.append(f"{prefix}_{project_id}")
+    for key in stale:
+        st.session_state.pop(key, None)
+
+
+def _persist_cut_plan_options_with_sfx(project, options: CutPlanOptions) -> CutPlanOptions:
+    return persist_cut_plan_options(project, options)
+
+
+def _cut_plan_settings_success_text(saved: CutPlanOptions) -> str:
+    if is_keyword_flow_free_unified_style(saved):
+        style_note = " · Keyword Flow Free"
+    elif is_keyword_flow_unified_style(saved):
+        style_note = " · Keyword Flow"
+    elif is_keyword_sync_unified_style(saved):
+        style_note = " · Keyword-Sync"
+    else:
+        style_note = " · Rhythmus"
+    style_note += f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
+    style_note += (
+        f" · LLM Cut={saved.llm_cut_model or '—'}"
+        f" · SFX planner={saved.sfx_planner_model} "
+        f"· max SFX={saved.max_sfx_per_chapter}"
+        f" · Music={saved.elevenlabs_music_count}"
+    )
+    return (
+        f"mode={saved.cut_plan_mode} · "
+        f"style={saved.unified_cut_style}{style_note} · "
+        f"reuse≥{saved.min_asset_reuse_distance_shots} · "
+        f"preroll {saved.voiceover_preroll_sec}s/{saved.voiceover_preroll_mode} · "
+        f"postroll {saved.voiceover_postroll_sec}s/{saved.voiceover_postroll_mode}"
+    )
+
+
 def _render_cut_plan_settings(project) -> CutPlanOptions:
     """Gemeinsame Settings für Lauf 2/3 + Python/OTIO (vor den Bereichen)."""
+    if st.session_state.pop(_cut_plan_settings_reload_key(project.id), False):
+        _clear_cut_plan_settings_widgets(project.id)
     current = load_cut_plan_options(project)
     with st.expander("Cut Plan Settings", expanded=False):
         st.caption(
-            "Shot/Usage/Reuse/Vorlauf/Nachlauf/Toleranz → LLM 2+3 + Python. "
+            "LLM-Cut-Modell, Shot/Usage/Reuse/Vorlauf/Nachlauf/Toleranz → LLM + Python. "
             "Head-Trim → nur Python. Titel + Still → OTIO (Titel-Einblendung folgt)."
         )
         cut_mode_labels = {
@@ -673,6 +754,25 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             disabled=cut_plan_mode != CUT_PLAN_MODE_UNIFIED
             or not enable_unified_mini_repair,
         )
+        st.markdown("##### LLM Cut")
+        cut_model_options = list(ENHANCED_CUT_LLM_MODEL_CHOICES)
+        current_llm_cut_model = str(current.llm_cut_model or "").strip()
+        if not current_llm_cut_model:
+            current_llm_cut_model = resolve_llm_cut_model_id(project)
+        if current_llm_cut_model not in cut_model_options:
+            cut_model_options = [current_llm_cut_model, *cut_model_options]
+        llm_cut_model = st.selectbox(
+            "Modell (Unified Cut / Auto-Lauf)",
+            options=cut_model_options,
+            index=cut_model_options.index(current_llm_cut_model),
+            format_func=lambda m: ENHANCED_CUT_LLM_MODEL_LABELS.get(m, m),
+            key=f"enh_opt_llm_cut_model_{project.id}",
+            help=(
+                "Ein Modell für Unified Cut, Intro-Cut, Körper-Kapitel und Auto-Lauf. "
+                "Nur hier wählen — nicht noch einmal im Cut-Bereich. "
+                "Wird mit „Als Standard für die Sprache speichern“ übernommen."
+            ),
+        )
         st.markdown("##### Sound Effects (MVP)")
         sfx_model_options = list(ENHANCED_CUT_LLM_MODEL_CHOICES)
         current_sfx_model = str(
@@ -701,6 +801,23 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             help=(
                 "Hartes Maximum pro Intro/Kapitel — kein Ziel. "
                 "Planner soll möglichst weniger verwenden. Default 3."
+            ),
+        )
+        st.markdown("##### ElevenLabs Music")
+        elevenlabs_music_count = st.number_input(
+            "Anzahl Music-Stücke (inkl. Intro)",
+            min_value=ELEVENLABS_MUSIC_COUNT_MIN,
+            max_value=ELEVENLABS_MUSIC_COUNT_MAX,
+            value=int(
+                current.elevenlabs_music_count or DEFAULT_ELEVENLABS_MUSIC_COUNT
+            ),
+            step=1,
+            key=f"enh_opt_el_music_count_{project.id}",
+            help=(
+                "Wie viele ElevenLabs-Music-Stücke erzeugt werden dürfen. "
+                "Intro zählt als erstes Stück, danach die Körper-Kapitel in "
+                "Filmreihenfolge. 4 = Intro + erste 3 Kapitel. 1 = nur Intro. "
+                "Gilt nach Speichern der Cut Plan Settings."
             ),
         )
         col1, col2, col3 = st.columns(3)
@@ -1093,7 +1210,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             )
 
         draft = CutPlanOptions(
-            schema_version="1.11",
+            schema_version=CUT_PLAN_OPTIONS_SCHEMA_VERSION,
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
             unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
             keyword_flow_allow_onset_overflow=bool(
@@ -1101,8 +1218,10 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             ),
             enable_unified_mini_repair=bool(enable_unified_mini_repair),
             unified_mini_repair_threshold=float(unified_mini_repair_threshold),
+            llm_cut_model=str(llm_cut_model),
             sfx_planner_model=str(sfx_planner_model),
             max_sfx_per_chapter=int(max_sfx_per_chapter),
+            elevenlabs_music_count=int(elevenlabs_music_count),
             include_middle_frames=bool(include_middle_frames),
             max_middle_frames_per_chapter=int(max_middle_frames_per_chapter),
             max_candidates_per_gap=int(max_candidates_per_gap),
@@ -1139,50 +1258,62 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             still_image_pan_min_aspect=float(still_image_pan_min_aspect),
             still_image_pan_max_aspect=float(still_image_pan_max_aspect),
         )
-        if st.button(
-            "Cut Plan Settings speichern",
-            key=f"enh_opt_save_{project.id}",
-            type="primary",
-        ):
-            saved = save_cut_plan_options(project, draft)
-            # Mirror SFX planner into model-settings role (same registry/router).
-            from otio_app.services.voiceover_generation.model_settings_service import (
-                split_llm_model_id,
-            )
-
-            sfx_prov, sfx_mod = split_llm_model_id(str(saved.sfx_planner_model))
-            model_settings = load_model_settings(project)
-            save_model_settings(
-                project,
-                model_settings.model_copy(
-                    update={
-                        "enhanced_sfx_planner": LlmRoleSettings(
-                            provider=sfx_prov, model=sfx_mod
-                        )
-                    }
+        lang_key = normalize_brief_language(project.language)
+        has_language_default = load_language_cut_plan_defaults(lang_key) is not None
+        col_save, col_lang, col_reset = st.columns(3)
+        with col_save:
+            if st.button(
+                "Cut Plan Settings speichern",
+                key=f"enh_opt_save_{project.id}",
+                type="primary",
+            ):
+                saved = _persist_cut_plan_options_with_sfx(project, draft)
+                st.session_state[_cut_plan_settings_reload_key(project.id)] = True
+                st.success(f"Gespeichert: {_cut_plan_settings_success_text(saved)}")
+                st.rerun()
+        with col_lang:
+            if st.button(
+                f"Als Standard für {lang_key} speichern",
+                key=f"enh_opt_save_lang_{project.id}",
+                help=(
+                    f"Cut Plan Settings inkl. LLM-Cut-Modell global für {lang_key}. "
+                    "Erzeugte Cuts, Timing und Funnel bleiben projektspezifisch."
                 ),
+            ):
+                save_language_cut_plan_defaults(lang_key, draft)
+                saved = _persist_cut_plan_options_with_sfx(project, draft)
+                st.session_state[_cut_plan_settings_reload_key(project.id)] = True
+                st.success(
+                    f"Als globaler Standard für **{lang_key}** gespeichert. "
+                    f"{_cut_plan_settings_success_text(saved)}"
+                )
+                st.rerun()
+        with col_reset:
+            reset_label = (
+                f"Auf {lang_key}-Standard zurück"
+                if has_language_default
+                else "Auf Standard zurücksetzen"
             )
-            if is_keyword_flow_free_unified_style(saved):
-                style_note = " · Keyword Flow Free"
-            elif is_keyword_flow_unified_style(saved):
-                style_note = " · Keyword Flow"
-            elif is_keyword_sync_unified_style(saved):
-                style_note = " · Keyword-Sync"
-            else:
-                style_note = " · Rhythmus"
-            style_note += f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
-            style_note += (
-                f" · SFX planner={saved.sfx_planner_model} "
-                f"· max SFX={saved.max_sfx_per_chapter}"
-            )
-            st.success(
-                f"Gespeichert: mode={saved.cut_plan_mode} · "
-                f"style={saved.unified_cut_style}{style_note} · "
-                f"reuse≥{saved.min_asset_reuse_distance_shots} · "
-                f"preroll {saved.voiceover_preroll_sec}s/{saved.voiceover_preroll_mode} · "
-                f"postroll {saved.voiceover_postroll_sec}s/{saved.voiceover_postroll_mode}"
-            )
-            st.rerun()
+            if st.button(
+                reset_label,
+                key=f"enh_opt_reset_lang_{project.id}",
+                disabled=not has_language_default,
+                help=(
+                    f"Lädt den globalen {lang_key}-Standard in dieses Projekt."
+                    if has_language_default
+                    else "Noch kein Sprachstandard gespeichert."
+                ),
+            ):
+                language_defaults = load_language_cut_plan_defaults(lang_key)
+                if language_defaults is not None:
+                    reset = apply_language_defaults_to_options(
+                        default_cut_plan_options_for_project(project),
+                        language_defaults,
+                    )
+                    _persist_cut_plan_options_with_sfx(project, reset)
+                    st.session_state[_cut_plan_settings_reload_key(project.id)] = True
+                    st.rerun()
+        render_language_standard_path_caption("cut_plan_options")
         # Live-Modus sofort für Bereichs-Radio nutzen (Persistenz erst beim Speichern).
         return draft
 
@@ -1266,8 +1397,8 @@ def _music_button_label(ui_status: dict) -> str:
         return "⚠ Music veraltet"
     if status == "unavailable":
         msg = str(ui_status.get("message") or "")
-        if "Kapitel 1–3" in msg or "Kapitel 1-3" in msg:
-            return "Music MVP: nur Kapitel 1–3"
+        if "nur Intro" in msg or "Kapitel 1" in msg:
+            return msg
         return "Music nicht verfügbar"
     return "ElevenLabs Music"
 
@@ -1291,13 +1422,14 @@ def _render_intro_cut_section(
     *,
     provider: str,
     model: str,
-    output_ceiling: int = 8_192,
+    output_ceiling: int = 100_000,
 ) -> None:
     """Separater Intro-Pfad vor den Kapitel-Unified-Buttons."""
     st.markdown("##### 0. Intro Cut (separat)")
     st.caption(
         "Nur Intro: gebündelte Inventare · strong-only · Opening 4s / Closing 5–8s · "
         "ohne Cut-Plan shot_min. "
+        "Modell wie der Unified Cut (Cut Plan Settings). "
         "**Intro: Python Timing** rechnet nur das Intro neu (Gesamt-Timeline bleibt). "
         "**Intro-OTIO** exportiert ausschließlich Intro (auch mit Lücken)."
     )
@@ -1306,7 +1438,7 @@ def _render_intro_cut_section(
         provider=provider,
         model=model,
         input_tokens=intro_tokens,
-        output_ceiling=min(int(output_ceiling), 8_192),
+        output_ceiling=int(output_ceiling),
         chapter_count=1,
         scope_label="Intro-Call (1×, alle Kapitel-Inventare gebündelt)",
         note=(
@@ -1320,6 +1452,18 @@ def _render_intro_cut_section(
         value=f"{project.name}_intro",
         key=f"enh_intro_otio_basename_{project.id}",
     )
+    intro_timing_flash_key = f"_enh_intro_timing_flash_{project.id}"
+    intro_flash = st.session_state.pop(intro_timing_flash_key, None)
+    if isinstance(intro_flash, dict):
+        success_text = str(intro_flash.get("success") or "")
+        if success_text:
+            st.success(success_text)
+        for line in intro_flash.get("captions") or []:
+            text = str(line or "").strip()
+            if text:
+                st.caption(text)
+    # Status nach Timing-Rerun neu lesen — sonst bleibt Music/SFX auf dem
+    # Stand vor dem Klick (Streamlit rendert die Knöpfe vor dem Handler).
     music_ui = music_ui_status_intro(project)
     sfx_ui = sfx_ui_status_intro(project)
     done_css_keys = []
@@ -1421,7 +1565,7 @@ def _render_intro_cut_section(
                 else ""
             )
             n_vo = len(intro_plan_now.slots) if intro_plan_now is not None else 0
-            st.success(
+            success_text = (
                 f"Intro-Timing: {resolved.total_duration_seconds:.2f}s · "
                 f"{n_vo} VO-Slots (LLM) + Opener/Closing-Hülle "
                 f"(LLM-Assets, von Python nur zeitlich platziert) = "
@@ -1429,8 +1573,9 @@ def _render_intro_cut_section(
                 f"{len(resolved.audio_segments)} Audio "
                 "(ohne shot_min · Gesamt-Timeline unverändert)."
             )
+            captions: list[str] = []
             if opener_id or closing_id:
-                st.caption(
+                captions.append(
                     f"LLM-Hüllen-Assets: Opener=`{opener_id or '—'}` · "
                     f"Closing=`{closing_id or '—'}` "
                     "(nicht First/Last-VO-Kopie)."
@@ -1442,16 +1587,21 @@ def _render_intro_cut_section(
                     role = " · Vorlauf (LLM opener)"
                 elif ef == "technical_chapter_postroll":
                     role = " · Nachlauf (LLM closing)"
-                st.caption(
+                captions.append(
                     f"Intro-Video {shot.shot_id}{role}: "
                     f"{shot.timeline_start_seconds:.2f}–{shot.timeline_end_seconds:.2f}"
                     f" · asset=`{shot.asset_id}`"
                 )
             for audio in resolved.audio_segments[:6]:
-                st.caption(
+                captions.append(
                     f"Intro-Audio {audio.segment_id}: "
                     f"{audio.timeline_start_seconds:.2f}–{audio.timeline_end_seconds:.2f}"
                 )
+            st.session_state[intro_timing_flash_key] = {
+                "success": success_text,
+                "captions": captions,
+            }
+            st.rerun()
         except IntroCutError as exc:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
@@ -1873,10 +2023,10 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         st.warning(f"Kapitel-Liste nicht verfügbar: {exc}")
         body_chapters = []
     chapter_count = max(1, len(body_chapters))
+    model_id = _live_llm_cut_model_id(project, options)
     rough_provider, rough_model, rough_max = _render_enhanced_cut_model(
         project,
-        role_attr="enhanced_rough_cut",
-        label="Modell (Unified Cut)",
+        label="Unified Cut",
         key_prefix="enh_unified",
         input_info=LLM_INPUT_INFO.get("enhanced_rough_cut", ""),
         input_tokens=_estimate_rough_cut_input_tokens(project)[0],
@@ -1887,6 +2037,7 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             "Ceiling für alle Körper-Kapitel-Calls — nicht der Intro-Call. "
             "Intro hat eine eigene Schätzung darunter."
         ),
+        model_id=model_id,
     )
     _render_intro_cut_section(
         project,
@@ -2014,6 +2165,26 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
                 "Nur Kapitel mit Plan, geschlossenen Gaps und ohne passendes "
                 "Resolved — grüne oder Gap-blockierte Kapitel werden übersprungen."
             ),
+        )
+
+    col_music, col_music_help, _col_music_spacer = st.columns(3)
+    with col_music:
+        run_music_scope = st.button(
+            music_bulk_button_label(project),
+            key="enh_unified_cut_music_scope",
+            use_container_width=True,
+            help=(
+                "ElevenLabs Music für Intro und die ersten Körper-Kapitel "
+                "laut Cut Plan Settings (Anzahl inkl. Intro). "
+                "Fertige, nicht veraltete WAVs werden übersprungen "
+                "(kein Re-Billing)."
+            ),
+        )
+    with col_music_help:
+        st.caption(
+            "Anzahl in Cut Plan Settings → ElevenLabs Music speichern. "
+            "Default 4 = Intro + erste 3 Kapitel. "
+            "Fertige Music-WAVs werden übersprungen."
         )
 
     batch_flash_key = f"_enh_llm_batch_flash_{project.id}"
@@ -2159,6 +2330,63 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         except Exception as exc:  # noqa: BLE001
             st.error(f"OTIO-Fehler: {exc}")
 
+    if run_music_scope:
+        progress = st.empty()
+
+        def _music_progress(label: str, index: int, total: int) -> None:
+            progress.info(
+                f"ElevenLabs Music {index}/{total}: „{label}“ — sequenziell…"
+            )
+
+        try:
+            batch = generate_music_for_allowed_targets(
+                project,
+                skip_completed=True,
+                on_progress=_music_progress,
+            )
+            n_ok = len(batch.get("generated") or [])
+            n_skip = len(batch.get("skipped") or [])
+            n_fail = len(batch.get("failed") or [])
+            fail_bits = [
+                f"{item.get('label')}: {item.get('reason')}"
+                for item in (batch.get("failed") or [])
+            ]
+            skip_preview = ", ".join(
+                str(item.get("label") or "")
+                for item in (batch.get("skipped") or [])[:6]
+            )
+            parts = [f"{n_ok} erzeugt"]
+            if n_skip:
+                extra = f" ({skip_preview})" if skip_preview else ""
+                parts.append(f"{n_skip} übersprungen{extra}")
+            if n_fail:
+                parts.append(f"{n_fail} fehlgeschlagen")
+            text = "ElevenLabs Music: " + " · ".join(parts) + "."
+            if fail_bits:
+                text += " " + "; ".join(fail_bits[:4])
+            if n_fail and n_ok == 0:
+                level = "error"
+            elif n_fail:
+                level = "warning"
+            else:
+                level = "success"
+            st.session_state[batch_flash_key] = {"level": level, "text": text}
+            st.rerun()
+        except MusicServiceError as exc:
+            st.session_state[batch_flash_key] = {
+                "level": "warning",
+                "text": f"ElevenLabs Music: {exc}",
+            }
+            st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            st.session_state[batch_flash_key] = {
+                "level": "error",
+                "text": f"ElevenLabs Music-Fehler: {exc}",
+            }
+            st.rerun()
+        finally:
+            progress.empty()
+
     _render_chapter_cut_rows(
         project,
         provider=rough_provider,
@@ -2204,19 +2432,19 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         st.caption(f"Coverage Gaps (Funnel): {len(coverage.gaps)}")
 
 
-def _render_section_rough(project) -> None:
+def _render_section_rough(project, options: CutPlanOptions | None = None) -> None:
     st.subheader("1. Groben Cut Plan erzeugen")
     _render_slim_status(project)
     rough_tokens, rough_chapters = _estimate_rough_cut_input_tokens(project)
     rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
         project,
-        role_attr="enhanced_rough_cut",
-        label="Modell (LLM-Lauf 2)",
+        label="LLM-Lauf 2",
         key_prefix="enh_rough",
         input_info=LLM_INPUT_INFO["enhanced_rough_cut"],
         input_tokens=rough_tokens,
         default_output_tokens=_ROUGH_CUT_OUTPUT_DEFAULT,
         chapter_count=rough_chapters,
+        model_id=_live_llm_cut_model_id(project, options),
     )
     st.caption(
         f"Lauf 2 läuft sequenziell: **ein LLM-Call pro Kapitel** "
@@ -2340,6 +2568,91 @@ def _render_section_rough(project) -> None:
                 )
 
 
+def _render_open_gap_reset(project) -> None:
+    """Manueller Reset über alle Kapitel — ohne neuen LLM-Cut.
+
+    Der Regelfall läuft automatisch: ein neuer Kapitel-Cut räumt die offenen
+    Gaps dieses Kapitels selbst. Dieser Weg bleibt für den Fall, dass man den
+    Zustand loswerden will, ohne neu zu schneiden.
+    """
+    from otio_app.services.without_voiceover_enhanced.gap_reset_service import (
+        preview_open_gap_reset,
+        reset_open_coverage_gaps,
+    )
+
+    preview_key = f"enh_gap_reset_preview_{project.id}"
+    with st.expander(
+        "Offene Coverage Gaps manuell zurücksetzen (alle Kapitel)", expanded=False
+    ):
+        st.caption(
+            "Nur nötig, wenn du den Zustand ohne neuen Cut loswerden willst — "
+            "ein neuer Kapitel-Cut räumt die offenen Gaps seines Kapitels selbst."
+        )
+        st.caption(
+            "Beschaffte Dateien werden nie gelöscht: Downloads, Clean-Fassungen "
+            "und Inventar bleiben unverändert."
+        )
+
+        if st.button("🔍 Prüfen (ohne Änderung)", key=f"enh_gap_reset_scan_{project.id}"):
+            st.session_state[preview_key] = preview_open_gap_reset(project)
+
+        preview = st.session_state.get(preview_key)
+        if preview is None:
+            return
+        if not preview.has_work:
+            st.success("Kein offener Gap-Zustand zum Räumen.")
+            return
+
+        st.warning(
+            f"Zu entfernen: **{preview.open_count} offene Gap(s)**, "
+            f"{preview.search_candidates} Suchtreffer, "
+            f"{preview.funnel_gap_reports} Funnel-Eintrag/-Einträge, "
+            f"{preview.accepted_pending} vorgemerkte(r) Kandidat(en) ohne Medium."
+        )
+        if preview.open_gap_ids:
+            shown = ", ".join(f"`{gid}`" for gid in preview.open_gap_ids[:10])
+            more = (
+                f" … und {len(preview.open_gap_ids) - 10} weitere"
+                if len(preview.open_gap_ids) > 10
+                else ""
+            )
+            st.caption(shown + more)
+        st.caption(
+            f"Bleibt erhalten: {len(preview.filled_gap_ids)} erfüllte(r) Gap(s) "
+            f"und {preview.accepted_export_ready} fertige(s) Asset(s)."
+        )
+
+        unbind = st.checkbox(
+            "Auch die Gap-Bindung fertiger Assets lösen",
+            key=f"enh_gap_reset_unbind_{project.id}",
+            help=(
+                "Asset, Pfad und Lizenz bleiben erhalten — nur die Zuordnung zu "
+                "einem Gap entfällt, damit der neue Cut jede Zuweisung neu aus "
+                "dem Inventar verdient. Sinnvoll, wenn das Material inzwischen "
+                "regulär im Inventar steht."
+            ),
+        )
+        if st.button(
+            "🧹 Offene Gaps jetzt zurücksetzen",
+            key=f"enh_gap_reset_run_{project.id}",
+            type="primary",
+        ):
+            report = reset_open_coverage_gaps(project, unbind_filled=unbind)
+            st.success(
+                f"{report.removed_count} offene Gap(s) entfernt · "
+                f"{report.removed_search_candidates} Suchtreffer · "
+                f"{report.removed_funnel_gap_reports} Funnel-Einträge · "
+                f"{report.removed_accepted_pending} vorgemerkte Kandidaten"
+                + (
+                    f" · {report.unbound_accepted_export_ready} Bindung(en) gelöst"
+                    if report.unbound_accepted_export_ready
+                    else ""
+                )
+            )
+            st.caption("Jetzt den LLM Cut für die gewünschten Kapitel neu erzeugen.")
+            st.session_state.pop(preview_key, None)
+
+
 def _render_section_funnel(project) -> None:
     st.subheader("2. Supplements suchen und auswählen")
 
@@ -2454,6 +2767,12 @@ def _render_section_funnel(project) -> None:
     )
     if gap_status.message:
         st.caption(gap_status.message)
+    st.caption(
+        "Ein neuer LLM Cut setzt die **offenen** Gaps des jeweiligen Kapitels "
+        "automatisch zurück (Suchtreffer, Funnel-Einträge, vorgemerkte "
+        "Kandidaten). Erfüllte Gaps und beschaffte Dateien bleiben."
+    )
+    _render_open_gap_reset(project)
 
     funnel_settings = load_model_settings(project)
     funnel_role = funnel_settings.enhanced_supplement_funnel
@@ -2466,6 +2785,7 @@ def _render_section_funnel(project) -> None:
             options=ENHANCED_FUNNEL_LLM_MODEL_CHOICES,
             labels=ENHANCED_FUNNEL_LLM_MODEL_LABELS,
             show_estimated_costs=True,
+            fallback_if_unknown=VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_MODEL,
         )
         if st.button(
             "Funnel-Modell speichern",
@@ -2482,7 +2802,7 @@ def _render_section_funnel(project) -> None:
             f"Aktiv: **{funnel_updated.model}** · "
             "Für günstige Tests: Gemini 3.1 Flash Lite."
         )
-    funnel_model_id = funnel_updated.model
+    funnel_model_id = resolve_funnel_gemini_model(funnel_updated.model)
 
     gap_by_id = {g.gap_id: g for g in (coverage.gaps if coverage else [])}
     select_key = f"enh_funnel_gap_multiselect_{project.id}"
@@ -2579,14 +2899,23 @@ def _render_section_funnel(project) -> None:
                     "Abbruch angefordert — aktueller LLM-/Download-Schritt "
                     "wird noch beendet, danach stoppt der Funnel."
                 )
-            if st.button(
-                "⏹ Funnel abbrechen",
-                key=f"enh_funnel_cancel_{project.id}",
-                disabled=state.cancel_requested,
-                type="primary",
-            ):
-                funnel_job_mgr.request_cancel(project.id)
-                st.rerun()
+            stop_cols = st.columns(2)
+            with stop_cols[0]:
+                if st.button(
+                    "⏹ Funnel abbrechen",
+                    key=f"enh_funnel_cancel_{project.id}",
+                    disabled=state.cancel_requested,
+                    type="primary",
+                ):
+                    funnel_job_mgr.request_cancel(project.id)
+                    st.rerun()
+            with stop_cols[1]:
+                if st.button(
+                    "UI trotzdem freigeben",
+                    key=f"enh_funnel_force_reset_{project.id}",
+                ):
+                    funnel_job_mgr.force_reset(project.id)
+                    st.rerun()
             return
 
         if state.status == FunnelJobStatus.CANCELLED:
@@ -3098,18 +3427,18 @@ def _render_section_funnel(project) -> None:
                         st.error(str(exc))
 
 
-def _render_section_final(project) -> None:
+def _render_section_final(project, options: CutPlanOptions | None = None) -> None:
     st.subheader("3. Finalen Cut Plan erzeugen und technisch auflösen")
     final_tokens, final_chapters = _estimate_final_cut_input_tokens(project)
     final_provider, final_model, _final_max = _render_enhanced_cut_model(
         project,
-        role_attr="enhanced_final_cut",
-        label="Modell (LLM-Lauf 3)",
+        label="LLM-Lauf 3",
         key_prefix="enh_final",
         input_info=LLM_INPUT_INFO["enhanced_final_cut"],
         input_tokens=final_tokens,
         default_output_tokens=_FINAL_CUT_OUTPUT_DEFAULT,
         chapter_count=final_chapters,
+        model_id=_live_llm_cut_model_id(project, options),
     )
     st.caption(
         f"Lauf 3 und Python-Auflösung sind getrennt: "
@@ -3386,8 +3715,8 @@ def render_enhanced_cut_plan_page() -> None:
     if section == _SECTION_UNIFIED:
         _render_section_unified(project, options)
     elif section == _SECTION_ROUGH:
-        _render_section_rough(project)
+        _render_section_rough(project, options)
     elif section == _SECTION_FUNNEL:
         _render_section_funnel(project)
     else:
-        _render_section_final(project)
+        _render_section_final(project, options)

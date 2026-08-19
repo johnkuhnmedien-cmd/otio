@@ -87,10 +87,9 @@ def _render_job_monitor(project) -> None:
             st.rerun()
         return
     if state.status == JobStatus.RUNNING:
-        manager = get_clean_media_job_manager()
         poll_while_running(
             lambda: _clean_media_running_panel(project),
-            lambda: manager.is_running(project.id),
+            lambda: get_clean_media_job_manager().is_running(project.id),
             refresh_key=f"clean_refresh_poll_{project.id}",
         )
 
@@ -124,15 +123,12 @@ def _clean_media_running_panel(project) -> None:
     if state.cancel_requested:
         st.caption("Abbruch angefordert …")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
         if st.button("Abbrechen", key=f"clean_cancel_{project.id}"):
             manager.request_cancel(project.id)
             st.rerun()
     with col2:
-        if st.button("Aktualisieren", key=f"clean_refresh_{project.id}"):
-            st.rerun()
-    with col3:
         if st.button("Job zurücksetzen", key=f"clean_reset_{project.id}"):
             manager.force_reset(project.id)
             st.rerun()

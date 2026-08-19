@@ -27,6 +27,7 @@ def _make_create(layout: dict[str, Path]) -> ProjectCreate:
 def test_project_create_defaults(temp_project_layout: dict[str, Path]) -> None:
     data = _make_create(temp_project_layout)
     assert data.language == "de"
+    assert data.video_place == ""
     assert data.frames_per_shot == DEFAULT_FRAMES_PER_SHOT
     assert data.fps == 25.0
     assert data.voice_over_subdir == "Voice over"
@@ -100,6 +101,7 @@ def test_project_from_create_sets_draft_status(
     )
     assert project.status == ProjectStatus.DRAFT
     assert project.name == "USA Reise"
+    assert project.video_place == ""
     assert project.asset_subdir_names == ["Grand Canyon", "Yellowstone"]
     assert project.selected_asset_subdirs == ["Grand Canyon"]
 
@@ -178,3 +180,20 @@ def test_voiceover_generation_dir_property(
     assert project.voiceover_generation_dir == (
         temp_project_layout["work_dir"] / "DE" / "voiceover_generation"
     )
+
+
+def test_project_create_strips_video_place(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    data = ProjectCreate(
+        name="IT Greece",
+        project_root=str(temp_project_layout["project_root"]),
+        video_place="  Griechenland  ",
+    )
+    assert data.video_place == "Griechenland"
+    project = Project.from_create(
+        data,
+        asset_subdir_names=["Athens"],
+        selected_asset_subdirs=["Athens"],
+    )
+    assert project.video_place == "Griechenland"

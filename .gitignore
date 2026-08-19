@@ -10,6 +10,7 @@ build/
 # Laufzeit / lokal
 .env
 data/*.db
+data/last_active_project_id.txt
 data/cache/
 data/user_secrets.env
 data/adobe_stock_oauth.json

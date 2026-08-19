@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from otio_app.defaults import (
     BRIEF_LANGUAGE_CHOICES,
@@ -18,6 +18,8 @@ from otio_app.defaults import (
     BRIEF_NEGATIVE_RULE_LABELS,
     BRIEF_TONE_TAG_CHOICES,
     DEFAULT_NEGATIVE_RULE_FLAGS,
+    DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST,
+    VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
     DRAMATURGY_ROLE_LABELS,
     DRAMATURGY_ROLES,
     DRAMATURGY_STATUS_CONFIRMED,
@@ -39,6 +41,7 @@ from otio_app.defaults import (
     INTRO_HOOK_STATUS_CONFIRMED,
     INTRO_HOOK_STATUS_DRAFT,
     INTRO_HOOK_TYPE_CINEMATIC_PROMISE,
+    intro_word_window,
     ITEM_READINESS_MISSING_AUDIO,
     MAX_VOICEOVER_REVIEW_ATTEMPTS,
     PLAN_STATUS_TEXT_READY,
@@ -54,6 +57,10 @@ from otio_app.defaults import (
     VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
     VOICEOVER_GEN_DEFAULT_MODEL,
     VOICEOVER_GEN_DEFAULT_PROVIDER,
+    VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL,
+    VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER,
+    VOICEOVER_GEN_INTRO_DEFAULT_MODEL,
+    VOICEOVER_GEN_INTRO_DEFAULT_PROVIDER,
     VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
     VOICEOVER_GEN_MAX_FOLDER_WORDS,
     VOICEOVER_GEN_MIN_FOLDER_WORDS,
@@ -73,10 +80,14 @@ __all__ = [
     "BRIEF_NEGATIVE_RULE_LABELS",
     "BRIEF_TONE_TAG_CHOICES",
     "DEFAULT_NEGATIVE_RULE_FLAGS",
+    "DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST",
     "DRAMATURGY_ROLE_LABELS",
     "DRAMATURGY_ROLES",
     "DRAMATURGY_STATUS_CONFIRMED",
     "DRAMATURGY_STATUS_DRAFT",
+    "DramaturgyDefaults",
+    "DramaturgyWordDefaults",
+    "DramaturgySettings",
     "ENERGY_CHOICES",
     "ENERGY_LABELS",
     "FACTUALITY_MODE_CHOICES",
@@ -87,6 +98,8 @@ __all__ = [
     "VO_ERROR_TYPES_LLM_REVIEW",
     "VOICEOVER_GEN_DEFAULT_MODEL",
     "VOICEOVER_GEN_DEFAULT_PROVIDER",
+    "VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL",
+    "VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER",
     "VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT",
     "VOICEOVER_GEN_MAX_FOLDER_WORDS",
     "VOICEOVER_GEN_MIN_FOLDER_WORDS",
@@ -96,7 +109,11 @@ __all__ = [
     "VOICEOVER_GEN_ROLES",
     "WEAK_ASSET_MATCH_CONFIDENCE_THRESHOLD",
     "ProjectBrief",
+    "ProjectBriefLanguageDefaults",
+    "ProjectBriefDefaultsDocument",
     "VoiceoverStyleReferences",
+    "StyleReferenceLanguageDefaults",
+    "StyleReferenceDefaultsDocument",
     "VoiceoverStyleProfile",
     "StyleProfileLibraryEntry",
     "StyleProfileLibrary",
@@ -120,6 +137,8 @@ __all__ = [
     "FolderVoiceoverValidationReport",
     "FolderVoiceoverValidationReportsDocument",
     "IntroHookSettings",
+    "IntroHookLanguageDefaults",
+    "IntroHookDefaultsDocument",
     "IntroHookVisualBeat",
     "IntroHookCandidate",
     "IntroHookCandidatesDocument",
@@ -154,6 +173,23 @@ class ProjectBrief(BaseModel):
     negative_rules_freetext: str = ""
     forbidden_phrases: list[str] = Field(default_factory=list)
     global_extra_prompt: str = ""
+    # Drei Beispieltitel als Inspiration für den Titel-LLM — keine starre Vorlage.
+    title_references: list[str] = Field(default_factory=list)
+
+
+class ProjectBriefLanguageDefaults(BaseModel):
+    """Sprachstandard für den Project Brief — ohne projektspezifischen Titel."""
+
+    tone_tags: list[str] = Field(default_factory=list)
+    negative_rule_flags: dict[str, bool] = Field(default_factory=dict)
+    negative_rules_freetext: str = ""
+    forbidden_phrases: list[str] = Field(default_factory=list)
+    global_extra_prompt: str = ""
+    title_references: list[str] = Field(default_factory=list)
+
+
+class ProjectBriefDefaultsDocument(BaseModel):
+    by_language: dict[str, ProjectBriefLanguageDefaults] = Field(default_factory=dict)
 
 
 STYLE_MODE_PROFILE = "profile"
@@ -240,9 +276,40 @@ class StyleProfileLibrary(BaseModel):
     entries: list[StyleProfileLibraryEntry] = Field(default_factory=list)
 
 
+class StyleReferenceLanguageDefaults(BaseModel):
+    """Sprachstandard für Style References — ohne Uploads und project_id."""
+
+    style_mode: str = STYLE_MODE_PROFILE
+    raw_reference_text: str = ""
+    raw_intro_reference_text: str = ""
+    raw_library_name: str = ""
+    intro_reference_texts: list[str] = Field(default_factory=list)
+    segment_reference_texts: list[str] = Field(default_factory=list)
+    # Abgeleitetes Profile-Snapshot, nur im Profile-Modus relevant.
+    style_profile: VoiceoverStyleProfile | None = None
+
+
+class StyleReferenceDefaultsDocument(BaseModel):
+    by_language: dict[str, StyleReferenceLanguageDefaults] = Field(default_factory=dict)
+
+
 class LlmRoleSettings(BaseModel):
     provider: str = VOICEOVER_GEN_DEFAULT_PROVIDER
     model: str = VOICEOVER_GEN_DEFAULT_MODEL
+
+
+def _default_dramaturgy_settings() -> LlmRoleSettings:
+    return LlmRoleSettings(
+        provider=VOICEOVER_GEN_DRAMATURGY_DEFAULT_PROVIDER,
+        model=VOICEOVER_GEN_DRAMATURGY_DEFAULT_MODEL,
+    )
+
+
+def _default_intro_settings() -> LlmRoleSettings:
+    return LlmRoleSettings(
+        provider=VOICEOVER_GEN_INTRO_DEFAULT_PROVIDER,
+        model=VOICEOVER_GEN_INTRO_DEFAULT_MODEL,
+    )
 
 
 def _default_cut_plan_supplement_query_settings() -> LlmRoleSettings:
@@ -289,11 +356,15 @@ def _default_enhanced_sfx_planner_settings() -> LlmRoleSettings:
 
 
 class VoiceoverGenerationModelSettings(BaseModel):
+    # 1 = vor Dramaturgie GPT-5.6 Terra; 2 = Dramaturgie angehoben;
+    # 3 = Intro-Skript GPT-5.6 Terra (Cut-Modelle unangetastet).
+    settings_revision: int = 1
     style_profile: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
-    dramaturgy: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
+    dramaturgy: LlmRoleSettings = Field(default_factory=_default_dramaturgy_settings)
     voiceover_author: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     voiceover_review: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
-    intro: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
+    intro: LlmRoleSettings = Field(default_factory=_default_intro_settings)
+    project_brief: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     cut_plan_supplement_query: LlmRoleSettings = Field(
         default_factory=_default_cut_plan_supplement_query_settings
     )
@@ -411,6 +482,28 @@ class DramaturgyPlan(BaseModel):
     # Wenn True: Craft-Flags (Übergang/Rückbezug/Kontrast/…) bleiben aus —
     # kein Legacy-Hint-Fallback in Folder-Voice-over-Settings.
     craft_flags_disabled: bool = False
+
+
+class DramaturgyWordDefaults(BaseModel):
+    """Zielwortzahl + Toleranz — Sprachstandard für die Dramaturgie."""
+
+    target_words: int = VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    word_tolerance_percent: int = VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
+
+
+class DramaturgyDefaults(BaseModel):
+    """Dramaturgie-Standards: Planungsmodus global, Wortziele pro Sprache."""
+
+    planning_mode: str = DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST
+    by_language: dict[str, DramaturgyWordDefaults] = Field(default_factory=dict)
+
+
+class DramaturgySettings(BaseModel):
+    """Projektspezifische Dramaturgie-Wortziele (Tab ③)."""
+
+    project_id: str
+    target_words: int = VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    word_tolerance_percent: int = VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
 
 
 # --- Phase 4: Folder Voice-overs ---
@@ -670,6 +763,35 @@ class IntroHookSettings(BaseModel):
     allow_tease_multiple_places: bool = True
     must_include: list[str] = Field(default_factory=list)
     must_avoid: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _derive_word_window(self) -> IntroHookSettings:
+        min_words, max_words = intro_word_window(
+            self.target_words, self.word_tolerance_percent
+        )
+        self.min_words = min_words
+        self.max_words = max_words
+        return self
+
+
+class IntroHookLanguageDefaults(BaseModel):
+    """Sprachstandard für Intro Settings — ohne Projekt-ID und generierte Texte."""
+
+    target_words: int = INTRO_HOOK_DEFAULT_TARGET_WORDS
+    word_tolerance_percent: int = VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
+    tone: str = "cinematic"
+    freeform_rule_for_llm: str = ""
+    forbidden_phrases: list[str] = Field(default_factory=list)
+    allow_questions: bool = True
+    allow_strong_claim: bool = True
+    allow_direct_place_name: bool = True
+    allow_tease_multiple_places: bool = True
+    must_include: list[str] = Field(default_factory=list)
+    must_avoid: list[str] = Field(default_factory=list)
+
+
+class IntroHookDefaultsDocument(BaseModel):
+    by_language: dict[str, IntroHookLanguageDefaults] = Field(default_factory=dict)
 
 
 class IntroHookVisualBeat(BaseModel):

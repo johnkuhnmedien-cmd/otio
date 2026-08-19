@@ -16,6 +16,7 @@ from otio_app.services.job_registry import (
     reconcile_all_jobs,
     running_job_count,
 )
+from otio_app.ui.polling import poll_while_running
 
 logger = logging.getLogger("otio_app.activity")
 
@@ -63,6 +64,26 @@ def _append_log_file(line: str) -> None:
             continue
 
 
+def _render_activity_job_rows() -> None:
+    activities = collect_job_activity()
+    if not activities:
+        st.success("Keine Job-Zustände im Speicher — nichts blockiert im Hintergrund.")
+        return
+    for activity in activities:
+        thread_hint = (
+            "Thread aktiv"
+            if activity.thread_alive
+            else "kein Thread"
+            if activity.thread_alive is False
+            else "—"
+        )
+        icon = "⏳" if activity.status == "running" else "✓"
+        st.write(
+            f"{icon} **{activity.kind}** · Projekt `{activity.project_id[:8]}…` · "
+            f"Status `{activity.status}` · {activity.detail} · {thread_hint}"
+        )
+
+
 def render_activity_panel(
     *,
     expanded: bool = False,
@@ -82,26 +103,19 @@ def render_activity_panel(
         if run_count > 80:
             st.warning(
                 "Sehr viele Script-Läufe — oft durch Auto-Refresh oder hängende Jobs. "
-                "Unten **Alle Jobs zurücksetzen** probieren und App neu starten."
+                "Unten **Alle Jobs zurücksetzen** probieren. "
+                "Wenn die App sich nicht mehr beenden lässt: Finder **OTIO starten.command** "
+                "→ **Stoppen** oder **Neu starten** (beendet auch einen laufenden LLM-Call)."
             )
 
-        activities = collect_job_activity()
-        if not activities:
-            st.success("Keine Job-Zustände im Speicher — nichts blockiert im Hintergrund.")
+        if running > 0:
+            poll_while_running(
+                _render_activity_job_rows,
+                lambda: running_job_count() > 0,
+                refresh_key=f"activity_jobs_refresh_{scope}",
+            )
         else:
-            for activity in activities:
-                thread_hint = (
-                    "Thread aktiv"
-                    if activity.thread_alive
-                    else "kein Thread"
-                    if activity.thread_alive is False
-                    else "—"
-                )
-                icon = "⏳" if activity.status == "running" else "✓"
-                st.write(
-                    f"{icon} **{activity.kind}** · Projekt `{activity.project_id[:8]}…` · "
-                    f"Status `{activity.status}` · {activity.detail} · {thread_hint}"
-                )
+            _render_activity_job_rows()
 
         log: deque[str] = st.session_state.get(_RUN_LOG_KEY, deque())
         if log:
@@ -131,3 +145,8 @@ def render_activity_panel(
             _append_log_file(line)
             st.success(f"{reset_count} Job(s) zurückgesetzt.")
             st.rerun()
+
+        st.caption(
+            "App lässt sich im Terminal nicht mehr beenden: im Finder "
+            "**OTIO starten.command** öffnen und **Stoppen** oder **Neu starten**."
+        )

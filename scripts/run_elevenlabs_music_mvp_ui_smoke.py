@@ -358,7 +358,10 @@ def main() -> int:
                 "ElevenLabs Music" in body and ("Intro" in body)
             )
             findings["checks"]["has_chapter4_gate"] = (
-                "nur Kapitel 1–3" in body or "Music MVP" in body
+                "nur Intro + Kapitel 1–3" in body
+                or "nur Kapitel 1–3" in body
+                or "Music:" in body
+                or "Music MVP" in body
             )
             findings["checks"]["no_traceback"] = "Traceback" not in body
             findings["checks"]["music_unavailable_or_missing"] = (

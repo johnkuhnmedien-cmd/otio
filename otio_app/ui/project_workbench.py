@@ -388,9 +388,16 @@ def _render_analysis_actions(
     selected_model: str,
 ) -> None:
     folder_state_key = f"workbench_folders_{project.id}"
+    from otio_app.services.supplement_recovery_job import (
+        get_supplement_recovery_job_manager,
+    )
+
     asset_job_running = get_asset_analysis_job_manager().is_running(project.id)
     voice_job_running = get_voice_analysis_job_manager().is_running(project.id)
-    any_job_running = asset_job_running or voice_job_running
+    recovery_job_running = get_supplement_recovery_job_manager().is_running(project.id)
+    # Eine laufende Bestandsaufnahme analysiert bereits — parallele Läufe würden
+    # sich um denselben Cache und dieselben Inventar-JSONs streiten.
+    any_job_running = asset_job_running or voice_job_running or recovery_job_running
     without_voiceover = bool(
         getattr(project, "is_without_voiceover_pipeline", False)
         or getattr(project, "is_without_voiceover", False)
@@ -437,18 +444,46 @@ def _render_analysis_actions(
         key=f"show_missing_assets_{project.id}",
         value=False,
     ):
+        from otio_app.services.supplement_inventory import list_supplement_assets
+
         for folder_name in selected_folders:
-            missing = list_assets_missing_successful_cache(project, folder_name)
+            # Dasselbe Modell wie der spätere Lauf — sonst zählt die Vorschau
+            # gegen das Standardmodell und weicht von der Realität ab.
+            missing = list_assets_missing_successful_cache(
+                project, folder_name, model=selected_model
+            )
             total = len(discover_folder_media_paths(project, folder_name))
+            # Beschaffte Assets laufen im selben Lauf mit — sie gehören in die
+            # Vorschau, sonst überrascht die Kostenschätzung.
+            open_supplements = [
+                status
+                for status in list_supplement_assets(
+                    project, folder_name, model=selected_model
+                )
+                if status.needs_analysis
+            ]
+            supplement_note = (
+                f" · zusätzlich {len(open_supplements)} beschaffte(s) Asset(s)"
+                if open_supplements
+                else ""
+            )
             if missing:
                 labels = ", ".join(f"`{path.name}`" for path in missing[:8])
                 suffix = " …" if len(missing) > 8 else ""
                 st.warning(
                     f"**{folder_name}:** {len(missing)} von {total} Assets ohne Analyse-JSON "
-                    f"({labels}{suffix})"
+                    f"({labels}{suffix}){supplement_note}"
+                )
+            elif open_supplements:
+                st.warning(
+                    f"**{folder_name}:** alle {total} Originale analysiert,"
+                    f"{supplement_note}"
                 )
             else:
                 st.caption(f"**{folder_name}:** alle Assets analysiert ({total})")
+            for status in open_supplements[:5]:
+                reason = f" — {status.reason}" if status.reason else ""
+                st.caption(f"　beschafft: `{status.media_path.name}`{reason}")
     if st.button(
         "📁 Ausgewählte Ordner analysieren",
         key=f"assets_{project.id}",
@@ -520,6 +555,13 @@ def _render_analysis_actions(
                 st.caption(f"⚠️ {skip}")
             st.rerun()
 
+    _render_supplement_analysis_status(
+        project,
+        selected_folders=selected_folders,
+        selected_model=selected_model,
+        any_job_running=any_job_running,
+    )
+
     if without_voiceover:
         return
 
@@ -551,6 +593,238 @@ def _render_analysis_actions(
                 st.rerun()
 
 
+def _render_supplement_recovery(
+    project,
+    *,
+    selected_folders: list[str],
+    selected_model: str | None,
+    any_job_running: bool,
+) -> None:
+    """Bestandsaufnahme für Projekte aus der Zeit vor dem gemeinsamen Eingangstor.
+
+    Damals entfernte ein Ordner-Sync die Inventarzeilen beschaffter Assets. Die
+    Dateien liegen noch da — Acceptance-Listen aller Sprachen, Clean-Manifeste
+    und Stock-Downloads sind die Quellen, aus denen sie zurückkommen.
+    """
+    from otio_app.services.supplement_recovery import scan_recoverable_supplements
+    from otio_app.services.supplement_recovery_job import (
+        get_supplement_recovery_job_manager,
+    )
+
+    manager = get_supplement_recovery_job_manager()
+    scan_key = f"supplement_recovery_scan_{project.id}"
+
+    if _render_recovery_job_progress(project, manager):
+        return
+
+    with st.expander("Bestand beschaffter Assets prüfen", expanded=False):
+        st.caption(
+            "Sucht bereits beschaffte Assets, die nicht im geteilten Inventar "
+            "stehen — etwa weil ein früherer Ordner-Sync sie entfernt hat. "
+            "Liest die Acceptance-Listen aller Sprachen dieses Medienordners."
+        )
+        if st.button(
+            "🔍 Bestand prüfen (ohne Änderung)",
+            key=f"scan_recovery_{project.id}",
+            disabled=any_job_running,
+        ):
+            with st.spinner("Prüfe Bestand …"):
+                st.session_state[scan_key] = scan_recoverable_supplements(
+                    project, folder_names=selected_folders or None
+                )
+
+        scanned = st.session_state.get(scan_key)
+        if scanned is None:
+            return
+
+        items, report = scanned
+        missing = [item for item in items if not item.in_inventory]
+        if not items and not report.unresolved:
+            st.success("Kein beschafftes Asset gefunden, das im Inventar fehlt.")
+            return
+
+        if missing:
+            st.warning(
+                f"{len(missing)} beschaffte(s) Asset(s) fehlen im Inventar. "
+                "Nachtragen analysiert sie wie Originale."
+            )
+            for item in missing[:15]:
+                st.caption(
+                    f"`{item.media_path.name}` → **{item.folder_name}** "
+                    f"(Quelle: {item.source})"
+                )
+            if len(missing) > 15:
+                st.caption(f"… und {len(missing) - 15} weitere")
+        else:
+            st.success(
+                f"Alle {len(items)} gefundenen beschafften Assets stehen im Inventar."
+            )
+
+        for note in report.unresolved[:10]:
+            st.caption(f"⚠️ {note}")
+        if report.unresolved:
+            st.caption(
+                "Nicht zuordenbare Dateien werden bewusst nicht geraten — sie "
+                "lassen sich im Schnittplan-Tab manuell einem Gap zuweisen."
+            )
+
+        if missing:
+            st.caption(
+                f"Jedes Asset bekommt einmal die reguläre Analyse: "
+                f"{len(missing)} Frame-Extraktion(en) und "
+                f"{len(missing)} Gemini-Aufruf(e). Danach liegt das Ergebnis im "
+                "Cache — ein weiterer Lauf kostet nichts."
+            )
+            batch = st.number_input(
+                "Assets pro Durchlauf (0 = alle)",
+                min_value=0,
+                max_value=max(len(missing), 1),
+                value=0,
+                step=10,
+                key=f"recovery_batch_{project.id}",
+                help=(
+                    "Für Läufe in Etappen. Der Job läuft im Hintergrund und "
+                    "schreibt jedes Asset sofort — ein Stop verliert nichts."
+                ),
+            )
+        else:
+            batch = 0
+
+        if st.button(
+            "📥 Fehlende Assets nachtragen & analysieren",
+            key=f"run_recovery_{project.id}",
+            disabled=any_job_running or not missing,
+        ):
+            if not is_gemini_configured():
+                st.error(
+                    "GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** oder in `.env`."
+                )
+            elif manager.start(
+                project,
+                folder_names=list(selected_folders) if selected_folders else None,
+                model=selected_model,
+                limit=int(batch) or None,
+            ):
+                st.session_state.pop(scan_key, None)
+                st.rerun()
+            else:
+                st.warning("Es läuft bereits eine Bestandsaufnahme.")
+
+
+def _render_recovery_job_progress(project, manager) -> bool:
+    """True, solange ein Job läuft — Fortschritt und Bericht zeigt der Monitor oben."""
+    if not manager.is_running(project.id):
+        return False
+    state = manager.get_state(project.id)
+    done = getattr(state, "done", 0)
+    total = getattr(state, "total", 0) or "?"
+    st.info(
+        f"📥 Bestandsaufnahme läuft im Hintergrund — {done}/{total} beschaffte "
+        "Assets analysiert. Fortschritt und Stop stehen oben auf dieser Seite."
+    )
+    return True
+
+
+def _render_supplement_analysis_status(
+    project,
+    *,
+    selected_folders: list[str],
+    selected_model: str | None,
+    any_job_running: bool,
+) -> None:
+    """Beschaffte Assets im Inventar, denen die reguläre Analyse fehlt.
+
+    Betrifft Material aus Supplement-Funnel und Coverage-Gap-Inbox, das vor der
+    Vereinheitlichung importiert wurde oder ohne API-Schlüssel ankam. Erst mit
+    der Analyse trägt es dieselben Parameter wie ein Original — und ist damit
+    für ein zweites Sprachprojekt im selben Ordner voll nutzbar.
+    """
+    from otio_app.services.supplement_inventory import (
+        analyze_supplements_for_folder,
+        list_supplement_assets,
+    )
+
+    folders = list(selected_folders or project.asset_subdir_names)
+    if not folders:
+        return
+
+    open_by_folder: dict[str, list] = {}
+    total = 0
+    for folder_name in folders:
+        statuses = list_supplement_assets(project, folder_name, model=selected_model)
+        total += len(statuses)
+        open_items = [status for status in statuses if status.needs_analysis]
+        if open_items:
+            open_by_folder[folder_name] = open_items
+
+    st.divider()
+    st.markdown("**Beschaffte Assets** — Analyse wie bei Originalen.")
+    _render_supplement_recovery(
+        project,
+        selected_folders=folders,
+        selected_model=selected_model,
+        any_job_running=any_job_running,
+    )
+    if not total:
+        st.caption("Keine beschafften Assets im Inventar dieser Ordnerauswahl.")
+        return
+
+    open_count = sum(len(items) for items in open_by_folder.values())
+    if not open_count:
+        st.caption(
+            f"{total} beschaffte(s) Asset(s) vollständig analysiert — im geteilten "
+            "Inventar für jede Sprache dieses Medienordners nutzbar."
+        )
+        return
+
+    st.warning(
+        f"{open_count} von {total} beschafften Assets ohne aktuelle Analyse. "
+        "Ohne sie fehlen Dauer, Tags, Motion, Framing und Qualitätsprofil — "
+        "der Cut-LLM wählt sie dann kaum aus."
+    )
+    for folder_name, items in open_by_folder.items():
+        st.caption(f"**{folder_name}**")
+        for status in items[:8]:
+            reason = f" — {status.reason}" if status.reason else ""
+            st.caption(f"　`{status.media_path.name}`{reason}")
+        if len(items) > 8:
+            st.caption(f"　… und {len(items) - 8} weitere")
+
+    if st.button(
+        "🧠 Beschaffte Assets regulär analysieren",
+        key=f"analyze_supplements_{project.id}",
+        disabled=any_job_running,
+        help=(
+            "Nutzt denselben Prompt wie die Erstanalyse. Herkunft, Lizenz und "
+            "Beschaffungsbegründung bleiben erhalten."
+        ),
+    ):
+        if not is_gemini_configured():
+            st.error("GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** oder in `.env`.")
+        else:
+            analyzed = 0
+            purged = 0
+            failures: list[str] = []
+            with st.spinner("Analysiere beschaffte Assets …"):
+                for folder_name in open_by_folder:
+                    report = analyze_supplements_for_folder(
+                        project, folder_name, model=selected_model
+                    )
+                    analyzed += report.analyzed + report.cached
+                    purged += report.purged_own_material
+                    failures.extend(report.failures)
+            if analyzed:
+                st.success(f"{analyzed} beschaffte(s) Asset(s) analysiert.")
+            if purged:
+                st.info(
+                    f"{purged} Eintrag/Einträge waren eigene Originale und wurden "
+                    "im Inventar wieder als solche geführt."
+                )
+            for failure in failures[:20]:
+                st.caption(f"⚠️ {failure}")
+            st.rerun()
+
+
 def render_project_workbench() -> None:
     st.header("① Analysen")
 
@@ -562,8 +836,16 @@ def render_project_workbench() -> None:
         getattr(project, "is_without_voiceover_pipeline", False)
         or getattr(project, "is_without_voiceover", False)
     )
+    enhanced = bool(getattr(project, "is_without_voiceover_enhanced", False))
 
-    render_workflow_progress(project, current_step="analysis", lightweight=True)
+    if not enhanced:
+        render_workflow_progress(project, current_step="analysis", lightweight=True)
+    if enhanced:
+        st.info(
+            "Pipeline ab Brief automatisch: Tab **▶ Auto-Lauf** unten "
+            "oder Seite **▶ Auto-Lauf** in der linken Navigation "
+            "(zwischen Analysen und Project Brief)."
+        )
     if not get_workflow_status(project, lightweight=True).clean_media_done:
         st.warning(
             "**Clean Media noch nicht abgeschlossen** — unter **⓪ Clean Media** Medien "
@@ -630,9 +912,16 @@ def render_project_workbench() -> None:
     selected_folders = _render_folder_picker(project)
     st.divider()
 
-    tab_folders, tab_run, tab_results = st.tabs(
-        ["📁 Ordner", "▶️ Analysen starten", "📄 Ergebnisse"]
-    )
+    enhanced_auto = bool(getattr(project, "is_without_voiceover_enhanced", False))
+    if enhanced_auto:
+        tab_folders, tab_run, tab_results, tab_auto = st.tabs(
+            ["📁 Ordner", "▶️ Analysen starten", "📄 Ergebnisse", "▶ Auto-Lauf"]
+        )
+    else:
+        tab_folders, tab_run, tab_results = st.tabs(
+            ["📁 Ordner", "▶️ Analysen starten", "📄 Ergebnisse"]
+        )
+        tab_auto = None
 
     with tab_folders:
         st.markdown("Status aller Asset-Ordner")
@@ -727,5 +1016,13 @@ def render_project_workbench() -> None:
                 st.caption("Inventar noch nicht erstellt.")
         else:
             st.caption("Inventar noch nicht erstellt.")
+
+    if tab_auto is not None:
+        with tab_auto:
+            from otio_app.ui.without_voiceover_enhanced.auto_run_ui import (
+                render_enhanced_auto_run_embedded,
+            )
+
+            render_enhanced_auto_run_embedded(project, key_scope="analysen_tab")
 
     render_file_paths(project)

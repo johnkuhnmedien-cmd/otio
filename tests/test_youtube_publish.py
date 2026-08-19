@@ -22,6 +22,7 @@ from otio_app.services.youtube_publish_service import (
     _append_chapters_to_description,
     _normalize_hashtags,
     _parse_quizzes,
+    _parse_wonders_title,
     _prompt_from_context,
     build_youtube_publish_context,
     format_youtube_timestamp,
@@ -243,6 +244,8 @@ def test_generate_metadata_preserves_existing_quizzes(tmp_path: Path) -> None:
     class _Resp:
         raw_text = """{
           "title": "Antelope Canyon Guide",
+          "wonders_title_formula": "Die Wunder von",
+          "wonders_title_place": "den USA",
           "description_body": "Ein Film über enge Schluchten und Licht.",
           "hashtags": "#AntelopeCanyon, #USA, #Travel",
           "quizzes": [{"question": "soll ignoriert werden"}]
@@ -266,6 +269,9 @@ def test_generate_metadata_preserves_existing_quizzes(tmp_path: Path) -> None:
     assert result.status == "PASS"
     assert result.document is not None
     assert result.document.title == "Antelope Canyon Guide"
+    assert result.document.wonders_title_formula == "Die Wunder von"
+    assert result.document.wonders_title_place == "den USA"
+    assert result.document.formatted_wonders_title() == "Die Wunder von\nden USA"
     assert "Antelope Canyon - 00:00" in result.document.description
     assert "AntelopeCanyon" in result.document.hashtags
     assert "#" not in result.document.hashtags
@@ -274,6 +280,81 @@ def test_generate_metadata_preserves_existing_quizzes(tmp_path: Path) -> None:
     loaded = load_youtube_metadata(project)
     assert loaded is not None
     assert loaded.llm_run_id == result.llm_run_id
+
+
+def test_generate_metadata_accepts_literal_newlines_in_description(
+    tmp_path: Path,
+) -> None:
+    """Gemini schreibt oft echte Zeilenumbrüche in description_body — kein FAIL."""
+    project = _project(tmp_path)
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id,
+        project_title="Grecia",
+        language="IT",
+        folders=[
+            ConfirmedFolderPlanItem(
+                folder_name="Athens",
+                voiceover_text_full="Atene.",
+            )
+        ],
+    )
+    from otio_app.services.voiceover_generation.final_plan_service import (
+        save_confirmed_voiceover_project_plan,
+    )
+
+    save_confirmed_voiceover_project_plan(project, plan)
+    items = [
+        TimelineItem(
+            timeline_item_id="t1",
+            type="video_shot",
+            section_id="s1",
+            folder_name="Athens",
+            voice_file="/vo/a.mp3",
+            resolved_media_path="/a.mp4",
+            timeline_in_sec=0.0,
+            timeline_out_sec=120.0,
+            duration_sec=120.0,
+        )
+    ]
+    merged = MergedEditPlanResult(
+        timeline_items=items,
+        shots=[],
+        settings=EditPlanSettings(),
+        voiceovers=[VoiceoverPlan(path="/vo/a.mp3", duration_sec=100.0)],
+        included_folders=["Athens"],
+    )
+
+    class _Resp:
+        raw_text = (
+            "{\n"
+            '  "title": "Le meraviglie della Grecia",\n'
+            '  "wonders_title_formula": "Le meraviglie della",\n'
+            '  "wonders_title_place": "Grecia",\n'
+            '  "description_body": "' + ("Un viaggio. " * 80) + "\n"
+            'Secondo paragrafo della descrizione.",\n'
+            '  "hashtags": "Grecia, Viaggi, Natura"\n'
+            "}"
+        )
+        provider = "gemini"
+        model = "gemini-test"
+        latency_ms = 9
+        token_usage = {"input": 1, "output": 2}
+
+    with patch(
+        "otio_app.services.youtube_publish_service.generate_plan_text_with_metadata",
+        return_value=_Resp(),
+    ):
+        result = generate_youtube_publish_metadata(
+            project,
+            merged,
+            provider="gemini",
+            model="gemini-test",
+        )
+
+    assert result.status == "PASS", result.error
+    assert result.document is not None
+    assert "Secondo paragrafo" in result.document.description_body
+    assert result.error in (None, "")
 
 
 def test_generate_quizzes_separately(tmp_path: Path) -> None:
@@ -299,6 +380,8 @@ def test_generate_quizzes_separately(tmp_path: Path) -> None:
         YouTubeMetadataDocument(
             project_id=project.id,
             title="Bestehender Titel",
+            wonders_title_formula="Die Wunder von",
+            wonders_title_place="den USA",
             description_body="Bestehende Beschreibung",
             description="Bestehende Beschreibung\n\nAntelope Canyon - 00:00",
             hashtags="usa, canyon",
@@ -374,6 +457,8 @@ def test_generate_quizzes_separately(tmp_path: Path) -> None:
     assert result.status == "PASS"
     assert result.document is not None
     assert result.document.title == "Bestehender Titel"
+    assert result.document.wonders_title_formula == "Die Wunder von"
+    assert result.document.wonders_title_place == "den USA"
     assert result.document.hashtags == "usa, canyon"
     assert len(result.document.quizzes) == 2
     assert result.document.quizzes[0].insert_timestamp == "05:20"
@@ -396,7 +481,10 @@ def test_youtube_publish_prompt_chapters_only_no_scripts() -> None:
     assert "Antelope Canyon" in prompt
     assert "Hook that must be ignored" not in prompt
     assert "Full script that must be ignored" not in prompt
-    assert "quiz" not in prompt.lower() or "Do NOT invent quizzes" in prompt
+    assert "Do NOT invent quizzes" in prompt
+    assert "wonders_title_formula" in prompt
+    assert "Die Wunder von" in prompt
+    assert "never as raw line breaks" in prompt
     assert "EXACTLY 2 quiz" not in prompt
 
 
@@ -435,6 +523,28 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.title == "T"
     assert loaded.chapters[0].display_title == "Intro"
+
+
+def test_parse_wonders_title_two_fields_and_newline_fallback() -> None:
+    formula, place = _parse_wonders_title(
+        {
+            "wonders_title_formula": "Les merveilles de",
+            "wonders_title_place": "la Grèce",
+        }
+    )
+    assert formula == "Les merveilles de"
+    assert place == "la Grèce"
+    formula, place = _parse_wonders_title(
+        {"on_screen_title": "The Wonders of\nGreece"}
+    )
+    assert formula == "The Wonders of"
+    assert place == "Greece"
+    doc = YouTubeMetadataDocument(
+        project_id="x",
+        wonders_title_formula="Die Wunder von",
+        wonders_title_place="Griechenland",
+    )
+    assert doc.formatted_wonders_title() == "Die Wunder von\nGriechenland"
 
 
 def test_parse_quizzes_fills_missing_correct_flag() -> None:

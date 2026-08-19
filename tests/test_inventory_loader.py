@@ -287,3 +287,94 @@ def test_folder_has_usable_inventory_data_false_when_cache_has_only_placeholder(
     # Beschreibung, wie sie load_folder_inventory() für nicht-gecachte Medien
     # synthetisiert.
     assert folder_has_usable_inventory_data(project, "Grand Canyon") is False
+
+
+def test_materialize_refreshes_inventory_when_cache_is_newer(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    """Eine bezahlte Neuanalyse muss in der Inventar-JSON ankommen.
+
+    ``should_skip_folder_analysis`` akzeptiert Legacy-Analysen als erfolgreich.
+    Ohne Frische-Vergleich bliebe die alte Zeile stehen, obwohl der Cache
+    bereits die neue v3-Fassung hält — der Cut-LLM läse weiter den alten Stand.
+    """
+    from otio_app.services.asset_analysis_signature import build_analysis_signature
+    from otio_app.services.inventory_loader import (
+        materialize_folder_inventory_from_cache,
+    )
+
+    project = _sample_project(temp_project_layout)
+    media_path = temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4"
+
+    legacy = AssetMediaAnalysis(
+        path=str(media_path),
+        description="Alte Beschreibung",
+        asset_id="clip",
+        analysis_status="complete",
+    )
+    save_cached_media(media_cache_path(project, "Grand Canyon", media_path), legacy)
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, "Grand Canyon"),
+        AssetFolderAnalysis(
+            folder="Grand Canyon",
+            media_files=[str(media_path)],
+            assets=[legacy],
+        ),
+    )
+
+    fresh = legacy.model_copy(
+        update={
+            "description": "Neue v3-Beschreibung",
+            "caption": "Steile Felswand",
+            "content_tags": ["canyon", "rock"],
+            "analysis_schema_version": "asset-analysis-v3",
+            "analysis_parse_ok": True,
+            "analysis_signature": build_analysis_signature(
+                media_path, resolved_model_id="gemini-test"
+            ),
+        }
+    )
+    save_cached_media(media_cache_path(project, "Grand Canyon", media_path), fresh)
+
+    item, error = materialize_folder_inventory_from_cache(project, "Grand Canyon")
+
+    assert error is None
+    assert item is not None
+    assert item.assets[0].description == "Neue v3-Beschreibung"
+    assert item.assets[0].content_tags == ["canyon", "rock"]
+    # Auch auf der Platte, nicht nur im Rückgabewert.
+    reloaded = load_folder_inventory(project, "Grand Canyon")
+    assert reloaded.assets[0].caption == "Steile Felswand"
+
+
+def test_materialize_reuses_inventory_when_cache_matches(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    """Ohne neuen Cache-Stand bleibt die vorhandene JSON unangetastet."""
+    from otio_app.services.inventory_loader import (
+        materialize_folder_inventory_from_cache,
+    )
+
+    project = _sample_project(temp_project_layout)
+    media_path = temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4"
+    entry = AssetMediaAnalysis(
+        path=str(media_path),
+        description="Unveraendert",
+        asset_id="clip",
+        analysis_status="complete",
+    )
+    save_cached_media(media_cache_path(project, "Grand Canyon", media_path), entry)
+    inventory_path = get_folder_inventory_path(project.work_dir_path, "Grand Canyon")
+    save_folder_inventory(
+        inventory_path,
+        AssetFolderAnalysis(
+            folder="Grand Canyon", media_files=[str(media_path)], assets=[entry]
+        ),
+    )
+    before = inventory_path.read_text(encoding="utf-8")
+
+    item, error = materialize_folder_inventory_from_cache(project, "Grand Canyon")
+
+    assert error is None
+    assert item is not None
+    assert inventory_path.read_text(encoding="utf-8") == before

@@ -77,13 +77,22 @@ def test_dramaturgy_page_has_both_plan_buttons(
     assert "Dramaturgie ohne Thinking" not in button_labels
 
     captions = " ".join(caption.value for caption in at.caption)
+    infos = " ".join(getattr(item, "value", "") for item in at.info)
     assert "100" in captions and "000" in captions
     assert "Kostenschätzung" in captions or "Worst-Case" in captions or "Ceiling" in captions
     assert "Geographie" in captions or "Reiseverlauf" in captions
+    assert "automatischen Durchlauf" in captions or "Automatischer Durchlauf" in infos
+    number_labels = {field.label for field in at.number_input}
+    assert "Ziel-Wortanzahl" in number_labels
+    assert "Toleranz (%)" in number_labels
+    assert any("Als Standard für" in label for label in button_labels)
+    expander_labels = {expander.label for expander in at.expander}
+    assert any("Zielwortzahl" in label for label in expander_labels)
     slider_labels = [slider.label for slider in at.slider]
     assert "Max. Output-Tokens (Ceiling)" in slider_labels
     assert "Abwechslung" in captions
     assert "verblüffend" in captions or "spannendsten" in captions
+    assert "GPT-5.6 Terra" in captions
 
 
 def test_dramaturgy_page_writes_no_edit_plan_documents(

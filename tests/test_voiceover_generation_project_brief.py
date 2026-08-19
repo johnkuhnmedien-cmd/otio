@@ -22,6 +22,15 @@ from otio_app.services.voiceover_generation.project_brief_service import (
     save_project_brief,
 )
 from otio_app.services.voiceover_generation.models import ProjectBrief
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_global_brief_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "otio_app.services.voiceover_generation.project_brief_service.load_language_brief_defaults",
+        lambda language: None,
+    )
 
 
 def _make_project(tmp_path: Path) -> Project:
@@ -43,6 +52,12 @@ def test_default_project_brief_has_language_de(tmp_path: Path) -> None:
     brief = default_project_brief(project)
     assert brief.language == "DE"
     assert brief.project_id == project.id
+
+
+def test_default_project_brief_uses_project_language(tmp_path: Path) -> None:
+    project = _make_project(tmp_path).model_copy(update={"language": "pt"})
+    brief = default_project_brief(project)
+    assert brief.language == "PT"
 
 
 def test_default_project_brief_enables_all_negative_rules(tmp_path: Path) -> None:
@@ -105,12 +120,14 @@ def test_save_and_load_project_brief_roundtrip(tmp_path: Path) -> None:
         negative_rules_freetext="Keine Klischees.",
         forbidden_phrases=["breathtaking", "must-see"],
         global_extra_prompt="Schreibe wie ein Naturfilm-Kommentator.",
+        title_references=["Die Wunder von Italien", "The Wonders of Japan"],
     )
     save_project_brief(project, brief)
 
     loaded = load_project_brief(project)
     assert loaded.video_title == "Wunder der Wüste"
     assert loaded.language == "EN"
+    assert loaded.title_references == ["Die Wunder von Italien", "The Wonders of Japan"]
     assert loaded.tone_tags == ["cinematic", "mysterious"]
     assert loaded.negative_rule_flags == {"no_invented_facts": True, "no_repetition": False}
     assert loaded.forbidden_phrases == ["breathtaking", "must-see"]

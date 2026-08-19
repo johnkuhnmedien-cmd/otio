@@ -21,9 +21,18 @@ from otio_app.models import Project
 from otio_app.project_layout import get_folder_inventory_path, safe_folder_slug
 from otio_app.services.api_keys import get_api_key, is_api_key_set
 from otio_app.services.frame_extract import extract_frames
-from otio_app.services.gemini_client import describe_and_validate_supplement_asset
+from otio_app.services.gemini_client import (
+    describe_and_validate_supplement_asset,
+    is_gemini_configured,
+)
 from otio_app.services.inventory_loader import load_folder_inventory, save_folder_inventory
 from otio_app.services.media_utils import is_image_media
+from otio_app.services.supplement_inventory import (
+    INTAKE_SOURCE_FUNNEL,
+    SupplementProvenance,
+    ingest_supplement_asset,
+    upsert_supplement_into_inventory,
+)
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
 )
@@ -278,8 +287,13 @@ def _import_into_inventory(
     description: str,
     validation_status: str,
     validation_score: float,
+    intake_source: str = INTAKE_SOURCE_FUNNEL,
 ) -> str:
-    """Schreibt PASS-Asset ins Enhanced-Inventar (projektlokal wiederverwendbar).
+    """Übergibt ein angenommenes Asset an das Inventar-Eingangstor.
+
+    Das Asset bekommt dort dieselbe Analyse wie ein Original — ``description``
+    ist dann die Bildbeschreibung, nicht mehr die Ranking-Begründung. Die
+    Begründung bleibt als ``supplement_intake_note`` erhalten.
 
     Gleiche Provider-Asset-ID ersetzt ältere Inventar-Zeilen (keine Doppel-IDs
     für dasselbe Stock-Asset — sonst greifen max_usage / Reuse-Abstand nicht).
@@ -287,7 +301,6 @@ def _import_into_inventory(
     from otio_app.services.without_voiceover_enhanced.enhanced_supplement_dedupe import (
         preferred_inventory_asset_id,
         provider_identity_for_candidate,
-        provider_identity_for_inventory_asset,
     )
 
     identity = provider_identity_for_candidate(candidate)
@@ -301,58 +314,39 @@ def _import_into_inventory(
     if identity is not None:
         license_meta["provider"] = identity.provider
         license_meta["provider_asset_id"] = identity.provider_asset_id
-    asset = AssetMediaAnalysis(
-        path=str(media_path),
-        description=description or candidate.title or asset_id,
-        frames_used=[str(p) for p in frames],
+
+    provenance = SupplementProvenance(
         asset_id=asset_id,
         asset_origin=candidate.provider or "supplement",
         provider=candidate.provider,
+        provider_asset_id=identity.provider_asset_id if identity else "",
         source_url=candidate.source_page or candidate.download_url,
-        media_type=candidate.media_type or ("image" if is_image_media(media_path) else "video"),
+        media_type=candidate.media_type
+        or ("image" if is_image_media(media_path) else "video"),
+        license_metadata=license_meta,
         supplement_validation_status=validation_status,
         supplement_validation_score=float(validation_score),
         approved_for_cut_plan=True,
-        analysis_status="complete",
-        license_metadata=license_meta,
+        intake_source=intake_source,
+        intake_note=(description or "").strip(),
+        fallback_description=description or candidate.title or asset_id,
     )
-    existing = load_folder_inventory(project, folder_name)
-    if existing is None:
-        folder_doc = AssetFolderAnalysis(
-            folder=folder_name,
-            description="",
-            media_files=[str(media_path)],
-            frames_used=list(asset.frames_used),
-            assets=[asset],
-        )
-    else:
-        assets: list[AssetMediaAnalysis] = []
-        for prior in existing.assets:
-            if prior.asset_id == asset_id or prior.path == str(media_path):
-                continue
-            if identity is not None:
-                prior_ident = provider_identity_for_inventory_asset(prior)
-                if prior_ident is not None and prior_ident.key == identity.key:
-                    continue
-            assets.append(prior)
-        assets.append(asset)
-        media_files = list(existing.media_files)
-        if str(media_path) not in media_files:
-            media_files.append(str(media_path))
-        frames_used = list(existing.frames_used)
-        for frame in asset.frames_used:
-            if frame not in frames_used:
-                frames_used.append(frame)
-        folder_doc = existing.model_copy(
-            update={
-                "assets": assets,
-                "media_files": media_files,
-                "frames_used": frames_used,
-            }
-        )
-    save_folder_inventory(
-        get_folder_inventory_path(project.work_dir_path, folder_name), folder_doc
+    result = ingest_supplement_asset(
+        project,
+        folder_name=folder_name,
+        media_path=media_path,
+        provenance=provenance,
+        use_api=is_gemini_configured(),
     )
+    if frames and not result.asset.frames_used:
+        # Validierungsframes behalten, wenn die Analyse keine eigenen lieferte.
+        upsert_supplement_into_inventory(
+            project,
+            folder_name=folder_name,
+            asset=result.asset.model_copy(
+                update={"frames_used": [str(p) for p in frames]}
+            ),
+        )
     return folder_name
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import streamlit as st
@@ -34,6 +33,7 @@ from otio_app.services.adobe_research_import_job import (
 )
 from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
 from otio_app.ui.adobe_oauth_panel import render_adobe_oauth_panel
+from otio_app.ui.polling import poll_while_running
 
 _ACTIVE_PROJECT_KEY = "adobe_download_active_project_id"
 
@@ -47,6 +47,28 @@ def _status_label(status: str) -> str:
         STATUS_CANCELLED: "Open (gestoppt)",
         STATUS_UNAVAILABLE: "Nicht verfügbar",
     }.get(status, status)
+
+
+def _render_adobe_import_running_panel(project_id: str) -> None:
+    mgr = get_research_import_job_manager()
+    job = mgr.get_state(project_id)
+    if job.status != JobStatus.RUNNING:
+        return
+    st.progress(
+        min(1.0, max(0.0, float(job.fraction))),
+        text=(job.message or "Import läuft…")[:140],
+    )
+    st.info(job.message or "Import läuft…")
+    if job.cancel_requested:
+        st.warning(
+            "Stop angefordert. Das aktuelle Asset wird noch zu Ende geladen — "
+            "danach bleibt der Rest auf Open."
+        )
+    else:
+        st.caption("Stop wirkt nach dem laufenden Asset-Download.")
+    if job.log_lines:
+        with st.expander("Live-Log", expanded=False):
+            st.caption("\n".join(job.log_lines[-20:]))
 
 
 def _render_board(board: AdobeResearchImportBoard) -> None:
@@ -390,32 +412,20 @@ def render_adobe_research_import_page() -> None:
             mgr.request_cancel(project.id)
             st.rerun()
     with col_refresh:
-        if st.button(
+        # Klick lädt die Seite bereits neu — kein zweites st.rerun().
+        st.button(
             "🔄 Board aktualisieren",
             key=f"adobe_research_refresh_{project.id}",
             use_container_width=True,
-        ):
-            st.rerun()
+        )
 
     job = mgr.get_state(project.id)
     if job.status == JobStatus.RUNNING:
-        st.progress(
-            min(1.0, max(0.0, float(job.fraction))),
-            text=(job.message or "Import läuft…")[:140],
+        poll_while_running(
+            lambda: _render_adobe_import_running_panel(project.id),
+            lambda: mgr.is_running(project.id),
+            refresh_key=f"adobe_research_poll_{project.id}",
         )
-        st.info(job.message or "Import läuft…")
-        if job.cancel_requested:
-            st.warning(
-                "Stop angefordert. Das aktuelle Asset wird noch zu Ende geladen — "
-                "danach bleibt der Rest auf Open."
-            )
-        else:
-            st.caption("Stop wirkt nach dem laufenden Asset-Download.")
-        if job.log_lines:
-            with st.expander("Live-Log", expanded=False):
-                st.caption("\n".join(job.log_lines[-20:]))
-        time.sleep(1.0)
-        st.rerun()
     elif job.status == JobStatus.COMPLETED:
         if job.result and job.result.errors:
             st.warning(job.message or "Import fertig (mit Fehlern).")

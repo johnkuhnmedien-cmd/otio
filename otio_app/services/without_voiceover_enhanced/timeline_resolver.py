@@ -15,6 +15,7 @@ from otio_app.project_layout import safe_folder_slug
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.media_utils import (
     is_image_media,
+    is_video_media,
     probe_duration_seconds,
     probe_media_timing,
 )
@@ -2229,7 +2230,10 @@ def _resolve_shot_media(
     hold_mode = ""
     resolved_path = media_path
 
-    if media_kind == "image" or (media_duration is None or float(media_duration or 0) <= 0):
+    # Dateityp entscheidet — fehlende/0-Dauer darf ein MP4 nicht zum Still machen.
+    # Sonst ruft ffmpeg -loop 1 auf Video auf ("Option loop not found").
+    treat_as_still = is_image_media(media_path) and not is_video_media(media_path)
+    if treat_as_still:
         # Stills: Hold-Video über die volle Timeline-Dauer (Resolve-sicher).
         try:
             hold_path = ensure_still_hold_video(
@@ -2251,6 +2255,20 @@ def _resolve_shot_media(
             f"{shot_id}: Still → Hold-Video {duration:.2f}s ({hold_path.name})."
         )
     else:
+        if media_duration is None or float(media_duration or 0) <= 0:
+            probed = probe_duration_seconds(media_path)
+            if probed is None or probed <= 0:
+                raise TimelineResolveError(
+                    f"{shot_id}: Video ohne nutzbare Dauer ({media_path.name}). "
+                    "ffprobe lieferte keine Sekunden — Still-Hold gilt nur für Fotos, "
+                    f"nicht für {media_path.suffix or 'Video'}."
+                )
+            media_duration = probed
+            repairs.append(
+                f"{shot_id}: Mediendauer fehlte im Inventar — "
+                f"ffprobe {probed:.2f}s ({media_path.name})."
+            )
+        media_kind = "video"
         media_duration_f = float(media_duration)
         usable_in = entry.get("usable_in_s")
         trim = head_trim

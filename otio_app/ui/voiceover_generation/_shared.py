@@ -99,6 +99,10 @@ LLM_INPUT_INFO = {
         "Style · lokales Inventar · bestehender VO-Text/Sätze/Closing · "
         "Readiness-Issues — Text bleibt, nur Asset-Zuordnung wird repariert."
     ),
+    "project_brief": (
+        "Land/Region des Projekts · Sprache · drei Titel-Referenzen "
+        "(nur Inspiration, keine starre Vorlage) · optional Ton-Tags."
+    ),
     "intro": (
         "Intro-Settings · Brief/Negative Rules/Forbidden · Style "
         "(Raw Intro Text oder Style Profile als Struktur-Template) · "
@@ -156,7 +160,9 @@ LLM_INPUT_INFO = {
     ),
     "youtube_publish": (
         "Sprache · Titel · Dauer · Kapitelüberschriften + Timestamps "
-        "(keine Folder-Skripte) → getrennte Buttons: Metadaten bzw. Quiz."
+        "(keine Folder-Skripte) → YouTube-Titel, Videotitel "
+        "(Die Wunder von + Land/Region in der Videosprache), "
+        "Beschreibung/Hashtags bzw. Quiz."
     ),
     "analysis_assets": (
         "Frame-Bilder des jeweiligen Mediums + kurzer Kontext "
@@ -187,6 +193,7 @@ def render_llm_model_selectbox(
     options: list[str] | tuple[str, ...] | None = None,
     labels: dict[str, str] | None = None,
     show_estimated_costs: bool = False,
+    fallback_if_unknown: str | None = None,
 ) -> LlmRoleSettings:
     """Ein einziges Dropdown aus VOICEOVER_GEN_MODEL_CHOICES statt Provider-
     Selectbox + Modell-Freitext.
@@ -200,6 +207,9 @@ def render_llm_model_selectbox(
     Optional ``input_info``: kurzer Hinweis, was dieser LLM-Call mitbekommt.
     Optional ``options``/``labels``: eingeschränkte Auswahl (z. B. Enhanced Cut).
     Optional ``show_estimated_costs``: Preis-/1M-Hinweis in den Optionslabels.
+    Optional ``fallback_if_unknown``: statt einer toten gespeicherten ID (z. B.
+    ``gemini-1.5-flash``) an die Liste anzuhängen, auf diese kuratierte ID
+    zurückfallen. Session-State wird *vor* dem Widget bereinigt.
     """
     from otio_app.services.voiceover_generation.llm_pricing import (
         format_model_price_suffix,
@@ -207,7 +217,20 @@ def render_llm_model_selectbox(
 
     current_id = combined_model_id(role_settings)
     choice_options = list(options) if options is not None else list(VOICEOVER_GEN_MODEL_CHOICES)
-    if current_id not in choice_options:
+    if fallback_if_unknown is not None:
+        safe_fallback = (
+            fallback_if_unknown
+            if fallback_if_unknown in choice_options
+            else choice_options[0]
+        )
+        # Streamlit nutzt session_state[key] und ignoriert index nach dem
+        # ersten Render. Eine tote ID dort würde den Job starten, obwohl das
+        # Dropdown nur 3.x anzeigt.
+        if key in st.session_state and st.session_state[key] not in choice_options:
+            st.session_state[key] = safe_fallback
+        if current_id not in choice_options:
+            current_id = safe_fallback
+    elif current_id not in choice_options:
         # Bewahrt einen bereits gespeicherten, nicht (mehr) kuratierten Wert,
         # anstatt ihn beim Öffnen der Seite stillschweigend zu überschreiben.
         choice_options = [current_id] + choice_options

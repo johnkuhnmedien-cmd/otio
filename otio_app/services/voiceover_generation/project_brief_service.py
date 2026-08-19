@@ -11,6 +11,12 @@ from otio_app.services.voiceover_generation.models import (
     DEFAULT_NEGATIVE_RULE_FLAGS,
     ProjectBrief,
 )
+from otio_app.services.voiceover_generation.project_brief_defaults_service import (
+    apply_language_defaults_to_brief,
+    load_language_brief_defaults,
+    normalize_brief_language,
+    normalize_title_references,
+)
 
 
 def parse_forbidden_phrases_text(text: str) -> list[str]:
@@ -19,12 +25,17 @@ def parse_forbidden_phrases_text(text: str) -> list[str]:
 
 
 def default_project_brief(project: Project) -> ProjectBrief:
-    """Neutrale Ausgangswerte — alle Negativregeln sind standardmäßig aktiv."""
-    return ProjectBrief(
+    """Ausgangswerte: Sprachstandard falls vorhanden, sonst eingebaute Regeln."""
+    language = normalize_brief_language(project.language)
+    brief = ProjectBrief(
         project_id=project.id,
-        language="DE",
+        language=language,
         negative_rule_flags=dict(DEFAULT_NEGATIVE_RULE_FLAGS),
     )
+    defaults = load_language_brief_defaults(language)
+    if defaults is None:
+        return brief
+    return apply_language_defaults_to_brief(brief, defaults, keep_title=False)
 
 
 def load_project_brief(project: Project) -> ProjectBrief:
@@ -40,7 +51,11 @@ def load_project_brief(project: Project) -> ProjectBrief:
 
 def save_project_brief(project: Project, brief: ProjectBrief) -> ProjectBrief:
     normalized = brief.model_copy(
-        update={"project_id": project.id, "generated_at": datetime.now(timezone.utc)}
+        update={
+            "project_id": project.id,
+            "generated_at": datetime.now(timezone.utc),
+            "title_references": normalize_title_references(brief.title_references),
+        }
     )
     path = get_project_brief_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)

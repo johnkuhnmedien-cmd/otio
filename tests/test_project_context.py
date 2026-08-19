@@ -59,3 +59,15 @@ def test_workflow_status_detects_completed_steps(temp_project_layout: dict[str, 
     assert status.analysis_done is True
     assert status.mapping_confirmed is False
     assert status.edit_plan_done is False
+
+
+def test_enhanced_output_status_includes_auto_run_overview() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "otio_app"
+        / "ui"
+        / "project_context.py"
+    ).read_text(encoding="utf-8")
+    assert "_render_enhanced_output_status" in source
+    assert "list_auto_run_step_statuses" in source
+    assert "Statusübersicht" in source

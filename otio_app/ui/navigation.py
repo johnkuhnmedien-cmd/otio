@@ -30,6 +30,7 @@ NAVIGATION_OPTIONS = (
 
 # --- "Projekt ohne Voice-Over": eigene Seitenliste, ersetzt Zuordnung/Supplement/Schnittplan ---
 PAGE_PROJECT_BRIEF = "① Project Brief"
+PAGE_AUTO_RUN = "▶ Auto-Lauf"
 PAGE_STYLE_REFERENCES = "② Style References"
 PAGE_DRAMATURGY = "③ Dramaturgie"
 PAGE_FOLDER_VOICEOVERS = "④ Folder Voice-overs"
@@ -57,6 +58,7 @@ VOICEOVER_GEN_WORKFLOW_PAGES = (
 VOICEOVER_GEN_ENHANCED_WORKFLOW_PAGES = (
     PAGE_CLEAN_MEDIA,
     PAGE_ANALYSIS,
+    PAGE_AUTO_RUN,
     PAGE_PROJECT_BRIEF,
     PAGE_STYLE_REFERENCES,
     PAGE_DRAMATURGY,

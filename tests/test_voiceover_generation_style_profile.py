@@ -278,7 +278,10 @@ def test_build_style_profile_never_leaks_api_key_into_trace_files(
     mock_response = MagicMock(content=[block], usage=MagicMock(input_tokens=10, output_tokens=20))
 
     with patch("anthropic.Anthropic") as mock_anthropic:
-        mock_anthropic.return_value.messages.create.return_value = mock_response
+        stream_cm = MagicMock()
+        stream_cm.__enter__.return_value.get_final_message.return_value = mock_response
+        stream_cm.__exit__.return_value = False
+        mock_anthropic.return_value.messages.stream.return_value = stream_cm
         result = build_style_profile(
             project,
             project_brief=_brief(),

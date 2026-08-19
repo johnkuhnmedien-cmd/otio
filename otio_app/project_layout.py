@@ -215,6 +215,12 @@ def get_dramaturgy_plan_confirmed_path(work_dir: Path) -> Path:
     return get_voiceover_generation_dir(work_dir) / DRAMATURGY_PLAN_CONFIRMED_FILENAME
 
 
+def get_dramaturgy_settings_path(work_dir: Path) -> Path:
+    from otio_app.defaults import DRAMATURGY_SETTINGS_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / DRAMATURGY_SETTINGS_FILENAME
+
+
 def get_folder_voiceover_settings_path(work_dir: Path) -> Path:
     from otio_app.defaults import FOLDER_VOICEOVER_SETTINGS_FILENAME
 

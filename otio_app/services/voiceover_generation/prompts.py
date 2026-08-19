@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from otio_app.defaults import (
     BRIEF_NEGATIVE_RULE_INSTRUCTIONS,
+    DRAMATURGY_PLANNING_MODE_DEFAULT,
     DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
     DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST,
-    DRAMATURGY_PLANNING_MODE_VARIETY,
+    VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+    VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
+    intro_word_window,
     PAUSE_AFTER_CHOICES,
     SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION,
     SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT,
@@ -272,7 +275,7 @@ def _folder_summary_block(summary: FolderInventorySummary) -> str:
 
 
 def _dramaturgy_planning_mode_task_block(planning_mode: str) -> str:
-    mode = (planning_mode or DRAMATURGY_PLANNING_MODE_VARIETY).strip().lower()
+    mode = (planning_mode or DRAMATURGY_PLANNING_MODE_DEFAULT).strip().lower()
     if mode == DRAMATURGY_PLANNING_MODE_GEOGRAPHY:
         return """## Planning mode: GEOGRAPHY FIRST
 Order the chapters primarily by GEOGRAPHY and a coherent travel journey:
@@ -328,6 +331,8 @@ def build_dramaturgy_prompt(
     model_settings: VoiceoverGenerationModelSettings | None = None,
     planning_mode: str | None = None,
     style_context_text: str | None = None,
+    target_words: int | None = None,
+    word_tolerance_percent: int | None = None,
 ) -> str:
     """Baut den Prompt zur Dramaturgieplanung über alle Ordner/Kapitel.
 
@@ -338,13 +343,24 @@ def build_dramaturgy_prompt(
     `planning_mode`: "geography" (Reise/Geographie zuerst), "variety"
     (Abwechslung/Kontrast zuerst) oder "spectacle_first" (visuell stärkste /
     überraschendste Orte früh, bekanntere weniger verblüffende Orte zum Ende).
-    Default: variety.
+    Default: spectacle_first (automatischer Durchlauf).
 
     `style_context_text`: optional vorformatierter Stilblock (z. B. Raw Text).
     """
     del model_settings
 
-    resolved_mode = (planning_mode or DRAMATURGY_PLANNING_MODE_VARIETY).strip().lower()
+    resolved_mode = (planning_mode or DRAMATURGY_PLANNING_MODE_DEFAULT).strip().lower()
+    baseline = int(target_words or VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS)
+    if baseline <= 0:
+        baseline = VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    percent = int(
+        word_tolerance_percent
+        if word_tolerance_percent is not None
+        else VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
+    )
+    percent = max(0, min(100, percent))
+    band_min, band_max = intro_word_window(baseline, percent)
+    delta = max(0, band_max - baseline)
 
     tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
     active_negative_rules = _active_negative_rules_block(project_brief)
@@ -413,17 +429,17 @@ already creates variety.
 - Exactly one opener when possible; climax/resolution reserved for true peaks/ends.
 
 ### Voice-over length per chapter (IMPORTANT — decide freely, do not copy a grid)
-Baseline orientation: about 150 words per chapter, with a hard band of \
-120–180 words (±30 around the baseline).
+Baseline orientation: about {baseline} words per chapter, with a hard band of \
+{band_min}–{band_max} words (±{delta} / {percent}% around the baseline).
 YOU choose the exact target for each chapter based on narrative need:
-- richer story / higher interest / climax / opener with more to say → toward 160–180
-- thinner material / calmer bridge / less to report → toward 120–140
-- typical middle chapters → near 150
-Do NOT use rigid fixed pairs like only 115 or only 165. Vary targets across \
-chapters when the story justifies it. Then set:
-- recommended_word_count = your chosen target (integer in 120–180)
-- recommended_min_words = target − 30 (not below 120)
-- recommended_max_words = target + 30 (not above 180)
+- richer story / higher interest / climax / opener with more to say → toward the upper half
+- thinner material / calmer bridge / less to report → toward the lower half
+- typical middle chapters → near {baseline}
+Do NOT use rigid fixed pairs. Vary targets across chapters when the story \
+justifies it. Then set:
+- recommended_word_count = your chosen target (integer in {band_min}–{band_max})
+- recommended_min_words = target − {delta} (not below {band_min})
+- recommended_max_words = target + {delta} (not above {band_max})
 Asset counts are only weak capacity signals — they must NOT dictate word count.
 
 Do NOT output per-chapter transition/callback/contrast checkboxes, hint strings, \
@@ -451,9 +467,9 @@ this shape:
       "visual_strength_score": 0.0,
       "asset_diversity_score": 0.0,
       "hook_potential_score": 0.0,
-      "recommended_word_count": 150,
-      "recommended_min_words": 120,
-      "recommended_max_words": 180,
+      "recommended_word_count": {baseline},
+      "recommended_min_words": {band_min},
+      "recommended_max_words": {band_max},
       "risks": []
     }}
   ],
@@ -1442,13 +1458,74 @@ Use ONLY these chapter headings as content signal. There are no full voice-over 
 ## Output rules
 - Derive title, description and hashtags from the chapter titles / locations and working title.
 - Keep description SEO-friendly but natural — no keyword stuffing.
+- Also produce the on-screen series title (not the YouTube SEO title). It ALWAYS has
+  this exact two-line structure, translated into {display}:
+  Line 1 = the formula "Die Wunder von" in {display} (natural grammar / preposition).
+  Line 2 = the country or region of THIS video, in {display}.
+  Infer the place from the working title and chapter headings (e.g. Greece, USA,
+  Peloponnese). Use a region when the video is clearly regional, otherwise the country.
+  Do NOT add place counts, "27 lieux", clickbait, or a third line.
+  Examples:
+  - German + Greece → formula "Die Wunder von", place "Griechenland"
+  - English + Greece → formula "The Wonders of", place "Greece"
+  - French + Greece → formula "Les merveilles de", place "la Grèce"
+  - Spanish + USA → formula "Las maravillas de", place "Estados Unidos"
 - Return JSON ONLY, no markdown fences.
+- JSON must be valid: put newlines inside strings as \\n, never as raw line breaks.
 
 ## JSON schema
 {{
   "title": "optional refined YouTube title in {display}",
+  "wonders_title_formula": "translated 'Die Wunder von' only, in {display}",
+  "wonders_title_place": "country or region name only, in {display}",
   "description_body": "description without chapter list",
   "hashtags": "tag1, tag2, tag3"
+}}
+"""
+
+
+def build_video_title_prompt(
+    *,
+    language: str,
+    video_place: str,
+    title_references: list[str],
+    tone_tags: list[str] | None = None,
+) -> str:
+    """Prompt: einen Videotitel aus Land/Region + inspirierenden Referenzen."""
+    display = _language_display_name(language)
+    refs = [text.strip() for text in title_references if str(text).strip()]
+    if refs:
+        ref_block = "\n".join(f"{index}. {text}" for index, text in enumerate(refs, start=1))
+    else:
+        ref_block = "(none provided)"
+    tones = ", ".join(tag for tag in (tone_tags or []) if str(tag).strip()) or "(none)"
+    return f"""You invent ONE documentary / travel YouTube title for a new video.
+
+{native_speaker_language_block(language)}
+
+## Place (authoritative)
+The video is about this country or region: {video_place.strip() or "(unknown)"}
+The title must clearly belong to THIS place (name or unmistakable evocation)
+in natural {display} grammar.
+
+## Reference titles — inspiration only, NOT a template
+These titles show the series feel (length, promise, tone). Capture the spirit.
+Do NOT copy wording, word order, or a rigid formula. Do NOT just swap the
+place name into a reference. Invent a fresh title for this place.
+
+{ref_block}
+
+## Tone tags (optional)
+{tones}
+
+## Output rules
+- Return JSON ONLY, no markdown fences.
+- One title, no hashtags, no trailing slogan after a vertical bar.
+- Write the title in {display} only.
+
+## JSON schema
+{{
+  "title": "the new title in {display}"
 }}
 """
 

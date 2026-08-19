@@ -547,6 +547,22 @@ def intro_resolved_matches_plan(
     return len(parent_shots) == len(plan.slots)
 
 
+def _reset_open_intro_gaps(project: Project) -> list[str]:
+    """Offene Gaps des vorherigen Intro-Cuts räumen (wie bei Kapiteln)."""
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        chapter_gap_ids,
+    )
+    from otio_app.services.without_voiceover_enhanced.gap_reset_service import (
+        reset_open_coverage_gaps,
+    )
+
+    previous = load_model(intro_unified_cut_plan_path(project), UnifiedCutPlanDocument)
+    gap_ids = chapter_gap_ids(previous)
+    if not gap_ids:
+        return []
+    return reset_open_coverage_gaps(project, gap_ids=gap_ids).removed_gap_ids
+
+
 def persist_intro_unified_plan(
     project: Project,
     intro_plan: UnifiedCutPlanDocument,
@@ -567,6 +583,7 @@ def persist_intro_unified_plan(
     options = load_cut_plan_options(project)
     intro_plan = enforce_intro_strong_only(intro_plan, options=options)
     intro_plan = intro_plan.model_copy(update={"pause_directives": []})
+    _reset_open_intro_gaps(project)
     write_json(intro_unified_cut_plan_path(project), intro_plan)
     # Alter Resolved-Stand darf OTIO nicht mehr antreiben.
     invalidate_intro_resolved_timeline(project)

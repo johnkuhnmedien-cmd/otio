@@ -5,15 +5,17 @@ from __future__ import annotations
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 from urllib.parse import urlparse
 
+from otio_app.defaults import resolve_funnel_gemini_model
 from otio_app.services.api_keys import is_api_key_set
 from otio_app.services.gemini_client import (
     _extract_json,
     _get_client,
-    resolve_gemini_model,
 )
 from otio_app.services.without_voiceover_enhanced.models import (
     CoverageGap,
@@ -36,6 +38,11 @@ DEFAULT_FUNNEL_MODEL = "gemini-3.5-flash"
 THUMBNAIL_BATCH_SIZE = 10
 FINALISTS_PER_BATCH = 3
 MAX_FINALISTS = 6
+# Vision-Batches (bis 10 Bilder) dürfen die UI nicht endlos blockieren.
+# google.genai HttpOptions.timeout beendet generate_content oft nicht wirklich
+# (Retries auf 408/429/5xx). Der ThreadPool-Timeout gibt die Funnel-Schleife frei.
+FUNNEL_GEMINI_TIMEOUT_MS = 120_000
+FUNNEL_GEMINI_HARD_TIMEOUT_SEC = FUNNEL_GEMINI_TIMEOUT_MS / 1000.0
 
 TextLlmCallable = Callable[[str], str]
 VisionLlmCallable = Callable[[str, list[tuple[str, bytes]]], str]
@@ -714,16 +721,47 @@ def order_by_final_scores(
     return updated
 
 
+def _generate_funnel_content(*, client: Any, model: str, contents: Any) -> Any:
+    """generate_content mit hartem Timeout — HttpOptions allein reicht nicht."""
+    resolved = resolve_funnel_gemini_model(model)
+
+    def _call() -> Any:
+        return client.models.generate_content(model=resolved, contents=contents)
+
+    timeout_sec = float(FUNNEL_GEMINI_HARD_TIMEOUT_SEC)
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="funnel-gemini")
+    try:
+        future = executor.submit(_call)
+        try:
+            return future.result(timeout=timeout_sec)
+        except FuturesTimeout as exc:
+            raise FunnelRankError(
+                f"Funnel-LLM Timeout nach {int(timeout_sec)}s "
+                f"(Modell {resolved}). Gap wird übersprungen."
+            ) from exc
+    finally:
+        # wait=False: sonst blockiert shutdown() weiter auf dem hängenden Call.
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 def default_funnel_text_llm(prompt: str, *, model: str = DEFAULT_FUNNEL_MODEL) -> str:
     if not is_api_key_set("GEMINI_API_KEY"):
         raise FunnelRankError("GEMINI_API_KEY fehlt.")
-    client = _get_client()
+    client = _get_client(timeout_ms=FUNNEL_GEMINI_TIMEOUT_MS)
     from google.genai import types
 
-    response = client.models.generate_content(
-        model=resolve_gemini_model(model),
-        contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
-    )
+    try:
+        response = _generate_funnel_content(
+            client=client,
+            model=model,
+            contents=[
+                types.Content(role="user", parts=[types.Part.from_text(text=prompt)])
+            ],
+        )
+    except FunnelRankError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — Timeout/API in FunnelRankError
+        raise FunnelRankError(f"Funnel-Text-LLM: {exc}") from exc
     return (response.text or "").strip()
 
 
@@ -735,16 +773,22 @@ def default_funnel_vision_llm(
 ) -> str:
     if not is_api_key_set("GEMINI_API_KEY"):
         raise FunnelRankError("GEMINI_API_KEY fehlt.")
-    client = _get_client()
+    client = _get_client(timeout_ms=FUNNEL_GEMINI_TIMEOUT_MS)
     from google.genai import types
 
     parts: list = [types.Part.from_text(text=prompt)]
     for _label, data in images:
         parts.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
-    response = client.models.generate_content(
-        model=resolve_gemini_model(model),
-        contents=[types.Content(role="user", parts=parts)],
-    )
+    try:
+        response = _generate_funnel_content(
+            client=client,
+            model=model,
+            contents=[types.Content(role="user", parts=parts)],
+        )
+    except FunnelRankError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — Timeout/API in FunnelRankError
+        raise FunnelRankError(f"Funnel-Vision-LLM: {exc}") from exc
     return (response.text or "").strip()
 
 
@@ -913,7 +957,9 @@ def run_thumbnail_batch(
     )
     raw = llm(prompt, images)
     payload = _parse_json_with_repair(
-        raw, repair_callable=lambda p: llm(p, images)
+        raw,
+        # Repair nur als Text — die Preview-Bilder nicht ein zweites Mal senden.
+        repair_callable=lambda p: default_funnel_text_llm(p),
     )
     return validate_thumbnail_batch_payload(
         payload, expected_ids=[c.candidate_id for c in candidates]
@@ -957,7 +1003,8 @@ def run_final_comparison(
     )
     raw = llm(prompt, images)
     payload = _parse_json_with_repair(
-        raw, repair_callable=lambda p: llm(p, images)
+        raw,
+        repair_callable=lambda p: default_funnel_text_llm(p),
     )
     return validate_finalists_payload(
         payload,

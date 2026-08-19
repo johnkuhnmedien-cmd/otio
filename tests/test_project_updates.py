@@ -10,6 +10,7 @@ from otio_app.project_repository import (
     get_project_by_id,
     update_project_selection,
     update_project_status,
+    update_project_video_place,
 )
 
 
@@ -43,3 +44,29 @@ def test_update_selection_and_status(
     reloaded = get_project_by_id(saved.id, db_path=temp_db_path)
     assert reloaded is not None
     assert reloaded.status == ProjectStatus.READY
+
+
+def test_update_project_video_place(
+    temp_project_layout: dict[str, Path],
+    temp_db_path: Path,
+) -> None:
+    data = ProjectCreate(
+        name="IT Greece",
+        project_root=str(temp_project_layout["project_root"]),
+    )
+    saved = create_project(
+        data,
+        db_path=temp_db_path,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    assert saved.video_place == ""
+    updated = update_project_video_place(
+        saved.id,
+        "  Peloponnes  ",
+        db_path=temp_db_path,
+    )
+    assert updated.video_place == "Peloponnes"
+    reloaded = get_project_by_id(saved.id, db_path=temp_db_path)
+    assert reloaded is not None
+    assert reloaded.video_place == "Peloponnes"

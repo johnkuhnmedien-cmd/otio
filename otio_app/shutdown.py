@@ -31,6 +31,13 @@ def request_shutdown(*, hard_exit_delay: float = 1.0) -> None:
 
 
 def cancel_all_background_jobs() -> None:
+    from otio_app.services.job_registry import force_reset_all_jobs
+
+    try:
+        force_reset_all_jobs()
+    except Exception:
+        pass
+
     from otio_app.services.asset_analysis_job import get_asset_analysis_job_manager
     from otio_app.services.clean_media_job import get_clean_media_job_manager
     from otio_app.services.otio_export_job import get_otio_export_job_manager
@@ -63,5 +70,7 @@ def register_shutdown_handlers() -> None:
     try:
         signal.signal(signal.SIGINT, _handle_signal)
         signal.signal(signal.SIGTERM, _handle_signal)
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, _handle_signal)
     except ValueError:
         pass

@@ -63,4 +63,10 @@ def expected_feature_markers() -> list[str]:
         "URL-Pfad z. B. /systemstatus (st.navigation)",
         "Schnittplan: Radio-Navigation statt Tabs",
         "OTIO Export: ein Klick ohne Pflicht-Vorschau",
+        "Sidebar-Seite ▶ Auto-Lauf (Brief → Cuts)",
+        "OTIO starten.command: Start/Stop/Neustart inkl. git pull und Branch",
+        "Nach Neustart bleibt /auto-lauf erreichbar (letztes Projekt + versteckte Route)",
+        "Auto-Lauf-Fortschritt aktualisiert sich selbst (kein extra st.rerun)",
+        "Job-Status (Clean Media, Analysen, …) aktualisiert sich selbst",
+        "Auto-Lauf bis Funnel oder YouTube; eine Karte je Medienordner mit Stand je Sprache",
     ]

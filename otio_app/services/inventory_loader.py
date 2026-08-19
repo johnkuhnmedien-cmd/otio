@@ -6,7 +6,13 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis, InventoryDocument
+from otio_app.analysis_models import (
+    AssetFolderAnalysis,
+    AssetMediaAnalysis,
+    InventoryDocument,
+    is_supplement_asset,
+    supplement_asset_paths,
+)
 from otio_app.defaults import SUPPLEMENTAL_FOLDER_NAME
 from otio_app.models import Project
 from otio_app.project_layout import get_folder_inventory_path, get_inventory_dir, safe_folder_slug
@@ -20,6 +26,7 @@ from otio_app.services.media_inventory_cache import (
     migrate_legacy_per_asset_cache_folder,
     save_cached_media,
     scan_folder_cache_assets,
+    scan_folder_supplement_cache_assets,
 )
 
 
@@ -82,23 +89,31 @@ def folder_inventory_matches_media(
 ) -> bool:
     """Vergleicht nur lokale Original-Assets im Top-Level-Ordner.
 
-    Supplement-Assets liegen in `<Ordner>/_supplemental/<provider>/` bzw. unter
-    `cut_plan/supplement_assets/` und werden von `discover_folder_media_paths`
-    (bewusst nicht-rekursiver Top-Level-Scan) nicht erfasst. Ohne diesen
-    Ausschluss wurde ein gespeichertes Inventar mit Supplement-Assets HIER
-    IMMER als "nicht mehr aktuell" erkannt und verworfen — mit der Folge,
-    dass build_edit_plan() und die Stale-Hash-Prüfung unterschiedliche,
-    inkonsistente Inventar-Stände lasen. Das erzeugte sofort nach einem
-    frischen, korrekten Schnittplan-Rebuild einen falschen
+    Supplement-Assets liegen außerhalb des Medienordners — in
+    `<Ordner>/_supplemental/<provider>/`, unter `cut_plan/supplement_assets/`
+    oder (Enhanced-Funnel/Inbox) im geteilten Clean-Verzeichnis. Sie werden von
+    `discover_folder_media_paths` (bewusst nicht-rekursiver Top-Level-Scan)
+    nicht erfasst. Ohne diesen Ausschluss wurde ein gespeichertes Inventar mit
+    Supplement-Assets HIER IMMER als "nicht mehr aktuell" erkannt und verworfen
+    — mit der Folge, dass build_edit_plan() und die Stale-Hash-Prüfung
+    unterschiedliche, inkonsistente Inventar-Stände lasen. Das erzeugte sofort
+    nach einem frischen, korrekten Schnittplan-Rebuild einen falschen
     "Inventory changed"-Fehler.
+
+    Maßgeblich ist die Herkunft der Asset-Zeile (`asset_origin`), nicht der
+    Pfad: Clean Media legt auch Originale außerhalb des Medienordners ab.
     """
     from otio_app.services.cut_plan_inventory_bridge import is_external_inventory_media_path
 
+    supplement_paths = supplement_asset_paths(item)
     current = sorted(
         str(path) for path in media_paths if not is_external_inventory_media_path(path)
     )
     saved = sorted(
-        path for path in item.media_files if not is_external_inventory_media_path(path)
+        path
+        for path in item.media_files
+        if not is_external_inventory_media_path(path)
+        and path not in supplement_paths
     )
     return current == saved
 
@@ -219,6 +234,98 @@ def _resolve_cached_asset(
     return indexed_cache.get(media_path.name.casefold())
 
 
+def _supplement_assets_to_preserve(
+    project: Project,
+    folder_name: str,
+    primary_assets: list[AssetMediaAnalysis],
+) -> list[AssetMediaAnalysis]:
+    """Beschaffte Assets, die ein Rebuild aus dem Cache nicht verlieren darf.
+
+    Zwei Quellen, damit ein einmal beschafftes Asset nicht an einer einzelnen
+    Datei hängt: die vorherige Inventar-JSON und der Supplement-Cache. Letzterer
+    holt Zeilen zurück, die eine ältere Programmversion bereits entfernt hat.
+    """
+    from otio_app.services.cut_plan_inventory_bridge import is_external_inventory_media_path
+
+    primary_paths = {asset.path for asset in primary_assets}
+    preserved: dict[str, AssetMediaAnalysis] = {}
+
+    previous = load_folder_inventory_file(
+        get_folder_inventory_path(project.work_dir_path, folder_name)
+    )
+    for asset in getattr(previous, "assets", None) or []:
+        if asset.path in primary_paths:
+            continue
+        if is_supplement_asset(asset) or is_external_inventory_media_path(asset.path):
+            preserved[asset.path] = asset
+
+    for asset in scan_folder_supplement_cache_assets(project, folder_name):
+        if asset.path in primary_paths:
+            continue
+        # Analysierter Cache schlägt eine ältere Inventarzeile.
+        if asset.path in preserved and not is_successfully_analyzed(asset):
+            continue
+        if not Path(asset.path).is_file():
+            continue
+        preserved[asset.path] = asset
+
+    return list(preserved.values())
+
+
+def _with_preserved_supplements(
+    project: Project,
+    folder_name: str,
+    item: AssetFolderAnalysis,
+) -> AssetFolderAnalysis:
+    """Ergänzt fehlende Supplement-Zeilen aus Inventar-Historie und Cache."""
+    extras = _supplement_assets_to_preserve(project, folder_name, item.assets)
+    if not extras:
+        return item
+    merged_assets = list(item.assets) + extras
+    merged_media = list(item.media_files)
+    for asset in extras:
+        if asset.path not in merged_media:
+            merged_media.append(asset.path)
+    return item.model_copy(
+        update={
+            "assets": merged_assets,
+            "media_files": merged_media,
+            "frames_used": [frame for asset in merged_assets for frame in asset.frames_used],
+            "description": _folder_summary_from_assets(merged_assets),
+        }
+    )
+
+
+def _cache_is_newer_than_inventory(
+    project: Project,
+    folder_name: str,
+    item: AssetFolderAnalysis,
+    media_paths: list[Path],
+    indexed_cache: dict[str, AssetMediaAnalysis],
+) -> bool:
+    """True, wenn der Analyse-Cache eine frischere Fassung hält als das Inventar.
+
+    Ohne diese Prüfung bliebe eine Legacy-Zeile im Inventar stehen, obwohl der
+    Ordner gerade neu analysiert wurde: ``should_skip_folder_analysis`` akzeptiert
+    Legacy-Analysen als „erfolgreich", und die vorhandene JSON würde
+    unverändert weiterverwendet. Der Cut-LLM läse dann weiter den alten Stand,
+    obwohl die Analyse bezahlt wurde.
+    """
+    rows = {asset.path: asset for asset in item.assets or []}
+    for media_path in media_paths:
+        cached = _resolve_cached_asset(project, folder_name, media_path, indexed_cache)
+        if cached is None:
+            continue
+        row = rows.get(cached.path)
+        if row is None:
+            return True
+        if row.analysis_signature != cached.analysis_signature:
+            return True
+        if row.description != cached.description:
+            return True
+    return False
+
+
 def materialize_folder_inventory_from_cache(
     project: Project,
     folder_name: str,
@@ -236,8 +343,19 @@ def materialize_folder_inventory_from_cache(
         return None, "Keine Medien und kein Cache gefunden."
 
     existing = should_skip_folder_analysis(project, folder_name, media_paths)
-    if existing is not None:
-        return existing, None
+    if existing is not None and not _cache_is_newer_than_inventory(
+        project, folder_name, existing, media_paths, indexed_cache
+    ):
+        restored = _with_preserved_supplements(project, folder_name, existing)
+        if restored is not existing:
+            try:
+                save_folder_inventory(
+                    get_folder_inventory_path(project.work_dir_path, folder_name),
+                    restored,
+                )
+            except OSError as exc:
+                return None, f"Schreiben fehlgeschlagen: {exc}"
+        return restored, None
 
     migrate_legacy_per_asset_cache_folder(project, folder_name)
     indexed_cache = _cached_assets_by_filename(project, folder_name)
@@ -274,31 +392,7 @@ def materialize_folder_inventory_from_cache(
         description=_folder_summary_from_assets(assets),
     )
 
-    # Bestehende Supplement-/Cut-Plan-Einträge nicht verwerfen.
-    from otio_app.services.cut_plan_inventory_bridge import is_external_inventory_media_path
-
-    previous = load_folder_inventory_file(get_folder_inventory_path(project.work_dir_path, folder_name))
-    if previous is not None:
-        primary_paths = {asset.path for asset in assets}
-        extras = [
-            asset
-            for asset in previous.assets
-            if is_external_inventory_media_path(asset.path) and asset.path not in primary_paths
-        ]
-        if extras:
-            merged_assets = list(assets) + extras
-            merged_media = list(item.media_files)
-            for asset in extras:
-                if asset.path not in merged_media:
-                    merged_media.append(asset.path)
-            item = item.model_copy(
-                update={
-                    "assets": merged_assets,
-                    "media_files": merged_media,
-                    "frames_used": [frame for asset in merged_assets for frame in asset.frames_used],
-                    "description": _folder_summary_from_assets(merged_assets),
-                }
-            )
+    item = _with_preserved_supplements(project, folder_name, item)
 
     try:
         save_folder_inventory(

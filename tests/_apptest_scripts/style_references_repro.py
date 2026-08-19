@@ -11,6 +11,7 @@ import streamlit as st
 
 import otio_app.services.voiceover_generation.raw_style_library_service as raw_style_library_service
 import otio_app.services.voiceover_generation.style_profile_library_service as style_profile_library_service
+import otio_app.services.voiceover_generation.style_reference_defaults_service as style_reference_defaults_service
 from otio_app.models import Project, ProjectMode
 from otio_app.ui import project_context
 from otio_app.ui.voiceover_generation.style_references_tab import render_style_references_page
@@ -35,5 +36,6 @@ st.session_state["active_project_id"] = project.id
 _global_data_dir = root / "global_data"
 style_profile_library_service.ensure_data_dir = lambda: _global_data_dir
 raw_style_library_service.ensure_data_dir = lambda: _global_data_dir
+style_reference_defaults_service.ensure_data_dir = lambda: _global_data_dir
 
 render_style_references_page()

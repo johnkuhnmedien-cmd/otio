@@ -23,6 +23,10 @@ from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
     load_chapter_resolved,
     load_chapter_unified_plan,
 )
+from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    DEFAULT_ELEVENLABS_MUSIC_COUNT,
+    load_cut_plan_options,
+)
 from otio_app.services.without_voiceover_enhanced.elevenlabs_music_client import (
     MUSIC_LENGTH_MS_MAX,
     MUSIC_LENGTH_MS_MIN,
@@ -76,6 +80,11 @@ __all__ = [
     "MusicServiceError",
     "MusicGenerationResult",
     "MUSIC_MVP_MAX_BODY_CHAPTERS",
+    "get_elevenlabs_music_count",
+    "music_max_body_chapters",
+    "music_out_of_scope_message",
+    "music_bulk_button_label",
+    "list_music_generation_targets",
     "is_music_mvp_chapter_allowed",
     "body_chapter_music_index",
     "music_length_ms_from_seconds",
@@ -84,6 +93,7 @@ __all__ = [
     "narration_text_for_music",
     "generate_music_for_intro",
     "generate_music_for_chapter",
+    "generate_music_for_allowed_targets",
     "music_ui_status_intro",
     "music_ui_status_chapter",
     "usable_music_path_for_otio",
@@ -91,7 +101,8 @@ __all__ = [
     "validate_final_music_wav",
 ]
 
-MUSIC_MVP_MAX_BODY_CHAPTERS = 3
+# Default body-chapter cap when settings are missing (Intro + 3 chapters = 4).
+MUSIC_MVP_MAX_BODY_CHAPTERS = DEFAULT_ELEVENLABS_MUSIC_COUNT - 1
 _DURATION_MATCH_TOLERANCE_SEC = 0.05
 _GROSS_DURATION_RATIO_LO = 0.5
 _GROSS_DURATION_RATIO_HI = 1.5
@@ -132,9 +143,54 @@ def body_chapter_music_index(project: Project, folder_name: str) -> int | None:
     return None
 
 
+def get_elevenlabs_music_count(project: Project) -> int:
+    """Saved Cut Plan setting: Intro + first N-1 body chapters."""
+    try:
+        count = int(load_cut_plan_options(project).elevenlabs_music_count)
+    except Exception:  # noqa: BLE001
+        count = DEFAULT_ELEVENLABS_MUSIC_COUNT
+    if count < 1:
+        return 1
+    return count
+
+
+def music_max_body_chapters(project: Project) -> int:
+    return max(0, get_elevenlabs_music_count(project) - 1)
+
+
+def music_out_of_scope_message(project: Project) -> str:
+    body = music_max_body_chapters(project)
+    if body <= 0:
+        return "Music: nur Intro"
+    if body == 1:
+        return "Music: nur Intro + Kapitel 1"
+    return f"Music: nur Intro + Kapitel 1–{body}"
+
+
+def music_bulk_button_label(project: Project) -> str:
+    body = music_max_body_chapters(project)
+    if body <= 0:
+        return "ElevenLabs Music · nur Intro"
+    if body == 1:
+        return "ElevenLabs Music · Intro + 1. Kapitel"
+    return f"ElevenLabs Music · Intro + erste {body} Kapitel"
+
+
+def list_music_generation_targets(project: Project) -> list[tuple[str, str]]:
+    """[(kind, folder_name), ...] — Intro first, then allowed body chapters."""
+    targets: list[tuple[str, str]] = []
+    count = get_elevenlabs_music_count(project)
+    if count >= 1:
+        targets.append(("intro", ""))
+    max_body = max(0, count - 1)
+    for name in list_body_chapter_names(project)[:max_body]:
+        targets.append(("chapter", str(name)))
+    return targets
+
+
 def is_music_mvp_chapter_allowed(project: Project, folder_name: str) -> bool:
     index = body_chapter_music_index(project, folder_name)
-    return index is not None and index < MUSIC_MVP_MAX_BODY_CHAPTERS
+    return index is not None and index < music_max_body_chapters(project)
 
 
 def resolve_music_target_duration_seconds(
@@ -628,7 +684,7 @@ def generate_music_for_chapter(
 ) -> MusicGenerationResult:
     folder = (folder_name or "").strip()
     if not is_music_mvp_chapter_allowed(project, folder):
-        raise MusicServiceError("Music MVP: nur Kapitel 1–3.")
+        raise MusicServiceError(f"{music_out_of_scope_message(project)}.")
     statuses = {s.folder_name: s for s in list_chapter_cut_statuses(project)}
     status = statuses.get(folder)
     if status is None or not status.has_resolved or not status.matches:
@@ -656,6 +712,119 @@ def generate_music_for_chapter(
         ),
         compose_callable=compose_callable,
     )
+
+
+def _music_target_label(kind: str, folder_name: str) -> str:
+    if kind == "intro":
+        return "Intro"
+    return (folder_name or "").strip() or "Kapitel"
+
+
+def generate_music_for_allowed_targets(
+    project: Project,
+    *,
+    skip_completed: bool = True,
+    compose_callable: Callable[..., Any] | None = None,
+    on_progress: Callable[[str, int, int], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    """Generate ElevenLabs Music for Intro + the first N-1 body chapters.
+
+    Completed (not stale) WAVs are skipped by default to avoid re-billing.
+    Missing Python Timing is skipped rather than aborting the batch.
+    """
+    generated: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+    stopped = False
+    targets = list_music_generation_targets(project)
+    total = len(targets)
+    for index, (kind, folder) in enumerate(targets, start=1):
+        if should_stop is not None and should_stop():
+            stopped = True
+            break
+        label = _music_target_label(kind, folder)
+        if on_progress is not None:
+            on_progress(label, index, total)
+        if skip_completed:
+            if kind == "intro":
+                ui = music_ui_status_intro(project)
+            else:
+                ui = music_ui_status_chapter(project, folder)
+            if str(ui.get("status") or "") == "completed":
+                skipped.append(
+                    {
+                        "kind": kind,
+                        "folder": folder,
+                        "label": label,
+                        "reason": "bereits vorhanden",
+                    }
+                )
+                continue
+        try:
+            if kind == "intro":
+                result = generate_music_for_intro(
+                    project, compose_callable=compose_callable
+                )
+            else:
+                result = generate_music_for_chapter(
+                    project, folder, compose_callable=compose_callable
+                )
+        except MusicServiceError as exc:
+            failed.append(
+                {
+                    "kind": kind,
+                    "folder": folder,
+                    "label": label,
+                    "reason": str(exc),
+                }
+            )
+            continue
+        except Exception as exc:  # noqa: BLE001
+            failed.append(
+                {
+                    "kind": kind,
+                    "folder": folder,
+                    "label": label,
+                    "reason": str(exc),
+                }
+            )
+            continue
+        status = str(result.status or "")
+        if status == "completed":
+            generated.append(
+                {
+                    "kind": kind,
+                    "folder": folder,
+                    "label": label,
+                    "reason": result.message or "ok",
+                }
+            )
+        elif status in {"unavailable", "failed"}:
+            failed.append(
+                {
+                    "kind": kind,
+                    "folder": folder,
+                    "label": label,
+                    "reason": result.message or status,
+                }
+            )
+        else:
+            skipped.append(
+                {
+                    "kind": kind,
+                    "folder": folder,
+                    "label": label,
+                    "reason": result.message or status,
+                }
+            )
+    return {
+        "generated": generated,
+        "skipped": skipped,
+        "failed": failed,
+        "stopped": stopped,
+        "target_count": total,
+    }
 
 
 _NO_KEY_REGENERATE_HELP = "Neuerstellung nicht möglich – API-Key fehlt."
@@ -766,11 +935,12 @@ def music_ui_status_chapter(project: Project, folder_name: str, status: ChapterC
     folder = (folder_name or "").strip()
     allowed = is_music_mvp_chapter_allowed(project, folder)
     if not allowed:
+        msg = music_out_of_scope_message(project)
         return {
             "status": "unavailable",
-            "message": "Music MVP: nur Kapitel 1–3",
+            "message": msg,
             "enabled": False,
-            "help": "Music MVP: nur Kapitel 1–3",
+            "help": msg,
         }
     if status is None:
         statuses = {s.folder_name: s for s in list_chapter_cut_statuses(project)}

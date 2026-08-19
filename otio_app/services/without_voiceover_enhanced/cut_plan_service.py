@@ -2118,10 +2118,9 @@ def generate_unified_cut_for_folder(
                     raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
                 )
             else:
-                # Intro/Unified: Thinking aus — sonst frisst Sonnet/Opus das
-                # Output-Budget (und die Rechnung) für internes Reasoning.
-                # Intro-Output bewusst begrenzt; Körper-Kapitel behalten Default.
-                max_out = 8_192 if is_intro else None
+                # Thinking aus — sonst frisst Sonnet/Opus das Output-Budget.
+                # Intro nutzt dasselbe Ceiling wie Körper-Kapitel (100k).
+                max_out = None
                 raw_text = generate_plan_text_with_metadata(
                     prompt=attempt_prompt,
                     model=model_id,

@@ -24,6 +24,7 @@ class _FakePage:
     title: str
     url_path: str = ""
     default: bool = False
+    visibility: str = "visible"
 
 
 @pytest.fixture(autouse=True)
@@ -36,10 +37,25 @@ def _fake_streamlit_page(monkeypatch: pytest.MonkeyPatch) -> None:
     _build_*_pages() direkt inspizierbar.
     """
 
-    def _fake_page(render_fn, *, title, url_path="", default=False):
-        return _FakePage(render_fn=render_fn, title=title, url_path=url_path, default=default)
+    def _fake_page(render_fn, *, title, url_path="", default=False, visibility="visible"):
+        return _FakePage(
+            render_fn=render_fn,
+            title=title,
+            url_path=url_path,
+            default=default,
+            visibility=visibility,
+        )
 
     monkeypatch.setattr(routing.st, "Page", _fake_page)
+
+
+@pytest.fixture(autouse=True)
+def _ignore_persisted_active_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Routing-Tests sollen nicht das zuletzt geöffnete lokale Projekt laden."""
+    monkeypatch.setattr(
+        "otio_app.ui.active_project_session.load_last_active_project_id",
+        lambda: None,
+    )
 
 
 def _noop() -> None:
@@ -51,6 +67,7 @@ def test_with_voiceover_pages_unchanged() -> None:
     pages = routing._build_with_voiceover_pages(_noop, _noop)
     titles = [page.title for page in pages]
     assert titles == [
+        "Adobe Stock Import",
         "Neues Projekt",
         "Gespeicherte Projekte",
         "⓪ Clean Media",
@@ -67,6 +84,7 @@ def test_with_voiceover_url_paths_unchanged() -> None:
     pages = routing._build_with_voiceover_pages(_noop, _noop)
     url_paths = [page.url_path for page in pages]
     assert url_paths == [
+        "adobe-stock-import",
         "neues-projekt",
         "projekte",
         "clean-media",
@@ -83,6 +101,7 @@ def test_without_voiceover_pages_replace_mapping_supplement_editplan() -> None:
     pages = routing._build_without_voiceover_pages(_noop, _noop)
     titles = [page.title for page in pages]
     assert titles == [
+        "Adobe Stock Import",
         "Neues Projekt",
         "Gespeicherte Projekte",
         "⓪ Clean Media",
@@ -111,6 +130,7 @@ def test_without_voiceover_reuses_clean_media_and_analysis() -> None:
     without_titles = {page.title for page in without_pages}
     shared = with_titles & without_titles
     assert shared == {
+        "Adobe Stock Import",
         "Neues Projekt",
         "Gespeicherte Projekte",
         "⓪ Clean Media",
@@ -176,6 +196,7 @@ def test_run_app_navigation_dispatches_by_mode(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(routing.st, "sidebar", contextlib.nullcontext())
     monkeypatch.setattr(routing.st, "caption", lambda *_a, **_k: None)
     monkeypatch.setattr(routing, "render_activity_panel", lambda: None)
+    monkeypatch.setattr(routing, "render_enhanced_auto_run_sidebar", lambda: None)
     monkeypatch.setattr(routing, "format_build_label", lambda: "test-build")
 
     # Kein aktives Projekt -> bestehender Workflow (Default).
@@ -205,10 +226,12 @@ def test_enhanced_pages_cut_plan_before_final_output() -> None:
     pages = routing._build_without_voiceover_enhanced_pages(_noop, _noop)
     titles = [page.title for page in pages]
     assert titles == [
+        "Adobe Stock Import",
         "Neues Projekt",
         "Gespeicherte Projekte",
         "⓪ Clean Media",
         "① Analysen",
+        "▶ Auto-Lauf",
         "① Project Brief",
         "② Style References",
         "③ Dramaturgie",
@@ -221,6 +244,7 @@ def test_enhanced_pages_cut_plan_before_final_output() -> None:
         "Systemstatus",
     ]
     assert titles.index("⑦ Cut Plan") < titles.index("⑧ Final Output")
+    assert titles.index("▶ Auto-Lauf") == titles.index("① Analysen") + 1
 
 
 def test_active_project_mode_reads_enhanced_project(
@@ -245,6 +269,7 @@ def test_run_app_navigation_dispatches_enhanced(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(routing.st, "sidebar", contextlib.nullcontext())
     monkeypatch.setattr(routing.st, "caption", lambda *_a, **_k: None)
     monkeypatch.setattr(routing, "render_activity_panel", lambda: None)
+    monkeypatch.setattr(routing, "render_enhanced_auto_run_sidebar", lambda: None)
     monkeypatch.setattr(routing, "format_build_label", lambda: "test-build")
 
     fake_project = SimpleNamespace(project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED)
@@ -254,6 +279,8 @@ def test_run_app_navigation_dispatches_enhanced(monkeypatch: pytest.MonkeyPatch)
     titles = [page.title for page in captured["pages"]]
     assert "⑦ Cut Plan" in titles
     assert "⑧ Final Output" in titles
+    assert "▶ Auto-Lauf" in titles
+    assert titles.index("▶ Auto-Lauf") == titles.index("① Analysen") + 1
     assert titles.index("⑦ Cut Plan") < titles.index("⑧ Final Output")
     assert "② Zuordnung" not in titles
 
@@ -274,6 +301,7 @@ def test_pending_switch_uses_page_object_not_url_string(
     monkeypatch.setattr(routing.st, "caption", lambda *_a, **_k: None)
     monkeypatch.setattr(routing.st, "switch_page", lambda page: switched.append(page))
     monkeypatch.setattr(routing, "render_activity_panel", lambda: None)
+    monkeypatch.setattr(routing, "render_enhanced_auto_run_sidebar", lambda: None)
     monkeypatch.setattr(routing, "format_build_label", lambda: "test-build")
     monkeypatch.setattr(
         routing.st,
@@ -285,3 +313,56 @@ def test_pending_switch_uses_page_object_not_url_string(
     assert len(switched) == 1
     assert switched[0].url_path == "analysen"
     assert routing.PENDING_SWITCH_URL_PATH_KEY not in routing.st.session_state
+
+
+def _patch_nav_shell(monkeypatch: pytest.MonkeyPatch, captured: dict[str, list]) -> None:
+    import contextlib
+
+    def _fake_navigation(pages, position="sidebar"):
+        captured["pages"] = pages
+        return _FakeNavigation(pages)
+
+    monkeypatch.setattr(routing.st, "navigation", _fake_navigation)
+    monkeypatch.setattr(routing.st, "sidebar", contextlib.nullcontext())
+    monkeypatch.setattr(routing.st, "caption", lambda *_a, **_k: None)
+    monkeypatch.setattr(routing, "render_activity_panel", lambda: None)
+    monkeypatch.setattr(routing, "render_enhanced_auto_run_sidebar", lambda: None)
+    monkeypatch.setattr(routing, "format_build_label", lambda: "test-build")
+
+
+def test_classic_navigation_keeps_hidden_auto_lauf_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, list] = {}
+    _patch_nav_shell(monkeypatch, captured)
+    monkeypatch.setattr(routing.st, "session_state", {})
+    routing.run_app_navigation(render_new_project=_noop, render_project_list=_noop)
+    auto_pages = [page for page in captured["pages"] if page.url_path == "auto-lauf"]
+    assert len(auto_pages) == 1
+    assert auto_pages[0].visibility == "hidden"
+    titles = [page.title for page in captured["pages"]]
+    assert "② Zuordnung" in titles
+
+
+def test_restored_enhanced_project_builds_enhanced_nav(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, list] = {}
+    _patch_nav_shell(monkeypatch, captured)
+    fake_project = SimpleNamespace(project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED)
+    monkeypatch.setattr(
+        "otio_app.ui.active_project_session.load_last_active_project_id",
+        lambda: "enh-1",
+    )
+    monkeypatch.setattr(
+        "otio_app.ui.active_project_session.get_project_by_id",
+        lambda pid: fake_project if pid == "enh-1" else None,
+    )
+    monkeypatch.setattr(routing, "get_project_by_id", lambda pid: fake_project)
+    monkeypatch.setattr(routing.st, "session_state", {})
+    routing.run_app_navigation(render_new_project=_noop, render_project_list=_noop)
+    assert routing.st.session_state.get("active_project_id") == "enh-1"
+    titles = [page.title for page in captured["pages"]]
+    assert "▶ Auto-Lauf" in titles
+    assert "② Zuordnung" not in titles
+    auto_pages = [page for page in captured["pages"] if page.url_path == "auto-lauf"]
+    assert len(auto_pages) == 1
+    assert auto_pages[0].visibility == "visible"

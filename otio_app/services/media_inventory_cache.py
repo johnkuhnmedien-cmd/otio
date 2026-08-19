@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from otio_app.analysis_models import AssetMediaAnalysis
+from otio_app.analysis_models import AssetMediaAnalysis, is_supplement_asset
 from otio_app.defaults import SUPPLEMENTAL_FOLDER_NAME
 from otio_app.models import Project
 from otio_app.project_layout import get_inventory_dir, safe_folder_slug
@@ -23,8 +23,26 @@ _PREFERRED_VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm")
 _PREFERRED_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".tif", ".tiff")
 _NUMBERED_ASSET_STEM_RE = re.compile(r"^(.+_Asset)(\d+)$", re.IGNORECASE)
 
+#: Analyse-Scopes. Primary = Originale im Medienordner, Supplement = beschafftes
+#: Material. Supplements liegen in einem Unterordner, damit die Ordner-Discovery
+#: (die aus Cache- und Frame-Namen auf Top-Level-Medien schließt) sie nicht als
+#: fehlende Originaldateien missversteht.
+CACHE_SCOPE_PRIMARY = "primary"
+CACHE_SCOPE_SUPPLEMENT = "supplement"
+SUPPLEMENT_SCOPE_SUBDIR = "_supplements"
 
-def media_cache_path(project: Project, folder_name: str, media_path: Path) -> Path:
+
+def scope_subdir(scope: str) -> str:
+    return SUPPLEMENT_SCOPE_SUBDIR if scope == CACHE_SCOPE_SUPPLEMENT else ""
+
+
+def media_cache_path(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+    *,
+    scope: str = CACHE_SCOPE_PRIMARY,
+) -> Path:
     """Pfad zur Analyse-JSON — immer slug-basiert (iCloud-/Leerzeichen-tolerant)."""
     cache_dir = (
         project.work_dir_path
@@ -32,6 +50,9 @@ def media_cache_path(project: Project, folder_name: str, media_path: Path) -> Pa
         / "inventory"
         / safe_folder_slug(folder_name)
     )
+    subdir = scope_subdir(scope)
+    if subdir:
+        cache_dir = cache_dir / subdir
     cache_dir.mkdir(parents=True, exist_ok=True)
     canonical_name = f"{safe_folder_slug(media_path.stem)}{media_path.suffix.lower()}"
     return cache_dir / f"{safe_folder_slug(canonical_name)}.json"
@@ -51,7 +72,12 @@ def cached_media_paths_for_asset(
     project: Project,
     folder_name: str,
     media_path: Path,
+    *,
+    scope: str = CACHE_SCOPE_PRIMARY,
 ) -> list[Path]:
+    if scope == CACHE_SCOPE_SUPPLEMENT:
+        # Supplements gab es vor dem Scope nicht als eigenen Cache — kein Legacy-Pfad.
+        return [media_cache_path(project, folder_name, media_path, scope=scope)]
     return [
         media_cache_path(project, folder_name, media_path),
         legacy_per_asset_cache_path(project, folder_name, media_path),
@@ -88,18 +114,22 @@ def all_cache_paths_for_asset(
     project: Project,
     folder_name: str,
     media_path: Path,
+    *,
+    scope: str = CACHE_SCOPE_PRIMARY,
 ) -> list[Path]:
     """Alle möglichen Cache-Pfade für ein Medium (exakt + Slug-Match)."""
     seen: set[str] = set()
     ordered: list[Path] = []
-    for cache_file in cached_media_paths_for_asset(project, folder_name, media_path):
+    for cache_file in cached_media_paths_for_asset(
+        project, folder_name, media_path, scope=scope
+    ):
         key = str(cache_file)
         if key not in seen:
             seen.add(key)
             ordered.append(cache_file)
 
     target_slug = media_stem_slug(media_path)
-    for cache_dir in list_cache_dirs_for_folder(project, folder_name):
+    for cache_dir in list_cache_dirs_for_folder(project, folder_name, scope=scope):
         if not cache_dir.is_dir():
             continue
         try:
@@ -120,9 +150,13 @@ def load_cached_media_for_asset(
     project: Project,
     folder_name: str,
     media_path: Path,
+    *,
+    scope: str = CACHE_SCOPE_PRIMARY,
 ) -> Optional[AssetMediaAnalysis]:
     """Lädt Cache-Eintrag aus neuem oder altem Speicherort."""
-    for cache_file in all_cache_paths_for_asset(project, folder_name, media_path):
+    for cache_file in all_cache_paths_for_asset(
+        project, folder_name, media_path, scope=scope
+    ):
         cached = load_cached_media(cache_file)
         if cached is not None:
             return cached
@@ -135,6 +169,7 @@ def has_successful_asset_cache(
     media_path: Path,
     *,
     model: Optional[str] = None,
+    scope: str = CACHE_SCOPE_PRIMARY,
 ) -> bool:
     """True, wenn ein *aktueller* v3-Cache vorliegt (Skip bei Analyselauf).
 
@@ -147,8 +182,12 @@ def has_successful_asset_cache(
     from otio_app.services.asset_analysis_signature import is_current_asset_analysis
     from otio_app.services.gemini_client import resolve_gemini_model
 
-    effective_path = resolve_media_for_analysis(project, folder_name, media_path)
-    cached = load_cached_media_for_asset(project, folder_name, media_path)
+    effective_path = resolve_media_for_analysis(
+        project, folder_name, media_path, scope=scope
+    )
+    cached = load_cached_media_for_asset(
+        project, folder_name, media_path, scope=scope
+    )
     if cached is None:
         return False
     return is_current_asset_analysis(
@@ -219,12 +258,47 @@ def migrate_legacy_per_asset_cache_file(
             pass
 
 
-def list_cache_dirs_for_folder(project: Project, folder_name: str) -> list[Path]:
+def list_cache_dirs_for_folder(
+    project: Project,
+    folder_name: str,
+    *,
+    scope: str = CACHE_SCOPE_PRIMARY,
+) -> list[Path]:
     slug = safe_folder_slug(folder_name)
+    cache_root = project.work_dir_path / "cache" / "inventory" / slug
+    if scope == CACHE_SCOPE_SUPPLEMENT:
+        return [cache_root / SUPPLEMENT_SCOPE_SUBDIR]
     return [
-        project.work_dir_path / "cache" / "inventory" / slug,
+        cache_root,
         get_inventory_dir(project.work_dir_path) / slug,
     ]
+
+
+def scan_folder_supplement_cache_assets(
+    project: Project,
+    folder_name: str,
+) -> list[AssetMediaAnalysis]:
+    """Analysierte Supplements eines Ordners aus dem Supplement-Cache.
+
+    Quelle der Wahrheit für die Wiederherstellung: geht eine Inventarzeile
+    verloren, lässt sie sich hieraus ohne erneuten LLM-Aufruf zurückholen.
+    """
+    indexed: dict[str, AssetMediaAnalysis] = {}
+    for cache_dir in list_cache_dirs_for_folder(
+        project, folder_name, scope=CACHE_SCOPE_SUPPLEMENT
+    ):
+        if not cache_dir.is_dir():
+            continue
+        try:
+            cache_files = sorted(cache_dir.glob("*.json"))
+        except OSError:
+            continue
+        for cache_file in cache_files:
+            cached = load_cached_media(cache_file)
+            if cached is None or not cached.path:
+                continue
+            indexed[str(Path(cached.path))] = cached
+    return list(indexed.values())
 
 
 def scan_folder_cache_assets(
@@ -372,6 +446,9 @@ def _discover_media_from_frame_dirs(
     for frame_dir in frame_dirs:
         if not frame_dir.is_dir():
             continue
+        if frame_dir.name == SUPPLEMENT_SCOPE_SUBDIR:
+            # Frames beschaffter Assets — keine fehlenden Ordner-Originale.
+            continue
         slug = frame_dir.name.casefold()
         matched = slug_to_path.get(slug)
         if matched is not None:
@@ -402,8 +479,12 @@ def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path
                 continue
             cached_path = Path(cached.path)
             # Supplement-Caches gehören nicht in die Primary-Discovery
-            # (Inventory-Matching vergleicht nur Top-Level-Medien).
+            # (Inventory-Matching vergleicht nur Top-Level-Medien). Sonst
+            # entstünde aus dem Dateinamen ein Original, das es nie gab, und
+            # der Ordner würde nie wieder grün.
             if SUPPLEMENTAL_FOLDER_NAME in cached_path.parts:
+                continue
+            if is_supplement_asset(cached):
                 continue
             name = cached_path.name
             if not name or Path(name).suffix.lower() not in MEDIA_EXTENSIONS:
@@ -450,8 +531,14 @@ def resolve_media_for_analysis(
     project: Project,
     folder_name: str,
     media_path: Path,
+    *,
+    scope: str = CACHE_SCOPE_PRIMARY,
 ) -> Path:
     """Ermittelt den echten Mediendatei-Pfad (Slug-Match, ggf. Clean Media)."""
+    if scope == CACHE_SCOPE_SUPPLEMENT:
+        # Supplements liegen außerhalb des Medienordners; ihr Pfad ist bereits
+        # der effektive (Clean-Media läuft beim Ingest, nicht hier).
+        return media_path
     folder_path = project.project_root_path / folder_name
     slug = safe_folder_slug(media_path.stem)
     resolved = resolve_media_path_for_slug(folder_path, slug)

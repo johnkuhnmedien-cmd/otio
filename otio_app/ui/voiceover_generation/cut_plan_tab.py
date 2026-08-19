@@ -3613,15 +3613,12 @@ def _render_otio_export_running_panel(project: Project) -> None:
     if state.cancel_requested:
         st.warning("Abbruch angefordert — aktueller Clip wird noch beendet…")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
         if st.button("Stop", key=f"cut_plan_otio_export_stop_{project.id}"):
             manager.request_cancel(project.id)
             st.rerun()
     with col2:
-        if st.button("Aktualisieren", key=f"cut_plan_otio_export_refresh_btn_{project.id}"):
-            st.rerun()
-    with col3:
         if st.button("Job zurücksetzen", key=f"cut_plan_otio_export_reset_{project.id}"):
             manager.force_reset(project.id)
             st.rerun()

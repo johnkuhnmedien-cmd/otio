@@ -775,6 +775,8 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     # Funnel-Modell wählbar (günstige Gemini-Varianten)
     assert "ENHANCED_FUNNEL_LLM_MODEL_CHOICES" in source
     assert "enh_funnel_model_" in source
+    assert "fallback_if_unknown" in source
+    assert "resolve_funnel_gemini_model" in source
     assert "model=funnel_model_id" in source
     assert "enhanced_supplement_funnel" in source
     # Hintergrund-Job + Abbrechen
@@ -785,6 +787,9 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     # Leichte Monitor-Seite während Job (Abbrechen ohne schweren Rerun)
     assert "_render_lightweight_funnel_monitor" in source
     assert "enh_funnel_cancel_lite_" in source
+    assert "enh_funnel_force_reset_lite_" in source
+    assert "force_reset" in source
+    assert "UI trotzdem freigeben" in source
     # Session-State erst vor Pills bereinigen (nicht nach Widget)
     assert "enh_funnel_pending_deselect_" in source
     # Kein Query-Parameter als Produktionsauslöser
@@ -2251,6 +2256,75 @@ def test_funnel_job_cancel_stops_between_gaps(tmp_path: Path, monkeypatch) -> No
     assert state.report.stopped is True
 
 
+def test_funnel_force_reset_releases_ui_while_llm_blocks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import threading
+    import time
+
+    import otio_app.services.without_voiceover_enhanced.supplement_funnel_service as funnel_svc
+    from otio_app.services.without_voiceover_enhanced.models import (
+        SupplementFunnelReport,
+    )
+    from otio_app.services.without_voiceover_enhanced.supplement_funnel_job import (
+        JobStatus,
+        SupplementFunnelJobManager,
+    )
+
+    project = _project(tmp_path)
+    manager = SupplementFunnelJobManager()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fake_run(project_arg, **kwargs):
+        del project_arg
+        entered.set()
+        release.wait(timeout=2)
+        should_stop = kwargs.get("should_stop")
+        report = SupplementFunnelReport(
+            run_id="force_reset_test",
+            script_version="script-v1",
+            requested_gap_ids=list(kwargs.get("gap_ids") or []),
+        )
+        report.stopped = bool(should_stop and should_stop())
+        report.message = "late return"
+        return report
+
+    monkeypatch.setattr(funnel_svc, "run_supplement_funnel_for_gaps", fake_run)
+    assert manager.start(project, gap_ids=["gap_1"], model="gemini-1.5-flash")
+    assert entered.wait(timeout=2)
+    running = manager.get_state(project.id)
+    assert running is not None
+    assert running.model == "gemini-3.5-flash"
+    assert manager.request_cancel(project.id)
+    manager.force_reset(project.id)
+
+    state = manager.get_state(project.id)
+    assert state is not None
+    assert state.status == JobStatus.CANCELLED
+    assert manager.is_running(project.id) is False
+
+    release.set()
+    time.sleep(0.2)
+    # Der späte Thread darf den Job nicht wieder auf COMPLETED setzen.
+    state = manager.get_state(project.id)
+    assert state is not None
+    assert state.status == JobStatus.CANCELLED
+
+
+def test_funnel_vision_uses_http_timeout() -> None:
+    source = Path(
+        "otio_app/services/without_voiceover_enhanced/"
+        "supplement_thumbnail_rank_service.py"
+    ).read_text(encoding="utf-8")
+    assert "FUNNEL_GEMINI_TIMEOUT_MS" in source
+    assert "FUNNEL_GEMINI_HARD_TIMEOUT_SEC" in source
+    assert "timeout_ms=FUNNEL_GEMINI_TIMEOUT_MS" in source
+    assert "repair_callable=lambda p: default_funnel_text_llm(p)" in source
+    assert "resolve_funnel_gemini_model" in source
+    assert "executor.shutdown(wait=False" in source
+
+
 def test_funnel_records_selected_llm_model(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _lock(project)
@@ -2306,3 +2380,119 @@ def test_funnel_records_selected_llm_model(tmp_path: Path) -> None:
         model="gemini-3.1-flash-lite",
     )
     assert report.llm_model == "gemini-3.1-flash-lite"
+
+
+def test_funnel_replaces_retired_gemini_15_with_funnel_default(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _lock(project)
+    save_stock_providers_config(
+        project,
+        {
+            "pexels": True,
+            "pixabay": False,
+            "wikimedia": False,
+            "openverse": False,
+            "archive_org": False,
+        },
+    )
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            gaps=[
+                CoverageGap(
+                    gap_id="gap_1",
+                    needed_visual="road",
+                    preferred_media_type="photo",
+                )
+            ],
+        ),
+    )
+    cands = _make_candidates(4)
+    write_json(
+        stock_search_results_path(project),
+        StockSearchResultsDocument(script_version="script-v1", candidates=cands),
+    )
+
+    def download_callable(project, candidate, *, gap_id: str) -> Path:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            stock_candidate_download_dir,
+        )
+
+        d = stock_candidate_download_dir(
+            project, gap_id=gap_id, candidate_id=candidate.candidate_id
+        )
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{candidate.candidate_id}.jpg"
+        path.write_bytes(_jpeg_bytes())
+        return path
+
+    report = run_supplement_funnel_for_gaps(
+        project,
+        text_llm=_fake_text_llm(cands),
+        vision_llm=_fake_vision_llm(),
+        preview_fetch=_preview_fetch,
+        download_callable=download_callable,
+        force_restart=True,
+        model="gemini-1.5-flash",
+    )
+    assert report.llm_model == "gemini-3.5-flash"
+
+
+def test_funnel_text_llm_hard_timeout_does_not_block(monkeypatch) -> None:
+    import time
+
+    from otio_app.services.without_voiceover_enhanced import (
+        supplement_thumbnail_rank_service as rank_svc,
+    )
+    from otio_app.services.without_voiceover_enhanced.supplement_thumbnail_rank_service import (
+        FunnelRankError,
+        default_funnel_text_llm,
+    )
+
+    monkeypatch.setattr(rank_svc, "FUNNEL_GEMINI_HARD_TIMEOUT_SEC", 0.15)
+    monkeypatch.setattr(rank_svc, "is_api_key_set", lambda *_a, **_k: True)
+
+    class FakeModels:
+        def generate_content(self, **kwargs):
+            del kwargs
+            time.sleep(0.6)
+            raise AssertionError("generate_content should have been timed out")
+
+    class FakeClient:
+        models = FakeModels()
+
+    monkeypatch.setattr(rank_svc, "_get_client", lambda **_k: FakeClient())
+    started = time.monotonic()
+    with pytest.raises(FunnelRankError, match="Timeout"):
+        default_funnel_text_llm("prompt", model="gemini-3.5-flash")
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.0
+
+
+def test_funnel_text_llm_sends_resolved_model_not_gemini_15(monkeypatch) -> None:
+    from otio_app.services.without_voiceover_enhanced import (
+        supplement_thumbnail_rank_service as rank_svc,
+    )
+    from otio_app.services.without_voiceover_enhanced.supplement_thumbnail_rank_service import (
+        default_funnel_text_llm,
+    )
+
+    seen: dict[str, str] = {}
+
+    class FakeResp:
+        text = '{"ok": true}'
+
+    class FakeModels:
+        def generate_content(self, **kwargs):
+            seen["model"] = kwargs["model"]
+            return FakeResp()
+
+    class FakeClient:
+        models = FakeModels()
+
+    monkeypatch.setattr(rank_svc, "is_api_key_set", lambda *_a, **_k: True)
+    monkeypatch.setattr(rank_svc, "_get_client", lambda **_k: FakeClient())
+    text = default_funnel_text_llm("prompt", model="gemini-1.5-flash")
+    assert text == '{"ok": true}'
+    assert seen["model"] == "gemini-3.5-flash"
