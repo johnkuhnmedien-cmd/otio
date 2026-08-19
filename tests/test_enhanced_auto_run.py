@@ -208,8 +208,24 @@ def _stub_auto_run_tail(
     def boom(*_args, **_kwargs):
         raise AssertionError("Tail-Schritt darf bei skip-done nicht laufen")
 
+    def fake_maps(*_args, **kwargs):
+        _enter("maps")
+        emit = kwargs.get("emit")
+        finish = kwargs.get("finish")
+        if skip_all:
+            if emit is not None:
+                emit("maps", "Karten übersprungen.", skipped=True)
+            if finish is not None:
+                finish("maps", skipped=True)
+            return
+        if emit is not None:
+            emit("maps", "Karten fertig.")
+        if finish is not None:
+            finish("maps", skipped=False)
+
     monkeypatch.setattr(auto_run, "list_open_funnel_gap_ids", fake_open_ids)
     monkeypatch.setattr(auto_run, "save_stock_providers_config", fake_save)
+    monkeypatch.setattr(auto_run, "_run_maps", fake_maps)
 
     if skip_all:
         monkeypatch.setattr(auto_run, "search_supplements_for_gaps", boom)
@@ -469,6 +485,7 @@ def test_auto_run_skips_completed_steps(
     assert "chapter_cuts" in report.skipped
     assert "stock" in report.skipped
     assert "funnel" in report.skipped
+    assert "maps" in report.skipped
     assert "timing" in report.skipped
     assert "music" in report.skipped
     assert "otio" in report.skipped
@@ -554,6 +571,7 @@ def test_auto_run_stop_after_funnel_skips_timing_and_youtube(
     def too_far(*_args, **_kwargs):
         raise AssertionError("nach Funnel darf nichts mehr laufen")
 
+    monkeypatch.setattr(auto_run, "_run_maps", too_far)
     monkeypatch.setattr(auto_run, "_run_timing", too_far)
     monkeypatch.setattr(auto_run, "_run_music", too_far)
     monkeypatch.setattr(auto_run, "_run_otio", too_far)
@@ -563,6 +581,8 @@ def test_auto_run_stop_after_funnel_skips_timing_and_youtube(
     )
     assert report.stopped is False
     assert "funnel" in report.skipped
+    assert "maps" not in report.skipped
+    assert "maps" not in report.completed
     assert "timing" not in report.skipped
     assert "youtube" not in report.skipped
     assert "youtube" not in report.completed
@@ -738,6 +758,8 @@ def test_auto_run_is_strictly_sequential(
     assert seen_providers["archive_org"] is True
     assert "stock" in order
     assert "funnel" in order
+    assert "maps" in order
+    assert order.index("funnel") < order.index("maps") < order.index("timing:intro")
     assert "timing:intro" in order
     assert [item for item in order if item.startswith("timing:") and item != "timing:intro"] == [
         f"timing:{folders[0]}",
@@ -995,8 +1017,9 @@ def test_auto_run_stock_providers_are_free_only() -> None:
 
 def test_auto_run_steps_include_tail_through_youtube() -> None:
     ids = [step_id for step_id, _label in auto_run.AUTO_RUN_STEPS]
-    for step_id in ("stock", "funnel", "timing", "music", "otio", "youtube"):
+    for step_id in ("stock", "funnel", "maps", "timing", "music", "otio", "youtube"):
         assert step_id in ids
+    assert ids.index("funnel") < ids.index("maps") < ids.index("timing")
     assert ids[-1] == "youtube"
     assert ids[-2] == "otio"
 
@@ -1006,9 +1029,12 @@ def test_auto_run_stop_after_helpers() -> None:
     assert auto_run.normalize_auto_run_stop_after(None) == "youtube"
     funnel_ids = auto_run.auto_run_steps_through("funnel")
     assert funnel_ids[-1] == "funnel"
+    assert "maps" not in funnel_ids
     assert "timing" not in funnel_ids
     assert "youtube" not in funnel_ids
-    assert auto_run.auto_run_steps_through("youtube")[-1] == "youtube"
+    youtube_ids = auto_run.auto_run_steps_through("youtube")
+    assert youtube_ids[-1] == "youtube"
+    assert "maps" in youtube_ids
 
 
 def test_youtube_publish_complete_without_quiz(tmp_path: Path) -> None:
@@ -1097,6 +1123,7 @@ def test_auto_run_status_overview_covers_every_step(tmp_path: Path) -> None:
     assert by_id["youtube"].short_label == "YouTube"
     assert by_id["otio"].short_label == "OTIO"
     assert by_id["funnel"].short_label == "Funnel"
+    assert by_id["maps"].short_label == "Karten"
     assert by_id["youtube"].done is False
     assert by_id["otio"].done is False
 
@@ -1278,6 +1305,7 @@ def test_auto_run_ui_exports_page_and_banner() -> None:
     assert "bis YouTube" in source
     assert "Auto-Lauf fehlgeschlagen —" in source
     assert "Quiz bleibt manuell" in source
+    assert "Karten (Plan, Koordinaten, Rendern)" in source
     assert "Metadaten + Quiz" not in source
     assert "any_job_running(project.id, reconcile=False)" in source
     routing = Path("otio_app/ui/routing.py").read_text(encoding="utf-8")

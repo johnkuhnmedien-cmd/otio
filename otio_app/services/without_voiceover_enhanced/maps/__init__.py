@@ -1,7 +1,8 @@
-"""Kartenplanung und -render für OTIO Enhanced — isoliert, ohne Auto-Lauf.
+"""Kartenplanung und -render für OTIO Enhanced.
 
 Kapitel-ID ist der Original-``folder_name`` aus der bestätigten Dramaturgie.
-Karten gehören nicht zum Auto-Lauf. Rendern startet nur per Klick.
+Im Auto-Lauf: Plan erzeugen, Koordinaten prüfen/bestätigen, alle Karten rendern.
+Manuelles Rendern bleibt zusätzlich über die Karten-Seite möglich.
 """
 
 from otio_app.services.without_voiceover_enhanced.maps.models import (
@@ -52,6 +53,7 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     build_map_plan,
     clamp_max_parallel,
     compute_plan_hash,
+    confirm_all_valid_map_coordinates,
     confirm_map_place_coordinates,
     dramaturgy_fingerprint,
     load_map_coordinates,
@@ -67,6 +69,10 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     status_after_saving_coordinates,
     unique_chapter_places,
     update_coordinate_record,
+)
+from otio_app.services.without_voiceover_enhanced.maps.auto_run_maps import (
+    maps_complete,
+    run_maps_for_auto_run,
 )
 
 __all__ = [
@@ -99,6 +105,7 @@ __all__ = [
     "build_map_plan",
     "clamp_max_parallel",
     "compute_plan_hash",
+    "confirm_all_valid_map_coordinates",
     "confirm_map_place_coordinates",
     "dramaturgy_fingerprint",
     "load_map_coordinates",
@@ -108,8 +115,10 @@ __all__ = [
     "map_heading",
     "map_language_prefix",
     "map_output_filename",
+    "maps_complete",
     "nominatim_geocode",
     "rebuild_saved_map_plan",
+    "run_maps_for_auto_run",
     "save_map_coordinates",
     "save_map_plan",
     "save_map_settings",

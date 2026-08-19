@@ -464,6 +464,42 @@ def confirm_map_place_coordinates(
     return coords, plan
 
 
+def confirm_all_valid_map_coordinates(
+    project: Project,
+    *,
+    settings: MapRenderSettings | None = None,
+    previous: MapPlanDocument | None = None,
+) -> tuple[MapCoordinatesDocument, MapPlanDocument]:
+    """Bestätigt alle Orte mit gültigen Koordinaten und gibt den Plan frei."""
+    coords = load_map_coordinates(project)
+    changed = False
+    next_places = dict(coords.places)
+    for chapter_id, record in coords.places.items():
+        if not record.has_coordinates:
+            continue
+        if record.status in {COORDINATE_STATUS_CONFIRMED, COORDINATE_STATUS_MANUAL}:
+            continue
+        next_places[chapter_id] = record.model_copy(
+            update={
+                "status": COORDINATE_STATUS_CONFIRMED,
+                "confidence": 1.0,
+                "source": record.source or "confirmed",
+            }
+        )
+        changed = True
+    if changed:
+        coords = save_map_coordinates(
+            project, coords.model_copy(update={"places": next_places})
+        )
+    plan = rebuild_saved_map_plan(
+        project,
+        coordinates=coords,
+        settings=settings,
+        previous=previous,
+    )
+    return coords, plan
+
+
 def update_coordinate_record(
     project: Project,
     *,
