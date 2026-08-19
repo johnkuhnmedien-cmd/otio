@@ -65,7 +65,8 @@ def render_enhanced_auto_run_page() -> None:
         "Kapitel-Skripte zuerst komplett, danach "
         "Freitext-Nachbearbeitung, erst dann Script Lock. **⓪ Clean Media**, "
         "**① Analysen** und **SFX** bleiben manuell. Danach: Stocksuche (Wikimedia, Openverse, "
-        "Archive.org) → alle offenen Gaps → (optional) Python Timing (Kapitel parallel) → "
+        "Archive.org) → alle offenen Gaps → Karten (Plan, Koordinaten, Rendern) → "
+        "(optional) Python Timing (Kapitel parallel) → "
         "ElevenLabs Music → OTIO → YouTube-Metadaten. Quiz bleibt manuell unter Final Output."
     )
     from otio_app.ui.project_context import render_project_selector

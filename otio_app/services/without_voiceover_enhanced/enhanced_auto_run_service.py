@@ -1,4 +1,4 @@
-"""Sequenzielle Enhanced-Pipeline: Brief → … → LLM Cuts → Funnel → Timing → Musik → OTIO → YouTube.
+"""Sequenzielle Enhanced-Pipeline: Brief → … → Funnel → Karten → Timing → Musik → OTIO → YouTube.
 
 Pipeline-Schritte laufen nacheinander. Innerhalb eines Schritts bleiben
 LLM-/TTS-Calls strikt einzeln; Python Timing der Körper-Kapitel läuft
@@ -9,7 +9,8 @@ dann Script Lock. Der Aufruf über den Auto-Lauf-Button gilt als explizite
 Bestätigung für Dramaturgie, Script Lock und Intro (erste gültige Variante).
 Clean Media, Analysen und SFX bleiben manuell. Offene Coverage-Gaps nach
 dem Funnel sind ein Fehler (die Sprachen-Queue macht mit der nächsten
-Sprache weiter).
+Sprache weiter). Karten (Plan, Geocode, Bestätigen, Rendern) laufen vor
+Python Timing, damit der Cut die MP4s findet.
 """
 
 from __future__ import annotations
@@ -110,6 +111,15 @@ from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
     ensure_confirmed_intro_in_locked_script,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model
+from otio_app.services.without_voiceover_enhanced.maps.auto_run_maps import (
+    maps_complete,
+    run_maps_for_auto_run,
+)
+from otio_app.services.without_voiceover_enhanced.maps.plan_service import MapPlanError
+from otio_app.services.without_voiceover_enhanced.maps.render_service import (
+    MapRenderCancelled,
+    MapRenderError,
+)
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     resolve_llm_cut_model_id,
 )
@@ -192,6 +202,7 @@ AUTO_RUN_STEPS: tuple[tuple[str, str], ...] = (
     ("chapter_cuts", "⑦ Kapitel LLM Cuts"),
     ("stock", "⑧ Stocksuche"),
     ("funnel", "⑧ Supplement-Funnel"),
+    ("maps", "Karten"),
     ("timing", "⑨ Python Timing"),
     ("music", "⑩ ElevenLabs Music"),
     ("otio", "⑪ OTIO-Export"),
@@ -211,6 +222,7 @@ AUTO_RUN_STEP_SHORT_LABELS: dict[str, str] = {
     "chapter_cuts": "Kapitel-Cuts",
     "stock": "Stock",
     "funnel": "Funnel",
+    "maps": "Karten",
     "timing": "Timing",
     "music": "Music",
     "otio": "OTIO",
@@ -544,6 +556,15 @@ def run_enhanced_auto_pipeline(
         if stop_after == AUTO_RUN_STOP_AFTER_FUNNEL:
             emit("funnel", "Auto-Lauf bis Supplement-Funnel fertig.")
             return report
+
+        checkpoint("maps")
+        _run_maps(
+            project,
+            skip_done=skip_done,
+            emit=emit,
+            cancelled=cancelled,
+            finish=finish_step,
+        )
 
         checkpoint("timing")
         _run_timing(
@@ -1170,6 +1191,7 @@ def list_auto_run_step_statuses(project: Project) -> list[AutoRunStepStatus]:
         "chapter_cuts": chapter_cuts_done,
         "stock": gaps_done,
         "funnel": gaps_done,
+        "maps": lambda: maps_complete(project),
         "timing": timing_done,
         "music": lambda: _music_targets_complete(project),
         "otio": lambda: otio_export_complete(project),
@@ -1321,6 +1343,59 @@ def _run_stock_and_funnel(
         )
     emit("funnel", "Alle offenen Gaps erfüllt.")
     finish("funnel", skipped=False)
+
+
+def _run_maps(
+    project: Project,
+    *,
+    skip_done: bool,
+    emit: Callable[..., None],
+    cancelled: Callable[[], bool],
+    finish: Callable[..., None],
+) -> None:
+    if skip_done and maps_complete(project):
+        emit("maps", "Karten vorhanden — übersprungen.", skipped=True)
+        finish("maps", skipped=True)
+        return
+
+    def on_message(message: str) -> None:
+        emit("maps", message)
+
+    emit("maps", "Karten: Plan, Koordinaten, Rendern…")
+    try:
+        result = run_maps_for_auto_run(
+            project,
+            should_cancel=cancelled,
+            on_message=on_message,
+        )
+    except EnhancedAutoRunCancelled:
+        raise
+    except MapRenderCancelled as exc:
+        raise EnhancedAutoRunCancelled(str(exc) or "Auto-Lauf gestoppt.") from exc
+    except MapPlanError as exc:
+        raise EnhancedAutoRunError(str(exc)) from exc
+    except MapRenderError as exc:
+        raise EnhancedAutoRunError(f"Kartenrender fehlgeschlagen: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise EnhancedAutoRunError(f"Karten fehlgeschlagen: {exc}") from exc
+
+    failed = list(result.get("failed") or [])
+    if failed:
+        first_id, first_reason = failed[0]
+        more = f" (+{len(failed) - 1})" if len(failed) > 1 else ""
+        raise EnhancedAutoRunError(
+            f"{len(failed)} Karte(n) fehlgeschlagen ({first_id}{more}): {first_reason}"
+        )
+    rendered = list(result.get("rendered") or [])
+    blocked = list(result.get("blocked") or [])
+    errors = list(result.get("geocode_errors") or [])
+    parts = [f"{len(rendered)} gerendert"]
+    if blocked:
+        parts.append(f"{len(blocked)} ohne Koordinaten")
+    if errors:
+        parts.append(f"{len(errors)} Geocode-Hinweis(e)")
+    emit("maps", "Karten fertig — " + ", ".join(parts) + ".")
+    finish("maps", skipped=False)
 
 
 def _run_timing(

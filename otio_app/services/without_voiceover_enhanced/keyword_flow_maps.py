@@ -124,6 +124,74 @@ def _iter_map_files(maps_dir: Path, *, lang: str) -> list[Path]:
     return files
 
 
+def _list_enhanced_rendered_maps(
+    project: Project,
+    chapter_id: str,
+) -> list[dict[str, Any]]:
+    """Neue Renderer-Ausgabe unter ``_otio_enhanced/{LANG}/maps/output``."""
+    try:
+        from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
+            load_map_plan,
+        )
+        from otio_app.services.without_voiceover_enhanced.paths import map_output_dir
+
+        output_dir = map_output_dir(project)
+        plan = load_map_plan(project)
+    except (ValueError, OSError):
+        return []
+    lang = _project_lang_code(project)
+    chapter_slug = safe_folder_slug(chapter_id)
+    found: list[dict[str, Any]] = []
+    if plan is not None:
+        for item in plan.maps:
+            if item.chapter_id != chapter_id:
+                continue
+            path_text = str(item.output_path or "").strip()
+            if not path_text:
+                path_text = str(output_dir / item.output_filename)
+            path = Path(path_text)
+            if not path.is_file():
+                continue
+            found.append(
+                {
+                    "asset_id": f"map::enhanced::{path.name}",
+                    "path": str(path),
+                    "duration_seconds": 0.0,
+                    "lang": lang,
+                }
+            )
+    if found:
+        return found
+    if not output_dir.is_dir():
+        return []
+    try:
+        children = sorted(output_dir.iterdir(), key=lambda p: p.name.casefold())
+    except OSError:
+        return []
+    for path in children:
+        try:
+            if not path.is_file():
+                continue
+        except OSError:
+            continue
+        if path.suffix.lower() not in {".mp4", ".mov", ".m4v", ".mkv"}:
+            continue
+        file_lang, map_chapter = _parse_map_stem(path.stem)
+        if file_lang and file_lang != lang:
+            continue
+        if not _chapter_slug_matches(map_chapter, chapter_slug):
+            continue
+        found.append(
+            {
+                "asset_id": f"map::enhanced::{path.name}",
+                "path": str(path),
+                "duration_seconds": 0.0,
+                "lang": file_lang or lang,
+            }
+        )
+    return found
+
+
 def _list_map_media_for_chapter(
     project: Project,
     chapter_id: str,
@@ -135,6 +203,9 @@ def _list_map_media_for_chapter(
     Dateien ohne Sprach-Prefix bleiben als Legacy-Fallback, wenn keine
     sprachmarkierte Map für dieses Kapitel existiert.
     """
+    enhanced = _list_enhanced_rendered_maps(project, chapter_id)
+    if enhanced:
+        return enhanced
     chapter_slug = safe_folder_slug(chapter_id)
     lang = _project_lang_code(project)
     tagged: list[dict[str, Any]] = []

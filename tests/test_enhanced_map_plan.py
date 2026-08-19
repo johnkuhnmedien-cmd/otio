@@ -501,10 +501,12 @@ def test_missing_confirmed_dramaturgy_raises(tmp_path: Path) -> None:
         build_map_plan(project)
 
 
-def test_maps_page_is_enhanced_only_and_not_in_auto_run() -> None:
+def test_maps_page_is_enhanced_only_and_maps_run_before_timing() -> None:
     assert PAGE_MAPS in VOICEOVER_GEN_ENHANCED_WORKFLOW_PAGES
     assert PAGE_MAPS not in VOICEOVER_GEN_WORKFLOW_PAGES
-    assert "maps" not in {step_id for step_id, _label in AUTO_RUN_STEPS}
+    ids = [step_id for step_id, _label in AUTO_RUN_STEPS]
+    assert "maps" in ids
+    assert ids.index("funnel") < ids.index("maps") < ids.index("timing")
     dram_index = VOICEOVER_GEN_ENHANCED_WORKFLOW_PAGES.index("③ Dramaturgie")
     assert VOICEOVER_GEN_ENHANCED_WORKFLOW_PAGES[dram_index + 1] == PAGE_MAPS
     assert VOICEOVER_GEN_ENHANCED_WORKFLOW_PAGES[dram_index + 2] == "④ Folder Voice-overs"
