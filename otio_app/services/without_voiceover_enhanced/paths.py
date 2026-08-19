@@ -62,6 +62,8 @@ MAP_PLAN_FILENAME = "map_plan.json"
 MAP_COORDINATES_FILENAME = "map_coordinates.json"
 MAP_SETTINGS_FILENAME = "map_settings.json"
 MAP_OUTPUT_SUBDIR = "output"
+MAP_RENDER_JOB_FILENAME = "map_render_job.json"
+MAP_RENDER_CACHE_SUBDIR = "render-cache"
 
 
 def assert_enhanced_work_root(project: Project) -> Path:
@@ -177,6 +179,14 @@ def map_settings_path(project: Project) -> Path:
 
 def map_output_dir(project: Project) -> Path:
     return maps_dir(project) / MAP_OUTPUT_SUBDIR
+
+
+def map_render_job_path(project: Project) -> Path:
+    return maps_dir(project) / MAP_RENDER_JOB_FILENAME
+
+
+def map_render_cache_dir(project: Project) -> Path:
+    return maps_dir(project) / MAP_RENDER_CACHE_SUBDIR
 
 
 def exports_dir(project: Project) -> Path:

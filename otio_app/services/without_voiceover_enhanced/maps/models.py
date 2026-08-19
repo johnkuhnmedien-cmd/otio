@@ -1,4 +1,4 @@
-"""Datenmodell für Enhanced-Kartenpläne (Phase 1, ohne Render)."""
+"""Datenmodell für Enhanced-Kartenpläne und Renderstatus."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 MAP_STYLE_VERSION = "map_style_v1"
+ENGINE_STYLE_VERSION = "otio-vintage-map-v11"
 MAP_DURATION_SEC = 9.0
 MAP_FPS = 25
 MAP_DURATION_FRAMES = 225
@@ -36,6 +37,18 @@ RENDER_STATUS_DONE = "done"
 RENDER_STATUS_FAILED = "failed"
 RENDER_STATUS_CANCELLED = "cancelled"
 CONFIDENCE_AUTO_RENDER_MIN = 0.75
+
+RENDER_STATUS_LABELS: dict[str, str] = {
+    RENDER_STATUS_IDLE: "wartet",
+    RENDER_STATUS_WAITING: "wartet",
+    RENDER_STATUS_PREPARING: "Renderer wird vorbereitet",
+    RENDER_STATUS_RENDERING: "wird gerendert",
+    RENDER_STATUS_VALIDATING: "wird geprüft",
+    RENDER_STATUS_DONE: "fertig",
+    RENDER_STATUS_FAILED: "fehlgeschlagen",
+    RENDER_STATUS_CANCELLED: "abgebrochen",
+    RENDER_STATUS_BLOCKED: "blockiert",
+}
 
 MAP_HEADING_BY_LANGUAGE: dict[str, str] = {
     "EN": "Travel Route",
@@ -114,6 +127,9 @@ class MapPlanItem(BaseModel):
     render_status: str = RENDER_STATUS_IDLE
     blocked_reason: str = ""
     output_path: str = ""
+    progress: float = 0.0
+    error_detail: str = ""
+    media_hash: str = ""
 
     @property
     def content_hash(self) -> str:

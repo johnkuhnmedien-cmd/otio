@@ -375,6 +375,8 @@ def test_lookup_missing_coordinates_uses_injected_geocoder(tmp_path: Path) -> No
 
 def test_nominatim_geocode_parses_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Resp:
+        status_code = 200
+
         def raise_for_status(self) -> None:
             return None
 
@@ -407,7 +409,7 @@ def test_maps_page_is_enhanced_only_and_not_in_auto_run() -> None:
     assert VOICEOVER_GEN_ENHANCED_WORKFLOW_PAGES[dram_index + 2] == "④ Folder Voice-overs"
 
 
-def test_maps_tab_render_buttons_are_disabled() -> None:
+def test_maps_tab_render_buttons_are_clickable_without_rerun() -> None:
     import inspect
 
     from otio_app.ui.without_voiceover_enhanced.maps_tab import (
@@ -415,6 +417,11 @@ def test_maps_tab_render_buttons_are_disabled() -> None:
     )
 
     source = inspect.getsource(render_enhanced_maps_page)
-    assert "disabled=True" in source
     assert "Alle Karten rendern" in source
-    assert "st.rerun()" not in source
+    assert "Nur fehlende/fehlerhafte Karten rendern" in source
+    assert "Render abbrechen" in source
+    assert "Der Renderer folgt in Phase 2" not in source
+    assert "disabled=True" not in source
+    assert "poll_while_running" in source
+    render_section = source.split('st.subheader("Rendern")', 1)[1]
+    assert "st.rerun()" not in render_section

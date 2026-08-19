@@ -1,0 +1,315 @@
+"""Nominatim-Drosselung, Cache und Fortschritt für Karten-Koordinaten."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import requests
+
+from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+from otio_app.models import Project, ProjectMode
+from otio_app.services.voiceover_generation.dramaturgy_service import (
+    save_confirmed_dramaturgy,
+)
+from otio_app.services.voiceover_generation.models import (
+    DramaturgyFolderEntry,
+    DramaturgyPlan,
+)
+from otio_app.services.without_voiceover_enhanced.maps import geocode_service as geocode_mod
+from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
+    NOMINATIM_USER_AGENT,
+    friendly_geocode_error,
+    lookup_missing_coordinates,
+    nominatim_geocode,
+    reset_nominatim_client_for_tests,
+)
+from otio_app.services.without_voiceover_enhanced.maps.models import (
+    COORDINATE_STATUS_MANUAL,
+    MapCoordinatesDocument,
+)
+from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
+    build_map_plan,
+    save_map_coordinates,
+    update_coordinate_record,
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_nominatim_client() -> None:
+    reset_nominatim_client_for_tests()
+    yield
+    reset_nominatim_client_for_tests()
+
+
+def _project(tmp_path: Path, folders: list[str]) -> Project:
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    for folder in folders:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    return Project(
+        name="Geocode Test",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="fr",
+        video_place="Greece",
+        asset_subdir_names=folders,
+        selected_asset_subdirs=folders,
+        fps=25.0,
+    )
+
+
+def _confirm(project: Project, folders: list[str]) -> None:
+    save_confirmed_dramaturgy(
+        project,
+        DramaturgyPlan(
+            project_id=project.id,
+            language="FR",
+            project_title="Map Test",
+            recommended_folder_order=[
+                DramaturgyFolderEntry(
+                    folder_name=folder,
+                    order_index=index,
+                    enabled=True,
+                )
+                for index, folder in enumerate(folders)
+            ],
+        ),
+    )
+
+
+class _JsonResp:
+    def __init__(self, payload: list[dict], status_code: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status_code
+        self.headers: dict[str, str] = {}
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            error = requests.HTTPError(f"{self.status_code} error")
+            error.response = self
+            raise error
+
+    def json(self) -> list[dict]:
+        return self._payload
+
+
+def _ok_resp(lat: str = "39.72", lon: str = "21.63") -> _JsonResp:
+    return _JsonResp([{"lat": lat, "lon": lon, "importance": 0.9}])
+
+
+def test_nominatim_sends_identifying_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_get(*_args, **kwargs):
+        captured.update(kwargs["headers"])
+        return _ok_resp()
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    hit = nominatim_geocode("Meteora", "Greece")
+    assert hit["latitude"] == 39.72
+    assert captured["User-Agent"] == NOMINATIM_USER_AGENT
+    assert "OTIO-Schnittplaner" in captured["User-Agent"]
+    assert "maps-geocode" in captured["User-Agent"]
+    assert "python-requests" not in captured["User-Agent"]
+
+
+def test_nominatim_waits_at_least_one_second_between_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    clock = {"t": 50.0}
+
+    monkeypatch.setattr(geocode_mod, "_monotonic", lambda: clock["t"])
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock["t"] += seconds
+
+    monkeypatch.setattr(geocode_mod, "_sleep", fake_sleep)
+    monkeypatch.setattr(geocode_mod.requests, "get", lambda *_a, **_k: _ok_resp())
+
+    nominatim_geocode("Meteora", "Greece")
+    nominatim_geocode("Delphi", "Greece")
+    assert sleeps
+    assert sleeps[0] == pytest.approx(1.0)
+
+
+def test_nominatim_retries_429_with_increasing_pauses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    clock = {"t": 80.0}
+    calls = {"n": 0}
+
+    def fake_get(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            resp = _JsonResp([], status_code=429)
+            resp.headers = {}
+            return resp
+        return _ok_resp()
+
+    monkeypatch.setattr(geocode_mod, "_monotonic", lambda: clock["t"])
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock["t"] += seconds
+
+    monkeypatch.setattr(geocode_mod, "_sleep", fake_sleep)
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    hit = nominatim_geocode("Meteora", "Greece")
+    assert hit["latitude"] == 39.72
+    assert calls["n"] == 3
+    retries = [pause for pause in sleeps if pause >= 1.0]
+    assert retries[0] == pytest.approx(1.0)
+    assert retries[1] >= retries[0]
+
+
+def test_lookup_skips_found_places_and_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    folders = ["Meteora"]
+    project = _project(tmp_path, folders)
+    _confirm(project, folders)
+    gets: list[str] = []
+
+    def fake_get(*_args, **kwargs):
+        gets.append(str(kwargs.get("params", {}).get("q") or ""))
+        return _ok_resp()
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    cache = tmp_path / "nominatim.json"
+    plan = build_map_plan(project)
+    lookup_missing_coordinates(project, plan=plan, cache_path=cache)
+    assert gets == ["Meteora, Greece"]
+
+    save_map_coordinates(
+        project,
+        MapCoordinatesDocument(project_id=project.id, country="Greece", places={}),
+    )
+    plan = build_map_plan(project)
+    lookup_missing_coordinates(
+        project,
+        plan=plan,
+        coordinates=MapCoordinatesDocument(project_id=project.id, country="Greece"),
+        cache_path=cache,
+    )
+    assert gets == ["Meteora, Greece"]
+
+
+def test_lookup_continues_after_one_place_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    folders = ["Broken Isle", "Meteora"]
+    project = _project(tmp_path, folders)
+    _confirm(project, folders)
+    order: list[str] = []
+
+    def fake_get(*_args, **kwargs):
+        query = str(kwargs.get("params", {}).get("q") or "")
+        order.append(query)
+        if "Broken" in query:
+            raise requests.ConnectionError(
+                "dns boom https://nominatim.openstreetmap.org/search"
+            )
+        return _ok_resp()
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    messages: list[str] = []
+    plan = build_map_plan(project)
+    coords, rebuilt, errors = lookup_missing_coordinates(
+        project,
+        plan=plan,
+        cache_path=tmp_path / "cache.json",
+        on_progress=lambda event: messages.append(event.message),
+    )
+    assert "Broken Isle, Greece" in order
+    assert "Meteora, Greece" in order
+    assert coords.places["Meteora"].has_coordinates is True
+    assert rebuilt.maps[1].end_latitude == 39.72
+    assert len(errors) == 1
+    assert errors[0].startswith("Broken Isle:")
+    blob = "\n".join(errors + messages)
+    assert "https://" not in blob
+    assert "dns boom" not in blob
+    assert "ConnectionError" not in blob
+    assert any("Meteora: gefunden" in line for line in messages)
+    assert any("Broken Isle" in line and "Suche fehlgeschlagen" in line for line in messages)
+
+
+def test_lookup_exhausted_429_does_not_abort_rest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    folders = ["Hydra", "Meteora"]
+    project = _project(tmp_path, folders)
+    _confirm(project, folders)
+
+    def fake_get(*_args, **kwargs):
+        query = str(kwargs.get("params", {}).get("q") or "")
+        if "Hydra" in query:
+            resp = _JsonResp([], status_code=429)
+            resp.headers = {"Retry-After": "1"}
+            return resp
+        return _ok_resp("40.15", "24.32")
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    coords, _rebuilt, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+    )
+    assert coords.places["Meteora"].has_coordinates is True
+    assert "Hydra" in errors[0]
+    assert "ausgelastet" in errors[0]
+    assert "https://" not in errors[0]
+
+
+def test_friendly_geocode_error_hides_json_parse_noise() -> None:
+    exc = ValueError(
+        "JSON-Parse fehlgeschlagen: Expecting property name enclosed in double "
+        "quotes: line 15 column 5 (char 747) https://example.test/search"
+    )
+    text = friendly_geocode_error("Naxos", exc)
+    assert text == "Suche fehlgeschlagen"
+    assert "Expecting property" not in text
+    assert "https://" not in text
+
+
+def test_lookup_skips_chapter_that_already_has_coordinates(tmp_path: Path) -> None:
+    folders = ["Mount Athos", "Meteora"]
+    project = _project(tmp_path, folders)
+    _confirm(project, folders)
+    update_coordinate_record(
+        project,
+        chapter_id="Mount Athos",
+        original_label="Mount Athos",
+        display_label="Mont Athos",
+        latitude=40.27,
+        longitude=24.21,
+        status=COORDINATE_STATUS_MANUAL,
+    )
+    calls: list[str] = []
+
+    def fake_geocode(place: str, country: str) -> dict:
+        calls.append(place)
+        return {
+            "latitude": 39.72,
+            "longitude": 21.63,
+            "confidence": 0.9,
+            "original_label": place,
+            "display_label": place,
+        }
+
+    lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        geocode_fn=fake_geocode,
+        cache_path=tmp_path / "unused.json",
+    )
+    assert calls == ["Meteora"]

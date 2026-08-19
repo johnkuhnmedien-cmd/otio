@@ -37,6 +37,7 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
     MAP_RESOLUTION_4K,
     MAP_RESOLUTION_HD,
     MAP_STYLE_VERSION,
+    ENGINE_STYLE_VERSION,
     RENDER_STATUS_BLOCKED,
     RENDER_STATUS_DONE,
     RENDER_STATUS_IDLE,
@@ -146,6 +147,7 @@ def compute_plan_hash(item: MapPlanItem) -> str:
         "width": item.width,
         "height": item.height,
         "style_version": item.style_version,
+        "engine_style_version": ENGINE_STYLE_VERSION,
         "output_filename": item.output_filename,
     }
     blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
@@ -302,7 +304,10 @@ def build_map_plan(
         ):
             item.render_status = RENDER_STATUS_DONE
             item.output_path = prior.output_path
+            item.media_hash = prior.media_hash
+            item.progress = 1.0
             item.blocked_reason = ""
+            item.error_detail = ""
         items.append(item)
 
     return MapPlanDocument(

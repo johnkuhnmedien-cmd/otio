@@ -380,7 +380,7 @@ def _build_without_voiceover_enhanced_pages(
             url_path="dramaturgie",
         ),
         st.Page(
-            _wrap_page(PAGE_MAPS, render_enhanced_maps_page),
+            _wrap_page(PAGE_MAPS, render_enhanced_maps_page, jobs_banner_skip=("maps",)),
             title=PAGE_MAPS,
             url_path="karten",
         ),
@@ -609,7 +609,7 @@ def _run_legacy_pages(
     elif page == PAGE_DRAMATURGY:
         _wrap_page(PAGE_DRAMATURGY, render_dramaturgy_page)()
     elif page == PAGE_MAPS:
-        _wrap_page(PAGE_MAPS, render_enhanced_maps_page)()
+        _wrap_page(PAGE_MAPS, render_enhanced_maps_page, jobs_banner_skip=("maps",))()
     elif page == PAGE_FOLDER_VOICEOVERS:
         if mode == ProjectMode.WITHOUT_VOICEOVER_ENHANCED:
             _wrap_page(PAGE_FOLDER_VOICEOVERS, render_enhanced_folder_voiceovers_page)()
