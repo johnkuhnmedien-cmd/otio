@@ -127,7 +127,6 @@ from otio_app.services.without_voiceover_enhanced.paths import (
 from otio_app.services.youtube_publish_service import (
     build_youtube_publish_context_from_resolved,
     generate_youtube_publish_metadata_from_context,
-    generate_youtube_quizzes_from_context,
     load_youtube_metadata,
 )
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
@@ -1070,17 +1069,16 @@ def otio_export_complete(project: Project) -> bool:
 
 
 def youtube_publish_complete(project: Project) -> bool:
+    """Titel + Beschreibung reichen; Quiz bleibt manuell auf Final Output."""
     document = load_youtube_metadata(project)
     if document is None:
         return False
     if not (document.title or "").strip():
         return False
-    if not (
+    return bool(
         (document.description or "").strip()
         or (document.description_body or "").strip()
-    ):
-        return False
-    return bool(list(document.quizzes or []))
+    )
 
 
 def _music_targets_complete(project: Project) -> bool:
@@ -1507,7 +1505,7 @@ def _run_youtube(
         finish("youtube", skipped=True)
         return
 
-    emit("youtube", "YouTube Publish (Metadaten + Quiz)…")
+    emit("youtube", "YouTube Publish (Metadaten)…")
     resolved = load_resolved_timeline_for_auto_run(project)
     if resolved is None:
         raise EnhancedAutoRunError(
@@ -1528,10 +1526,8 @@ def _run_youtube(
             or (existing.description_body or "").strip()
         )
     )
-    need_quiz = not (existing is not None and list(existing.quizzes or []))
     if not skip_done:
         need_meta = True
-        need_quiz = True
 
     if need_meta:
         emit("youtube", "YouTube-Metadaten…", item_label="Metadaten")
@@ -1546,20 +1542,9 @@ def _run_youtube(
                 result.error or "YouTube-Metadaten fehlgeschlagen."
             )
 
-    if need_quiz:
-        emit("youtube", "YouTube-Quiz…", item_label="Quiz")
-        result = generate_youtube_quizzes_from_context(
-            project,
-            context,
-            provider=provider,
-            model=model,
-        )
-        if result.status != STATUS_PASS or result.document is None:
-            raise EnhancedAutoRunError(result.error or "YouTube-Quiz fehlgeschlagen.")
-
     if not youtube_publish_complete(project):
         raise EnhancedAutoRunError(
-            "YouTube Publish unvollständig — Titel, Beschreibung oder Quiz fehlen."
+            "YouTube Publish unvollständig — Titel oder Beschreibung fehlen."
         )
-    emit("youtube", "YouTube Publish fertig (Metadaten + Quiz).")
+    emit("youtube", "YouTube Publish fertig (Metadaten). Quiz bleibt manuell.")
     finish("youtube", skipped=False)

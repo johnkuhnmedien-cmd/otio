@@ -66,7 +66,7 @@ def render_enhanced_auto_run_page() -> None:
         "Freitext-Nachbearbeitung, erst dann Script Lock. **⓪ Clean Media**, "
         "**① Analysen** und **SFX** bleiben manuell. Danach: Stocksuche (Wikimedia, Openverse, "
         "Archive.org) → alle offenen Gaps → (optional) Python Timing (Kapitel parallel) → "
-        "ElevenLabs Music → OTIO → YouTube (Metadaten + Quiz)."
+        "ElevenLabs Music → OTIO → YouTube-Metadaten. Quiz bleibt manuell unter Final Output."
     )
     from otio_app.ui.project_context import render_project_selector
 
@@ -170,7 +170,7 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
     queue_running = get_language_auto_run_queue_manager().any_running()
     other_auto = (not running) and manager.any_running()
     other_running = (not running) and (
-        any_job_running(project.id) or queue_running or other_auto
+        any_job_running(project.id, reconcile=False) or queue_running or other_auto
     )
 
     if key_scope == "sidebar":
@@ -184,7 +184,7 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
         "alle Kapitel-Cuts → Stocksuche (Wikimedia/Openverse/Archive.org) → "
         "alle offenen Gaps. **bis Funnel** stoppt dort; **bis YouTube** macht "
         "weiter mit Python Timing (Kapitel parallel, max. 8) → ElevenLabs Music → "
-        "OTIO-Export → YouTube Publish (Metadaten + Quiz). "
+        "OTIO-Export → YouTube-Metadaten. Quiz bleibt manuell unter Final Output. "
         "LLM-/TTS-Calls bleiben einzeln. Offene Gaps nach dem Funnel gelten als Fehler. "
         "Fertige Schritte werden übersprungen."
     )
@@ -232,7 +232,7 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
             st.rerun()
         if state is not None:
             st.caption(state.message or state.step_label)
-    if key_scope != "sidebar":
+    if key_scope == "auto_page":
         _render_auto_run_status_overview(project)
 
 
