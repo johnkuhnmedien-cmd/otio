@@ -94,3 +94,26 @@ def test_any_job_running_can_skip_reconcile(monkeypatch) -> None:
     assert reconciled["n"] == 0
     job_registry.any_job_running("proj")
     assert reconciled["n"] == 1
+
+
+def test_reconcile_all_jobs_skips_maps_for_classic_projects(monkeypatch) -> None:
+    classic = MagicMock(id="classic", is_without_voiceover_enhanced=False)
+    monkeypatch.setattr(job_registry, "list_projects", lambda: [classic])
+    idle = MagicMock()
+    idle.reconcile_stuck_job = MagicMock()
+    map_manager = MagicMock()
+    monkeypatch.setattr(job_registry, "get_clean_media_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_voice_analysis_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_asset_analysis_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_otio_export_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_supplement_funnel_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_enhanced_auto_run_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_language_auto_run_queue_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_map_render_job_manager", lambda: map_manager)
+    monkeypatch.setitem(__import__("sys").modules, "streamlit", MagicMock(session_state={}))
+
+    job_registry.begin_ui_script_run()
+    job_registry.reconcile_all_jobs()
+    map_manager.reconcile_stuck_job.assert_not_called()
+    assert idle.reconcile_stuck_job.called
+

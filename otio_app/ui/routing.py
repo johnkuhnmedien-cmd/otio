@@ -84,7 +84,6 @@ def _wrap_page(
                 clear_page_widget_state(PAGE_MAPPING)
             st.session_state[_CURRENT_PAGE_KEY] = page_id
 
-        begin_ui_script_run()
         reconcile_all_jobs()
         record_script_run(page_id)
         project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
@@ -461,6 +460,8 @@ def run_app_navigation(
 ) -> None:
     """Startet st.navigation — nur die aktive Seite wird gerendert."""
     restore_active_project_into_session()
+    begin_ui_script_run()
+    reconcile_all_jobs()
     if not hasattr(st, "navigation"):
         _run_legacy_pages(
             render_new_project=render_new_project,

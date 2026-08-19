@@ -60,14 +60,24 @@ def reconcile_all_jobs() -> None:
         pass
     clean_manager = get_clean_media_job_manager()
     for project in list_projects():
-        clean_manager.reconcile_stuck_job(project.id)
-        get_voice_analysis_job_manager().reconcile_stuck_job(project.id)
-        get_asset_analysis_job_manager().reconcile_stuck_job(project.id)
-        get_otio_export_job_manager().reconcile_stuck_job(project.id)
-        get_supplement_funnel_job_manager().reconcile_stuck_job(project.id)
-        get_enhanced_auto_run_job_manager().reconcile_stuck_job(project.id)
-        get_map_render_job_manager().reconcile_stuck_job(project.id)
-        get_language_auto_run_queue_manager().reconcile_stuck_job(project.id)
+        for reconcile in (
+            clean_manager.reconcile_stuck_job,
+            get_voice_analysis_job_manager().reconcile_stuck_job,
+            get_asset_analysis_job_manager().reconcile_stuck_job,
+            get_otio_export_job_manager().reconcile_stuck_job,
+            get_supplement_funnel_job_manager().reconcile_stuck_job,
+            get_enhanced_auto_run_job_manager().reconcile_stuck_job,
+            get_language_auto_run_queue_manager().reconcile_stuck_job,
+        ):
+            try:
+                reconcile(project.id)
+            except Exception:  # noqa: BLE001 — ein Projekt darf Tabwechsel nicht crashen
+                continue
+        if project.is_without_voiceover_enhanced:
+            try:
+                get_map_render_job_manager().reconcile_stuck_job(project.id)
+            except Exception:  # noqa: BLE001
+                continue
 
 
 def any_job_running(project_id: str | None = None, *, reconcile: bool = True) -> bool:
@@ -192,7 +202,12 @@ def collect_job_activity() -> list[JobActivity]:
                 )
             )
 
-        map_state = get_map_render_job_manager().get_state(project_id)
+        map_state = None
+        if project.is_without_voiceover_enhanced:
+            try:
+                map_state = get_map_render_job_manager().get_state(project_id)
+            except Exception:  # noqa: BLE001
+                map_state = None
         if map_state is not None:
             done = sum(1 for item in map_state.items.values() if item.status == "done")
             total = max(len(map_state.items), 1)

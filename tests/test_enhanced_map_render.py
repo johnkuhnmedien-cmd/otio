@@ -577,3 +577,33 @@ def test_packaged_renderer_has_no_thomas_paths() -> None:
     assert "PAGE_MAPS" not in AUTO_RUN_STEPS[0]
     assert PAGE_MAPS not in VOICEOVER_GEN_WORKFLOW_PAGES
     assert "maps" not in {step_id for step_id, _label in AUTO_RUN_STEPS}
+
+
+def test_map_render_job_read_path_does_not_migrate_or_mkdir(tmp_path: Path) -> None:
+    folders = ["Mount Athos"]
+    project = _project(tmp_path, folders)
+    from otio_app.project_layout import language_folder_name
+    from otio_app.services.without_voiceover_enhanced.paths import map_render_job_path
+
+    lang_dir = project.work_dir_path / language_folder_name(project.language)
+    path = map_render_job_path(project, create=False)
+    assert path.name == "map_render_job.json"
+    assert not path.is_file()
+    assert not lang_dir.exists()
+
+
+def test_map_reconcile_survives_missing_work_dir(
+    tmp_path: Path, isolated_manager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folders = ["Mount Athos"]
+    project = _project(tmp_path, folders).model_copy(
+        update={"work_dir": str(tmp_path / "gone" / "_otio_enhanced")}
+    )
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.maps.map_render_job.get_project_by_id",
+        lambda pid: project if pid == project.id else None,
+    )
+    manager = get_map_render_job_manager()
+    manager.reconcile_stuck_job(project.id)
+    assert manager.get_state(project.id) is None
+

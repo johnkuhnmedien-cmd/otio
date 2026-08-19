@@ -141,18 +141,30 @@ class MapRenderJobManager:
         self._run_seq = 0
 
     def _persist(self, project: Project, job: MapRenderJobState) -> None:
-        write_json(map_render_job_path(project), job.to_document())
+        write_json(map_render_job_path(project, create=True), job.to_document())
 
     def _load_disk(self, project_id: str) -> MapRenderJobState | None:
         project = get_project_by_id(project_id)
-        if project is None:
+        if project is None or not project.is_without_voiceover_enhanced:
             return None
-        loaded = load_model(map_render_job_path(project), MapRenderJobDocument)
+        try:
+            path = map_render_job_path(project, create=False)
+            if not path.is_file():
+                return None
+            loaded = load_model(path, MapRenderJobDocument)
+        except (OSError, ValueError, TypeError):
+            return None
         if loaded is None:
             return None
         return _state_from_document(loaded)
 
     def reconcile_stuck_job(self, project_id: str) -> None:
+        try:
+            self._reconcile_stuck_job(project_id)
+        except Exception:  # noqa: BLE001 — ein kaputtes Projekt darf die App nicht crashen
+            return
+
+    def _reconcile_stuck_job(self, project_id: str) -> None:
         project = get_project_by_id(project_id)
         with self._lock:
             job = self._jobs.get(project_id)
@@ -186,8 +198,11 @@ class MapRenderJobManager:
             self._renderers.pop(project_id, None)
             snapshot = copy.deepcopy(job)
         if project is not None:
-            self._persist(project, snapshot)
-            self._mark_plan_cancelled(project, snapshot)
+            try:
+                self._persist(project, snapshot)
+                self._mark_plan_cancelled(project, snapshot)
+            except (OSError, ValueError):
+                pass
 
     def _mark_plan_cancelled(self, project: Project, job: MapRenderJobState) -> None:
         with self._plan_lock:

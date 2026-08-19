@@ -13,7 +13,6 @@ from otio_app.project_repository import list_projects
 from otio_app.services.job_registry import (
     collect_job_activity,
     force_reset_all_jobs,
-    reconcile_all_jobs,
     running_job_count,
 )
 from otio_app.ui.polling import poll_while_running
@@ -90,7 +89,6 @@ def render_activity_panel(
     key_scope: str = "sidebar",
 ) -> None:
     """Zeigt laufende Jobs, Thread-Status und letzte Script-Läufe."""
-    reconcile_all_jobs()
     running = running_job_count()
     run_count = int(st.session_state.get(_RUN_COUNT_KEY, 0))
     scope = str(key_scope or "sidebar").strip() or "sidebar"

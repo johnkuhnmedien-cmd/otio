@@ -83,6 +83,13 @@ def test_workflow_pages_show_self_updating_job_banners() -> None:
     assert "show_auto_run_panel=False" in source
     assert "begin_ui_script_run" in source
     assert "reconcile_all_jobs()" in source
+    nav = Path("otio_app/ui/routing.py").read_text(encoding="utf-8")
+    begin_at = nav.find("begin_ui_script_run()")
+    activity_at = nav.find("render_activity_panel()")
+    assert begin_at != -1 and activity_at != -1
+    assert begin_at < activity_at
+    activity = Path("otio_app/ui/activity.py").read_text(encoding="utf-8")
+    assert "reconcile_all_jobs()" not in activity
 
 
 def test_funnel_lite_monitor_does_not_sleep_rerun() -> None:
