@@ -1,13 +1,15 @@
 """Sequenzielle Enhanced-Pipeline: Brief → … → LLM Cuts → Funnel → Timing → Musik → OTIO → YouTube.
 
-Ein Schritt nach dem anderen, innerhalb jedes Schritts ein Kapitel nach dem
-anderen. Keine parallelen LLM-/TTS-Calls. Bereits erledigte Schritte werden
-übersprungen (skip-done). Kapitel-Skripte laufen zuerst komplett durch, danach
-die Freitext-Nachbearbeitung aller Kapitel, erst dann Script Lock. Der Aufruf
-über den Auto-Lauf-Button gilt als explizite Bestätigung für Dramaturgie,
-Script Lock und Intro (erste gültige Variante). Clean Media, Analysen und SFX
-bleiben manuell. Offene Coverage-Gaps nach dem Funnel sind ein
-Fehler (die Sprachen-Queue macht mit der nächsten Sprache weiter).
+Pipeline-Schritte laufen nacheinander. Innerhalb eines Schritts bleiben
+LLM-/TTS-Calls strikt einzeln; Python Timing der Körper-Kapitel läuft
+parallel (bis ``ENHANCED_CHAPTER_TIMING_MAX_WORKERS``). Bereits erledigte
+Schritte werden übersprungen (skip-done). Kapitel-Skripte laufen zuerst
+komplett durch, danach die Freitext-Nachbearbeitung aller Kapitel, erst
+dann Script Lock. Der Aufruf über den Auto-Lauf-Button gilt als explizite
+Bestätigung für Dramaturgie, Script Lock und Intro (erste gültige Variante).
+Clean Media, Analysen und SFX bleiben manuell. Offene Coverage-Gaps nach
+dem Funnel sind ein Fehler (die Sprachen-Queue macht mit der nächsten
+Sprache weiter).
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from otio_app.defaults import ENHANCED_CHAPTER_TIMING_MAX_WORKERS
 from otio_app.models import Project
 from otio_app.project_layout import (
     get_dramaturgy_settings_path,
@@ -84,7 +87,7 @@ from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
     list_chapters_needing_unified_cut,
     list_chapters_ready_for_python_timing,
     refresh_merged_unified_cut_plan,
-    resolve_chapter_timeline,
+    resolve_all_chapter_timelines,
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     CutPlanError,
@@ -124,7 +127,6 @@ from otio_app.services.without_voiceover_enhanced.paths import (
 from otio_app.services.youtube_publish_service import (
     build_youtube_publish_context_from_resolved,
     generate_youtube_publish_metadata_from_context,
-    generate_youtube_quizzes_from_context,
     load_youtube_metadata,
 )
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
@@ -1067,17 +1069,16 @@ def otio_export_complete(project: Project) -> bool:
 
 
 def youtube_publish_complete(project: Project) -> bool:
+    """Titel + Beschreibung reichen; Quiz bleibt manuell auf Final Output."""
     document = load_youtube_metadata(project)
     if document is None:
         return False
     if not (document.title or "").strip():
         return False
-    if not (
+    return bool(
         (document.description or "").strip()
         or (document.description_body or "").strip()
-    ):
-        return False
-    return bool(list(document.quizzes or []))
+    )
 
 
 def _music_targets_complete(project: Project) -> bool:
@@ -1351,25 +1352,37 @@ def _run_timing(
             raise EnhancedAutoRunError(f"Intro Python Timing fehlgeschlagen: {exc}") from exc
 
     timed = 0
-    total = len(names)
-    for index, name in enumerate(names, start=1):
-        checkpoint("timing")
+    if names:
+        total = len(names)
+        workers = min(max(1, ENHANCED_CHAPTER_TIMING_MAX_WORKERS), total)
+
+        def _timing_progress(folder_name: str, index: int, total_chapters: int) -> None:
+            checkpoint("timing")
+            emit(
+                "timing",
+                f"Python Timing {index}/{total_chapters}: {folder_name} (parallel, max. {workers})",
+                item_label=folder_name,
+                item_index=index,
+                item_total=total_chapters,
+            )
+
         emit(
             "timing",
-            f"Python Timing {index}/{total}: {name}",
-            item_label=name,
-            item_index=index,
+            f"Python Timing parallel ({total} Kapitel, max. {workers})…",
             item_total=total,
         )
         try:
-            resolve_chapter_timeline(project, name)
-            timed += 1
+            timed_results = resolve_all_chapter_timelines(
+                project,
+                chapter_names=names,
+                progress_callback=_timing_progress,
+                max_workers=workers,
+            )
+            timed = len(timed_results)
         except ChapterCutError as exc:
             raise EnhancedAutoRunError(str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
-            raise EnhancedAutoRunError(
-                f"Python Timing für {name} fehlgeschlagen: {exc}"
-            ) from exc
+            raise EnhancedAutoRunError(f"Python Timing fehlgeschlagen: {exc}") from exc
 
     leftover = list_chapters_needing_python_timing(project)
     if leftover:
@@ -1492,7 +1505,7 @@ def _run_youtube(
         finish("youtube", skipped=True)
         return
 
-    emit("youtube", "YouTube Publish (Metadaten + Quiz)…")
+    emit("youtube", "YouTube Publish (Metadaten)…")
     resolved = load_resolved_timeline_for_auto_run(project)
     if resolved is None:
         raise EnhancedAutoRunError(
@@ -1513,10 +1526,8 @@ def _run_youtube(
             or (existing.description_body or "").strip()
         )
     )
-    need_quiz = not (existing is not None and list(existing.quizzes or []))
     if not skip_done:
         need_meta = True
-        need_quiz = True
 
     if need_meta:
         emit("youtube", "YouTube-Metadaten…", item_label="Metadaten")
@@ -1531,20 +1542,9 @@ def _run_youtube(
                 result.error or "YouTube-Metadaten fehlgeschlagen."
             )
 
-    if need_quiz:
-        emit("youtube", "YouTube-Quiz…", item_label="Quiz")
-        result = generate_youtube_quizzes_from_context(
-            project,
-            context,
-            provider=provider,
-            model=model,
-        )
-        if result.status != STATUS_PASS or result.document is None:
-            raise EnhancedAutoRunError(result.error or "YouTube-Quiz fehlgeschlagen.")
-
     if not youtube_publish_complete(project):
         raise EnhancedAutoRunError(
-            "YouTube Publish unvollständig — Titel, Beschreibung oder Quiz fehlen."
+            "YouTube Publish unvollständig — Titel oder Beschreibung fehlen."
         )
-    emit("youtube", "YouTube Publish fertig (Metadaten + Quiz).")
+    emit("youtube", "YouTube Publish fertig (Metadaten). Quiz bleibt manuell.")
     finish("youtube", skipped=False)

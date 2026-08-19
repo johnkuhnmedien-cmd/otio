@@ -81,6 +81,8 @@ def test_workflow_pages_show_self_updating_job_banners() -> None:
     assert "PAGE_ADOBE_IMPORT," in source
     assert "render_adobe_research_import_page," in source
     assert "show_auto_run_panel=False" in source
+    assert "begin_ui_script_run" in source
+    assert "reconcile_all_jobs()" in source
 
 
 def test_funnel_lite_monitor_does_not_sleep_rerun() -> None:

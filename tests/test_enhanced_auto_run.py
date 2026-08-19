@@ -215,7 +215,7 @@ def _stub_auto_run_tail(
         monkeypatch.setattr(auto_run, "search_supplements_for_gaps", boom)
         monkeypatch.setattr(auto_run, "run_supplement_funnel_for_gaps", boom)
         monkeypatch.setattr(auto_run, "resolve_intro_timeline", boom)
-        monkeypatch.setattr(auto_run, "resolve_chapter_timeline", boom)
+        monkeypatch.setattr(auto_run, "resolve_all_chapter_timelines", boom)
         monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
         monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", lambda _p: [])
         monkeypatch.setattr(
@@ -237,7 +237,6 @@ def _stub_auto_run_tail(
         monkeypatch.setattr(
             auto_run, "generate_youtube_publish_metadata_from_context", boom
         )
-        monkeypatch.setattr(auto_run, "generate_youtube_quizzes_from_context", boom)
         monkeypatch.setattr(auto_run, "load_resolved_timeline_for_auto_run", boom)
         return seen_providers
 
@@ -256,6 +255,25 @@ def _stub_auto_run_tail(
     def fake_chapter_timing(_p, name, **_k):
         _enter(f"timing:{name}")
         timing_done["chapters"].append(name)
+
+    def fake_all_timelines(
+        _p,
+        *,
+        progress_callback=None,
+        chapter_names=None,
+        only_open=False,
+        max_workers=None,
+        **_k,
+    ):
+        selected = list(chapter_names or fake_needing(_p))
+        results = []
+        total = len(selected)
+        for index, name in enumerate(selected, start=1):
+            fake_chapter_timing(_p, name)
+            if progress_callback is not None:
+                progress_callback(name, index, total)
+            results.append((name, MagicMock()))
+        return results
 
     def fake_needing(_p):
         return [name for name in names if name not in timing_done["chapters"]]
@@ -286,16 +304,13 @@ def _stub_auto_run_tail(
 
     def fake_yt_meta(*_a, **_k):
         _enter("youtube")
-        return MagicMock(status="PASS", document=object(), error=None)
-
-    def fake_yt_quiz(*_a, **_k):
         yt_done["v"] = True
         return MagicMock(status="PASS", document=object(), error=None)
 
     monkeypatch.setattr(auto_run, "search_supplements_for_gaps", fake_search)
     monkeypatch.setattr(auto_run, "run_supplement_funnel_for_gaps", fake_funnel)
     monkeypatch.setattr(auto_run, "resolve_intro_timeline", fake_intro_timing)
-    monkeypatch.setattr(auto_run, "resolve_chapter_timeline", fake_chapter_timing)
+    monkeypatch.setattr(auto_run, "resolve_all_chapter_timelines", fake_all_timelines)
     monkeypatch.setattr(
         auto_run, "intro_timing_complete", lambda _p: timing_done["intro"]
     )
@@ -313,9 +328,6 @@ def _stub_auto_run_tail(
     )
     monkeypatch.setattr(
         auto_run, "generate_youtube_publish_metadata_from_context", fake_yt_meta
-    )
-    monkeypatch.setattr(
-        auto_run, "generate_youtube_quizzes_from_context", fake_yt_quiz
     )
     return seen_providers
 
@@ -745,6 +757,63 @@ def test_auto_run_is_strictly_sequential(
     assert confirmed.hook_id == "clean"
 
 
+def test_auto_run_python_timing_runs_chapters_in_parallel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.defaults import ENHANCED_CHAPTER_TIMING_MAX_WORKERS
+    from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+        _run_timing,
+    )
+
+    project = _project(tmp_path)
+    folders = [f"Place {index}" for index in range(5)]
+    current = 0
+    max_seen = 0
+    lock = threading.Lock()
+    finished: list[str] = []
+
+    def fake_resolve(_project, name):
+        nonlocal current, max_seen
+        with lock:
+            current += 1
+            max_seen = max(max_seen, current)
+        time.sleep(0.12)
+        with lock:
+            current -= 1
+            finished.append(name)
+        return MagicMock()
+
+    needing_calls = {"n": 0}
+
+    def fake_needing(_p):
+        needing_calls["n"] += 1
+        if needing_calls["n"] == 1:
+            return list(folders)
+        return []
+
+    monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
+    monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", fake_needing)
+    monkeypatch.setattr(
+        auto_run, "list_chapters_ready_for_python_timing", lambda _p: list(folders)
+    )
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.resolve_chapter_timeline",
+        fake_resolve,
+    )
+
+    _run_timing(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        checkpoint=lambda _step: None,
+        finish=lambda *_a, **_k: None,
+    )
+    assert set(finished) == set(folders)
+    assert max_seen > 1
+    assert max_seen <= ENHANCED_CHAPTER_TIMING_MAX_WORKERS
+    assert max_seen <= len(folders)
+
+
 def test_auto_run_revises_existing_scripts_before_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -942,6 +1011,82 @@ def test_auto_run_stop_after_helpers() -> None:
     assert auto_run.auto_run_steps_through("youtube")[-1] == "youtube"
 
 
+def test_youtube_publish_complete_without_quiz(tmp_path: Path) -> None:
+    from otio_app.services.youtube_publish_models import YouTubeMetadataDocument
+    from otio_app.services.youtube_publish_service import save_youtube_metadata
+
+    project = _project(tmp_path)
+    save_youtube_metadata(
+        project,
+        YouTubeMetadataDocument(
+            project_id=project.id,
+            title="Titel ohne Quiz",
+            description="Beschreibung reicht für den Auto-Lauf.",
+            quizzes=[],
+        ),
+    )
+    assert auto_run.youtube_publish_complete(project) is True
+
+
+def test_auto_run_youtube_does_not_generate_quiz(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from otio_app.services.youtube_publish_models import YouTubeMetadataDocument
+    from otio_app.services.youtube_publish_service import save_youtube_metadata
+    from otio_app.services import youtube_publish_service as yt_service
+
+    project = _project(tmp_path)
+    calls: list[str] = []
+
+    def fake_meta(*_args, **_kwargs):
+        calls.append("meta")
+        document = YouTubeMetadataDocument(
+            project_id=project.id,
+            title="Auto-Titel",
+            description="Auto-Beschreibung",
+            quizzes=[],
+        )
+        save_youtube_metadata(project, document)
+        return MagicMock(status=STATUS_PASS, document=document, error=None)
+
+    def fake_quiz(*_args, **_kwargs):
+        calls.append("quiz")
+        raise AssertionError("Quiz-Generierung darf im Auto-Lauf nicht laufen")
+
+    monkeypatch.setattr(auto_run, "load_resolved_timeline_for_auto_run", lambda _p: MagicMock())
+    monkeypatch.setattr(
+        auto_run,
+        "build_youtube_publish_context_from_resolved",
+        lambda *_a, **_k: MagicMock(chapters=["c1"]),
+    )
+    monkeypatch.setattr(
+        auto_run, "generate_youtube_publish_metadata_from_context", fake_meta
+    )
+    monkeypatch.setattr(yt_service, "generate_youtube_quizzes_from_context", fake_quiz)
+    monkeypatch.setattr(
+        auto_run, "generate_youtube_quizzes_from_context", fake_quiz, raising=False
+    )
+
+    emitted: list[str] = []
+
+    def emit(step_id: str, message: str, **_kwargs) -> None:
+        emitted.append(message)
+
+    auto_run._run_youtube(
+        project,
+        skip_done=True,
+        emit=emit,
+        provider="anthropic",
+        model="claude",
+        finish=lambda *_a, **_k: None,
+    )
+    assert calls == ["meta"]
+    assert auto_run.youtube_publish_complete(project) is True
+    assert any("Quiz bleibt manuell" in line for line in emitted)
+    service_source = Path(auto_run.__file__).read_text(encoding="utf-8")
+    assert "generate_youtube_quizzes_from_context" not in service_source
+
+
 def test_auto_run_status_overview_covers_every_step(tmp_path: Path) -> None:
     project = _project(tmp_path)
     rows = auto_run.list_auto_run_step_statuses(project)
@@ -1125,12 +1270,19 @@ def test_auto_run_ui_exports_page_and_banner() -> None:
     assert 'key_scope="auto_page"' in source
     assert 'key_scope="auto_panel"' in source
     assert "_render_running_auto_run_status" in source
+    assert 'key_scope == "auto_page"' in source
     assert "_render_auto_run_status_overview" in source
     assert "Statusübersicht" in source
     assert "YouTube Publish" in source
     assert "bis Funnel" in source
     assert "bis YouTube" in source
     assert "Auto-Lauf fehlgeschlagen —" in source
+    assert "Quiz bleibt manuell" in source
+    assert "Metadaten + Quiz" not in source
+    assert "any_job_running(project.id, reconcile=False)" in source
+    routing = Path("otio_app/ui/routing.py").read_text(encoding="utf-8")
+    assert "begin_ui_script_run" in routing
+    assert "reconcile_all_jobs()" in routing
 
 
 def test_auto_run_progress_fraction_includes_chapter_item() -> None:

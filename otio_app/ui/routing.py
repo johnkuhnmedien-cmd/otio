@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 import streamlit as st
 
-from otio_app.services.job_registry import reconcile_all_jobs
+from otio_app.services.job_registry import begin_ui_script_run, reconcile_all_jobs
 from otio_app.build_info import expected_feature_markers, format_build_label
 from otio_app.models import ProjectMode
 from otio_app.project_repository import get_project_by_id
@@ -84,6 +84,7 @@ def _wrap_page(
                 clear_page_widget_state(PAGE_MAPPING)
             st.session_state[_CURRENT_PAGE_KEY] = page_id
 
+        begin_ui_script_run()
         reconcile_all_jobs()
         record_script_run(page_id)
         project_id = st.session_state.get(ACTIVE_PROJECT_KEY)

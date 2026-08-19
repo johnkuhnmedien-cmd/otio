@@ -32,8 +32,29 @@ class JobActivity:
     thread_alive: bool | None
 
 
+_RECONCILE_FLAG = "_otio_jobs_reconciled_this_run"
+
+
+def begin_ui_script_run() -> None:
+    """Pro Streamlit-Rerun einmal Job-Reconcile erlauben (Tabwechsel)."""
+    try:
+        import streamlit as st
+
+        st.session_state.pop(_RECONCILE_FLAG, None)
+    except Exception:  # noqa: BLE001 — Tests / CLI ohne Streamlit-Session
+        pass
+
+
 def reconcile_all_jobs() -> None:
     """Markiert hängende Jobs als beendet, wenn der Thread nicht mehr läuft."""
+    try:
+        import streamlit as st
+
+        if st.session_state.get(_RECONCILE_FLAG):
+            return
+        st.session_state[_RECONCILE_FLAG] = True
+    except Exception:  # noqa: BLE001 — Tests / CLI ohne Streamlit-Session
+        pass
     clean_manager = get_clean_media_job_manager()
     for project in list_projects():
         clean_manager.reconcile_stuck_job(project.id)
@@ -45,8 +66,9 @@ def reconcile_all_jobs() -> None:
         get_language_auto_run_queue_manager().reconcile_stuck_job(project.id)
 
 
-def any_job_running(project_id: str | None = None) -> bool:
-    reconcile_all_jobs()
+def any_job_running(project_id: str | None = None, *, reconcile: bool = True) -> bool:
+    if reconcile:
+        reconcile_all_jobs()
     managers = (
         get_clean_media_job_manager(),
         get_voice_analysis_job_manager(),
