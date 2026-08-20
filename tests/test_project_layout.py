@@ -50,6 +50,10 @@ from otio_app.project_layout import (
 def test_language_folder_name() -> None:
     assert language_folder_name("de") == "DE"
     assert language_folder_name("en") == "EN"
+    assert language_folder_name("ja") == "JP"
+    assert language_folder_name("JP") == "JP"
+    assert language_folder_name("ko") == "KR"
+    assert language_folder_name("kr") == "KR"
 
 
 def test_get_voice_over_dir(temp_project_layout: dict[str, Path]) -> None:

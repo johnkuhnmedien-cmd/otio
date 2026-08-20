@@ -25,7 +25,7 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
     MapPlanItem,
 )
 
-_LABEL_LANGS = ("EN", "DE", "FR", "IT", "ES", "PT")
+_LABEL_LANGS = ("EN", "DE", "FR", "IT", "ES", "PT", "JP", "KR")
 
 
 class _Country(NamedTuple):
@@ -401,6 +401,46 @@ _COUNTRIES: dict[str, _Country] = {
     ),
 }
 
+# CJK-Namen separat, damit ASCII-Alias-Index nicht durch leere NFKD-Keys kippt.
+_EAST_ASIAN_LABELS: dict[str, dict[str, str]] = {
+    "albania": {"JP": "アルバニア", "KR": "알바니아"},
+    "austria": {"JP": "オーストリア", "KR": "오스트리아"},
+    "belgium": {"JP": "ベルギー", "KR": "벨기에"},
+    "bulgaria": {"JP": "ブルガリア", "KR": "불가리아"},
+    "croatia": {"JP": "クロアチア", "KR": "크로아티아"},
+    "cyprus": {"JP": "キプロス", "KR": "키프로스"},
+    "czechia": {"JP": "チェコ", "KR": "체코"},
+    "denmark": {"JP": "デンマーク", "KR": "덴마크"},
+    "egypt": {"JP": "エジプト", "KR": "이집트"},
+    "finland": {"JP": "フィンランド", "KR": "핀란드"},
+    "france": {"JP": "フランス", "KR": "프랑스"},
+    "germany": {"JP": "ドイツ", "KR": "독일"},
+    "greece": {"JP": "ギリシャ", "KR": "그리스"},
+    "hungary": {"JP": "ハンガリー", "KR": "헝가리"},
+    "iceland": {"JP": "アイスランド", "KR": "아이슬란드"},
+    "ireland": {"JP": "アイルランド", "KR": "아일랜드"},
+    "italy": {"JP": "イタリア", "KR": "이탈리아"},
+    "malta": {"JP": "マルタ", "KR": "몰타"},
+    "montenegro": {"JP": "モンテネグロ", "KR": "몬테네그로"},
+    "morocco": {"JP": "モロッコ", "KR": "모로코"},
+    "netherlands": {"JP": "オランダ", "KR": "네덜란드"},
+    "norway": {"JP": "ノルウェー", "KR": "노르웨이"},
+    "poland": {"JP": "ポーランド", "KR": "폴란드"},
+    "portugal": {"JP": "ポルトガル", "KR": "포르투갈"},
+    "romania": {"JP": "ルーマニア", "KR": "루마니아"},
+    "slovenia": {"JP": "スロベニア", "KR": "슬로베니아"},
+    "spain": {"JP": "スペイン", "KR": "스페인"},
+    "sweden": {"JP": "スウェーデン", "KR": "스웨덴"},
+    "switzerland": {"JP": "スイス", "KR": "스위스"},
+    "turkey": {"JP": "トルコ", "KR": "터키"},
+    "united kingdom": {"JP": "イギリス", "KR": "영국"},
+    "united states": {"JP": "アメリカ", "KR": "미국"},
+}
+
+for _canonical, _extra in _EAST_ASIAN_LABELS.items():
+    _country = _COUNTRIES[_canonical]
+    _COUNTRIES[_canonical] = _country._replace(labels={**_country.labels, **_extra})
+
 
 def _norm_country_key(value: str) -> str:
     stripped = unicodedata.normalize("NFKD", str(value or ""))
@@ -411,11 +451,10 @@ def _norm_country_key(value: str) -> str:
 def _build_alias_index() -> dict[str, str]:
     index: dict[str, str] = {}
     for canonical, meta in _COUNTRIES.items():
-        index[_norm_country_key(canonical)] = canonical
-        for label in meta.labels.values():
-            index[_norm_country_key(label)] = canonical
-        for alias in meta.aliases:
-            index[_norm_country_key(alias)] = canonical
+        for raw in (canonical, *meta.labels.values(), *meta.aliases):
+            normalized = _norm_country_key(raw)
+            if normalized:
+                index[normalized] = canonical
     return index
 
 

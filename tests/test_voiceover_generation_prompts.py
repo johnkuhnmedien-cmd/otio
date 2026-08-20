@@ -1259,6 +1259,11 @@ def test_native_speaker_block_in_folder_voiceover_and_dramaturgy() -> None:
     block = native_speaker_language_block("EN")
     assert "Target language code: EN" in block
     assert "English" in block
+    jp = native_speaker_language_block("JP")
+    assert "Target language code: JP" in jp
+    assert "Japanese" in jp
+    kr = native_speaker_language_block("KR")
+    assert "Korean" in kr
     assert "NATIVE SPEAKER" in block
     assert "CONTENT SOURCE ONLY" in block
     assert "NEVER copy" in block
