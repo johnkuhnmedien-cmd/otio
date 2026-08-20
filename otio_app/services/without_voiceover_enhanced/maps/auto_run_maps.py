@@ -36,7 +36,7 @@ from otio_app.services.without_voiceover_enhanced.maps.render_service import (
 )
 from otio_app.services.without_voiceover_enhanced.paths import map_output_dir
 
-ProgressFn = Callable[[str], None]
+ProgressFn = Callable[..., None]
 CancelFn = Callable[[], bool]
 
 
@@ -44,6 +44,68 @@ def _item_output_path(project: Project, item) -> str:
     if item.output_path:
         return item.output_path
     return str(map_output_dir(project) / item.output_filename)
+
+
+def maps_render_queue(plan) -> tuple[list, list, list]:
+    """Offene Renderziele, bereits fertige Karten, blockierte (ohne Koordinaten)."""
+    blocked = [item for item in plan.maps if item.render_status == RENDER_STATUS_BLOCKED]
+    blocked_ids = {item.chapter_id for item in blocked}
+    targets = selectable_maps(plan.maps, mode="missing")
+    target_ids = {item.chapter_id for item in targets}
+    already_done = [
+        item
+        for item in plan.maps
+        if item.chapter_id not in target_ids and item.chapter_id not in blocked_ids
+    ]
+    return targets, already_done, blocked
+
+
+def format_maps_auto_run_status(
+    *,
+    plan_count: int,
+    render_count: int,
+    done_count: int,
+    blocked_count: int,
+) -> str:
+    """Eine Zeile: 16 zu rendern von 27, nicht „nur 16 Kapitel“."""
+    if render_count <= 0:
+        if done_count and blocked_count:
+            return (
+                f"Keine Karten zu rendern — {done_count} schon da, "
+                f"{blocked_count} ohne Koordinaten."
+            )
+        if blocked_count:
+            return f"Keine Karten zu rendern — {blocked_count} ohne Koordinaten."
+        if done_count:
+            return f"Keine Karten zu rendern — {done_count} von {plan_count} schon da."
+        return "Keine Karten zu rendern."
+    parts = [f"{render_count} zu rendern von {plan_count}"]
+    if done_count:
+        parts.append(f"{done_count} schon da")
+    if blocked_count:
+        parts.append(f"{blocked_count} ohne Koordinaten")
+    return "Karten: " + " · ".join(parts)
+
+
+def _notify_maps_progress(
+    on_message: ProgressFn | None,
+    message: str,
+    *,
+    item_label: str = "",
+    item_index: int = 0,
+    item_total: int = 0,
+) -> None:
+    if on_message is None:
+        return
+    try:
+        on_message(
+            message,
+            item_label=item_label,
+            item_index=item_index,
+            item_total=item_total,
+        )
+    except TypeError:
+        on_message(message)
 
 
 def maps_complete(project: Project) -> bool:
@@ -80,9 +142,20 @@ def run_maps_for_auto_run(
 ) -> dict[str, Any]:
     """Kartenplan erzeugen, Koordinaten prüfen/bestätigen, alle Karten rendern."""
 
-    def emit(message: str) -> None:
-        if on_message is not None:
-            on_message(message)
+    def emit(
+        message: str,
+        *,
+        item_label: str = "",
+        item_index: int = 0,
+        item_total: int = 0,
+    ) -> None:
+        _notify_maps_progress(
+            on_message,
+            message,
+            item_label=item_label,
+            item_index=item_index,
+            item_total=item_total,
+        )
 
     def cancelled() -> bool:
         return bool(should_cancel and should_cancel())
@@ -100,11 +173,21 @@ def run_maps_for_auto_run(
         raise MapRenderCancelled("Auto-Lauf gestoppt.")
 
     emit("Koordinaten prüfen…")
+
+    def on_geocode(event) -> None:
+        emit(
+            f"Koordinaten: {event.message}",
+            item_label=event.place,
+            item_index=event.index,
+            item_total=event.total,
+        )
+
     _coords, plan, geocode_errors = lookup_missing_coordinates(
         project,
         settings=settings,
         plan=plan,
         geocode_fn=geocode_fn,
+        on_progress=on_geocode,
     )
     save_map_plan(project, plan)
 
@@ -115,21 +198,26 @@ def run_maps_for_auto_run(
         previous=plan,
     )
 
-    blocked = [item for item in plan.maps if item.render_status == RENDER_STATUS_BLOCKED]
-    targets = selectable_maps(plan.maps, mode="missing")
+    targets, already_done, blocked = maps_render_queue(plan)
     rendered: list[str] = []
     failed: list[tuple[str, str]] = []
     reused = 0
+    plan_count = len(plan.maps)
+    emit(
+        format_maps_auto_run_status(
+            plan_count=plan_count,
+            render_count=len(targets),
+            done_count=len(already_done),
+            blocked_count=len(blocked),
+        )
+    )
 
     if not targets:
-        emit(
-            "Keine Karten zu rendern"
-            + (f" — {len(blocked)} ohne Koordinaten." if blocked else ".")
-        )
         return {
             "plan": plan,
             "rendered": rendered,
             "reused": reused,
+            "already_done": [item.chapter_id for item in already_done],
             "blocked": [item.chapter_id for item in blocked],
             "failed": failed,
             "geocode_errors": list(geocode_errors),
@@ -151,7 +239,13 @@ def run_maps_for_auto_run(
     for index, item in enumerate(targets, start=1):
         if cancelled():
             raise MapRenderCancelled("Auto-Lauf gestoppt.")
-        emit(f"Karte {index}/{total}: {item.original_chapter_label}")
+        label = item.original_chapter_label or item.chapter_id
+        emit(
+            f"Karte {index}/{total} von {plan_count}: {label}",
+            item_label=label,
+            item_index=index,
+            item_total=total,
+        )
         try:
             result = active.render_item(
                 project,
@@ -188,6 +282,7 @@ def run_maps_for_auto_run(
         "plan": plan,
         "rendered": rendered,
         "reused": reused,
+        "already_done": [item.chapter_id for item in already_done],
         "blocked": [item.chapter_id for item in blocked],
         "failed": failed,
         "geocode_errors": list(geocode_errors),

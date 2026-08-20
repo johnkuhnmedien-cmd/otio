@@ -39,6 +39,21 @@ def auto_run_progress_fraction(state: EnhancedAutoRunJobState) -> float:
     return min(1.0, max(0.0, fraction))
 
 
+def running_auto_run_detail(state: EnhancedAutoRunJobState) -> str:
+    """Statuszeile: vorhandene Zählung in der Message behalten (z. B. 1/16 von 27)."""
+    message = (state.message or "").strip()
+    if message:
+        return message
+    label = (state.item_label or "").strip()
+    if state.item_total > 0 and label:
+        step = (state.step_label or "").strip()
+        counts = f"{state.item_index}/{state.item_total}"
+        if step:
+            return f"{step}: {label} ({counts})"
+        return f"{label} ({counts})"
+    return (state.step_label or "").strip() or "läuft"
+
+
 def render_enhanced_auto_run_sidebar() -> None:
     """Start/Stop in der Sidebar — nur Enhanced-Projekte."""
     project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
@@ -104,12 +119,7 @@ def _render_running_auto_run_status(project_id: str, key_scope: str) -> None:
             if state.cancel_requested
             else ""
         )
-        detail = state.message or state.step_label or "läuft"
-        if state.item_total > 0 and state.item_label:
-            detail = (
-                f"{state.step_label}: {state.item_label} "
-                f"({state.item_index}/{state.item_total})"
-            )
+        detail = running_auto_run_detail(state)
         col_info, col_stop = st.columns([5, 1])
         with col_info:
             st.info(

@@ -60,6 +60,7 @@ from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service impo
     EnhancedAutoRunCancelled,
     EnhancedAutoRunError,
     format_auto_run_failure_message,
+    item_counts_from_gap_message,
     pick_auto_intro_candidate,
     run_enhanced_auto_pipeline,
 )
@@ -1444,6 +1445,7 @@ def test_auto_run_ui_exports_page_and_banner() -> None:
     assert callable(module.render_enhanced_auto_run_page_panel)
     assert callable(module.render_enhanced_auto_run_embedded)
     assert callable(module.auto_run_progress_fraction)
+    assert callable(module.running_auto_run_detail)
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert 'key_scope="auto_page"' in source
     assert 'key_scope="auto_panel"' in source
@@ -1486,6 +1488,115 @@ def test_auto_run_progress_fraction_includes_chapter_item() -> None:
     value = auto_run_progress_fraction(state)
     assert value == pytest.approx((3 + 1 / 18) / 10)
     assert value < 0.4
+
+
+def test_item_counts_from_gap_message() -> None:
+    assert item_counts_from_gap_message(
+        "Gap 3/27 · Thumbnail-Ranking"
+    ) == (3, 27)
+    assert item_counts_from_gap_message(
+        "Gap 2/27 · Query 3/10: gap-a · „cave“"
+    ) == (2, 27)
+    assert item_counts_from_gap_message("Stocksuche startet") == (0, 0)
+
+
+def test_running_auto_run_detail_keeps_message_with_plan_total() -> None:
+    from otio_app.ui.without_voiceover_enhanced.auto_run_ui import (
+        running_auto_run_detail,
+    )
+    from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job import (
+        EnhancedAutoRunJobState,
+        JobStatus,
+    )
+
+    state = EnhancedAutoRunJobState(
+        project_id="p",
+        status=JobStatus.RUNNING,
+        step_label="Karten",
+        message="Karte 1/16 von 27: Baradla Cave",
+        item_label="Baradla Cave",
+        item_index=1,
+        item_total=16,
+    )
+    assert running_auto_run_detail(state) == "Karte 1/16 von 27: Baradla Cave"
+    fallback = EnhancedAutoRunJobState(
+        project_id="p",
+        status=JobStatus.RUNNING,
+        step_label="Karten",
+        message="",
+        item_label="Baradla Cave",
+        item_index=1,
+        item_total=16,
+    )
+    assert running_auto_run_detail(fallback) == "Karten: Baradla Cave (1/16)"
+
+
+def test_stock_and_funnel_forward_intra_gap_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
+        FunnelProgressEvent,
+    )
+
+    project = _project(tmp_path)
+    events: list[dict] = []
+    open_ids = {"v": ["gap-a"]}
+
+    def emit(step_id: str, message: str, **kwargs) -> None:
+        events.append({"step_id": step_id, "message": message, **kwargs})
+
+    def fake_open(_project) -> list[str]:
+        return list(open_ids["v"])
+
+    def fake_search(_project, progress_callback=None, **_kwargs):
+        assert progress_callback is not None
+        progress_callback(0.4, "Gap 2/27 · Query 3/10: gap-a · „cave“")
+        return MagicMock(candidates=["c1"])
+
+    def fake_funnel(_project, progress_callback=None, **_kwargs):
+        assert progress_callback is not None
+        progress_callback(
+            FunnelProgressEvent(
+                phase="thumbnails",
+                gap_id="gap-a",
+                gap_index=3,
+                gap_total=27,
+                message="Gap 3/27 · Thumbnail-Ranking",
+            )
+        )
+        open_ids["v"] = []
+        return MagicMock(stopped=False)
+
+    monkeypatch.setattr(auto_run, "list_open_funnel_gap_ids", fake_open)
+    monkeypatch.setattr(auto_run, "save_stock_providers_config", lambda *_a, **_k: None)
+    monkeypatch.setattr(auto_run, "search_supplements_for_gaps", fake_search)
+    monkeypatch.setattr(auto_run, "run_supplement_funnel_for_gaps", fake_funnel)
+
+    auto_run._run_stock_and_funnel(
+        project,
+        skip_done=True,
+        emit=emit,
+        checkpoint=lambda _sid: None,
+        cancelled=lambda: False,
+        funnel_model="",
+        finish=lambda _sid, *, skipped: None,
+    )
+
+    stock = next(
+        event
+        for event in events
+        if event["step_id"] == "stock" and event.get("item_total") == 27
+    )
+    funnel = next(
+        event
+        for event in events
+        if event["step_id"] == "funnel" and event.get("item_total") == 27
+    )
+    assert stock["item_index"] == 2
+    assert "Query 3/10" in stock["message"]
+    assert funnel["item_index"] == 3
+    assert funnel["item_label"] == "gap-a"
+    assert "Thumbnail-Ranking" in funnel["message"]
 
 
 def test_enhanced_navigation_includes_auto_run_page() -> None:

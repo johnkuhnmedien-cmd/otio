@@ -15,6 +15,7 @@ Python Timing, damit der Cut die MP4s findet.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -301,6 +302,15 @@ class EnhancedAutoRunCancelled(RuntimeError):
 
 
 _AUTO_RUN_FAILURE_PREFIX = "Schritt "
+_GAP_PROGRESS_RE = re.compile(r"Gap\s+(\d+)/(\d+)")
+
+
+def item_counts_from_gap_message(message: str) -> tuple[int, int]:
+    """Liest „Gap 3/27“ aus Stock-/Funnel-Statuszeilen."""
+    match = _GAP_PROGRESS_RE.search(message or "")
+    if not match:
+        return 0, 0
+    return int(match.group(1)), int(match.group(2))
 
 
 def format_auto_run_failure_message(
@@ -1416,8 +1426,21 @@ def _run_stock_and_funnel(
         return
 
     emit("stock", f"Stocksuche für {len(open_ids)} offene Gap(s)…")
+
+    def _stock_progress(fraction: float, message: str) -> None:
+        item_index, item_total = item_counts_from_gap_message(message)
+        emit(
+            "stock",
+            message,
+            item_index=item_index,
+            item_total=item_total,
+        )
+
     try:
-        results = search_supplements_for_gaps(project)
+        results = search_supplements_for_gaps(
+            project,
+            progress_callback=_stock_progress,
+        )
     except CutPlanError as exc:
         text = str(exc)
         if "bereits erfüllt" in text:
@@ -1436,6 +1459,16 @@ def _run_stock_and_funnel(
 
     checkpoint("funnel")
     emit("funnel", f"Alle offenen Gaps auflösen ({len(open_ids)})…")
+
+    def _funnel_progress(event) -> None:
+        emit(
+            "funnel",
+            event.message,
+            item_label=event.gap_id,
+            item_index=int(event.gap_index or 0),
+            item_total=int(event.gap_total or 0),
+        )
+
     try:
         funnel_report = run_supplement_funnel_for_gaps(
             project,
@@ -1443,6 +1476,7 @@ def _run_stock_and_funnel(
             skip_filled=True,
             should_stop=cancelled,
             model=(funnel_model or "").strip() or None,
+            progress_callback=_funnel_progress,
         )
     except EnhancedAutoRunCancelled:
         raise
@@ -1483,8 +1517,8 @@ def _run_maps(
         finish("maps", skipped=True)
         return
 
-    def on_message(message: str) -> None:
-        emit("maps", message)
+    def on_message(message: str, **kwargs) -> None:
+        emit("maps", message, **kwargs)
 
     emit("maps", "Karten: Plan, Koordinaten, Rendern…")
     try:
@@ -1513,8 +1547,11 @@ def _run_maps(
         )
     rendered = list(result.get("rendered") or [])
     blocked = list(result.get("blocked") or [])
+    already_done = list(result.get("already_done") or [])
     errors = list(result.get("geocode_errors") or [])
     parts = [f"{len(rendered)} gerendert"]
+    if already_done:
+        parts.append(f"{len(already_done)} schon da")
     if blocked:
         parts.append(f"{len(blocked)} ohne Koordinaten")
     if errors:
