@@ -98,10 +98,16 @@ def test_any_job_running_can_skip_reconcile(monkeypatch) -> None:
 
 def test_reconcile_all_jobs_skips_maps_for_classic_projects(monkeypatch) -> None:
     classic = MagicMock(id="classic", is_without_voiceover_enhanced=False)
-    monkeypatch.setattr(job_registry, "list_projects", lambda: [classic])
+    monkeypatch.setattr(job_registry, "list_projects", lambda: [classic], raising=False)
     idle = MagicMock()
     idle.reconcile_stuck_job = MagicMock()
+    idle._jobs = {}
+    idle._states = {}
+    idle._lock = None
     map_manager = MagicMock()
+    map_manager._jobs = {}
+    map_manager._states = {}
+    map_manager._lock = None
     monkeypatch.setattr(job_registry, "get_clean_media_job_manager", lambda: idle)
     monkeypatch.setattr(job_registry, "get_voice_analysis_job_manager", lambda: idle)
     monkeypatch.setattr(job_registry, "get_asset_analysis_job_manager", lambda: idle)
@@ -115,5 +121,44 @@ def test_reconcile_all_jobs_skips_maps_for_classic_projects(monkeypatch) -> None
     job_registry.begin_ui_script_run()
     job_registry.reconcile_all_jobs()
     map_manager.reconcile_stuck_job.assert_not_called()
-    assert idle.reconcile_stuck_job.called
+
+
+def test_reconcile_all_jobs_does_not_list_projects(monkeypatch) -> None:
+    monkeypatch.setattr(
+        job_registry,
+        "list_projects",
+        lambda: (_ for _ in ()).throw(AssertionError("list_projects")),
+        raising=False,
+    )
+    fake_st = MagicMock()
+    fake_st.session_state = {}
+    monkeypatch.setitem(__import__("sys").modules, "streamlit", fake_st)
+    job_registry.begin_ui_script_run()
+    job_registry.reconcile_all_jobs()
+
+
+def test_collect_job_activity_skips_map_state_without_in_memory_job(
+    monkeypatch,
+) -> None:
+    map_manager = MagicMock()
+    map_manager._jobs = {}
+    map_manager._states = {}
+    map_manager._lock = None
+    idle = MagicMock()
+    idle._jobs = {}
+    idle._states = {}
+    idle._lock = None
+    monkeypatch.setattr(job_registry, "get_clean_media_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_voice_analysis_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_asset_analysis_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_otio_export_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_supplement_funnel_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_enhanced_auto_run_job_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_language_auto_run_queue_manager", lambda: idle)
+    monkeypatch.setattr(job_registry, "get_map_render_job_manager", lambda: map_manager)
+    monkeypatch.setitem(__import__("sys").modules, "streamlit", MagicMock(session_state={}))
+    job_registry.begin_ui_script_run()
+    activities = job_registry.collect_job_activity()
+    map_manager.get_state.assert_not_called()
+    assert activities == []
 

@@ -121,16 +121,6 @@ def render_activity_panel(
             for line in list(log)[:8]:
                 st.caption(line)
 
-        log_paths = [
-            project.work_dir_path / _LOG_FILE_NAME for project in list_projects()
-        ]
-        existing_logs = [path for path in log_paths if path.is_file()]
-        if existing_logs:
-            st.caption(
-                "Logdatei: "
-                + ", ".join(f"`{path}`" for path in existing_logs[:2])
-            )
-
         if st.button(
             "Alle Hintergrund-Jobs zurücksetzen",
             key=f"force_reset_all_jobs_{scope}",

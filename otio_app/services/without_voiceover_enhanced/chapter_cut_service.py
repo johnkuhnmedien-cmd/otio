@@ -390,12 +390,61 @@ def list_chapter_cut_statuses(project: Project) -> list[ChapterCutStatus]:
     ]
 
 
+def _chapter_unified_plan_is_current(
+    project: Project,
+    folder_name: str,
+    *,
+    locked_script_version: str,
+    check_unsupported_pauses: bool,
+) -> bool:
+    """True wenn der Kapitel-Plan existiert, zur Skriptversion passt und nutzbar ist."""
+    plan = load_chapter_unified_plan(project, folder_name)
+    if plan is None or not plan.slots:
+        return False
+    if locked_script_version:
+        plan_version = str(getattr(plan, "script_version", "") or "").strip()
+        if plan_version != locked_script_version:
+            return False
+    if check_unsupported_pauses:
+        from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+            plan_has_unsupported_keyword_flow_pause_directives,
+        )
+
+        if plan_has_unsupported_keyword_flow_pause_directives(plan):
+            return False
+    return True
+
+
 def list_chapters_needing_unified_cut(project: Project) -> list[str]:
-    """Körper-Kapitel ohne Unified-Plan (offene LLM Cuts)."""
+    """Körper-Kapitel ohne gültigen Unified-Plan (offene LLM Cuts).
+
+    Liest nur die Kapitelpläne — kein Gap-Status, keine Resolved-Timelines.
+    """
+    names = list_body_chapter_names(project)
+    if not names:
+        return []
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        load_cut_plan_options,
+        uses_keyword_onset_timing_rules,
+    )
+    from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+        load_locked_script,
+    )
+
+    locked = load_locked_script(project)
+    locked_version = ""
+    if locked is not None:
+        locked_version = str(locked.script_version or "").strip()
+    check_pauses = uses_keyword_onset_timing_rules(load_cut_plan_options(project))
     return [
-        status.folder_name
-        for status in list_chapter_cut_statuses(project)
-        if not status.has_plan
+        name
+        for name in names
+        if not _chapter_unified_plan_is_current(
+            project,
+            name,
+            locked_script_version=locked_version,
+            check_unsupported_pauses=check_pauses,
+        )
     ]
 
 
