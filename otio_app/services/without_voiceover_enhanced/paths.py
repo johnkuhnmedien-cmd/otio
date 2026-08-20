@@ -15,6 +15,7 @@ COVERAGE_SUBDIR = "coverage"
 STOCK_SUBDIR = "stock"
 CONFIG_SUBDIR = "config"
 EXPORTS_SUBDIR = "exports"
+HOLD_CACHE_SUBDIR = "hold_cache"
 PLACEHOLDERS_SUBDIR = "placeholders"
 STOCK_PROVIDERS_CONFIG_FILENAME = "stock_providers.json"
 CUT_PLAN_OPTIONS_FILENAME = "cut_plan_options.json"
@@ -205,11 +206,28 @@ def exports_dir(project: Project) -> Path:
     return project.language_work_dir_path / EXPORTS_SUBDIR
 
 
-def placeholders_dir(project: Project) -> Path:
-    """``_otio_enhanced/placeholders`` — Gap-/Bridge-Slates für Preview-Export."""
-    path = assert_enhanced_work_root(project) / PLACEHOLDERS_SUBDIR
+def hold_cache_dir(project: Project) -> Path:
+    """``_otio_enhanced/{LANG}/exports/hold_cache`` — Still-/Video-Holds dieser Sprache."""
+    path = exports_dir(project) / HOLD_CACHE_SUBDIR
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def legacy_hold_cache_dir(project: Project) -> Path:
+    """Gemeinsamer ``_otio_enhanced/exports/hold_cache`` (Resolve-Pfade nicht verschieben)."""
+    return assert_enhanced_work_root(project) / EXPORTS_SUBDIR / HOLD_CACHE_SUBDIR
+
+
+def placeholders_dir(project: Project) -> Path:
+    """``_otio_enhanced/{LANG}/placeholders`` — Gap-/Bridge-Slates für Preview-Export."""
+    path = project.language_work_dir_path / PLACEHOLDERS_SUBDIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def legacy_placeholders_dir(project: Project) -> Path:
+    """Gemeinsamer ``_otio_enhanced/placeholders`` vor der Sprachtrennung."""
+    return assert_enhanced_work_root(project) / PLACEHOLDERS_SUBDIR
 
 
 def script_locked_path(project: Project) -> Path:
