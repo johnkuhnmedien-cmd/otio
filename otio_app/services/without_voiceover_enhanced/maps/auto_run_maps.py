@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from typing import Any
 
 from otio_app.models import Project
@@ -21,6 +23,7 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
 from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     MapPlanError,
     build_map_plan,
+    clamp_max_parallel,
     confirm_all_valid_map_coordinates,
     dramaturgy_fingerprint,
     load_map_plan,
@@ -88,6 +91,12 @@ def format_maps_auto_run_status(
     return "Karten: " + " · ".join(parts)
 
 
+def _kill_renderer(renderer) -> None:
+    killer = getattr(renderer, "kill_all", None)
+    if callable(killer):
+        killer()
+
+
 def _notify_maps_progress(
     on_message: ProgressFn | None,
     message: str,
@@ -107,6 +116,149 @@ def _notify_maps_progress(
         )
     except TypeError:
         on_message(message)
+
+
+def _render_auto_run_targets(
+    project: Project,
+    plan,
+    targets,
+    *,
+    renderer,
+    cancelled: CancelFn,
+    emit,
+    plan_count: int,
+) -> tuple[list[str], int, list[tuple[str, str]]]:
+    """Rendert offene Karten parallel — HD max. 4, wie auf der Karten-Seite."""
+    rendered: list[str] = []
+    failed: list[tuple[str, str]] = []
+    reused = 0
+    total = len(targets)
+    cap = clamp_max_parallel(plan.settings.resolution, plan.settings.max_parallel)
+    workers = max(1, min(cap, total))
+    plan_lock = Lock()
+    progress_lock = Lock()
+    done = 0
+    active_labels: dict[str, str] = {}
+    cancel_error: MapRenderCancelled | None = None
+    reset = getattr(renderer, "reset_kill_flag", None)
+    if callable(reset):
+        reset()
+
+    def status_line(label: str = "") -> None:
+        with progress_lock:
+            running = [name for name in active_labels.values() if name]
+            message = (
+                f"Karten parallel (max. {cap}) · {done}/{total} von {plan_count}"
+            )
+            if running:
+                message += ": " + ", ".join(running)
+            elif label:
+                message += f": {label}"
+            emit(
+                message,
+                item_label=(running[0] if running else label),
+                item_index=done,
+                item_total=total,
+            )
+
+    def render_one(item) -> None:
+        nonlocal done, reused, cancel_error
+        label = item.original_chapter_label or item.chapter_id
+        if cancelled() or cancel_error is not None:
+            raise MapRenderCancelled("Auto-Lauf gestoppt.")
+        with progress_lock:
+            active_labels[item.chapter_id] = label
+        try:
+            status_line(label)
+            try:
+                result = renderer.render_item(
+                    project,
+                    item,
+                    overwrite=False,
+                    should_cancel=lambda: cancelled() or cancel_error is not None,
+                )
+            except MapRenderCancelled as exc:
+                cancel_error = exc
+                _kill_renderer(renderer)
+                raise
+            except MapRenderError as exc:
+                with plan_lock:
+                    failed.append((item.chapter_id, str(exc)))
+                    item.render_status = RENDER_STATUS_FAILED
+                    item.error_detail = str(exc)
+                    save_map_plan(project, plan)
+                with progress_lock:
+                    done += 1
+                return
+            except Exception as exc:  # noqa: BLE001
+                reason = str(exc) or type(exc).__name__
+                with plan_lock:
+                    failed.append((item.chapter_id, reason))
+                    item.render_status = RENDER_STATUS_FAILED
+                    item.error_detail = reason
+                    save_map_plan(project, plan)
+                with progress_lock:
+                    done += 1
+                return
+            export_path = str(result.get("export_path") or "")
+            with plan_lock:
+                item.render_status = RENDER_STATUS_DONE
+                item.output_path = export_path
+                item.media_hash = str(result.get("content_hash") or "")
+                item.progress = 1.0
+                item.error_detail = ""
+                item.blocked_reason = ""
+                rendered.append(item.chapter_id)
+                if result.get("reused"):
+                    reused += 1
+                save_map_plan(project, plan)
+            with progress_lock:
+                done += 1
+                finished = done
+            emit(
+                f"Karte {finished}/{total} von {plan_count}: {label}",
+                item_label=label,
+                item_index=finished,
+                item_total=total,
+            )
+            status_line(label)
+        finally:
+            with progress_lock:
+                active_labels.pop(item.chapter_id, None)
+
+    emit(
+        f"Karten parallel (max. {cap}) · 0/{total} von {plan_count}",
+        item_total=total,
+    )
+    if workers == 1 or total == 1:
+        for item in targets:
+            if cancelled():
+                raise MapRenderCancelled("Auto-Lauf gestoppt.")
+            render_one(item)
+    else:
+        try:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(render_one, item) for item in targets]
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except MapRenderCancelled:
+                        _kill_renderer(renderer)
+                        for pending in futures:
+                            pending.cancel()
+                        raise
+                    if cancelled():
+                        _kill_renderer(renderer)
+                        raise MapRenderCancelled("Auto-Lauf gestoppt.")
+        finally:
+            if cancelled() or cancel_error is not None:
+                _kill_renderer(renderer)
+    if cancel_error is not None:
+        raise cancel_error
+    if cancelled():
+        raise MapRenderCancelled("Auto-Lauf gestoppt.")
+    save_map_plan(project, plan)
+    return rendered, reused, failed
 
 
 def maps_complete(project: Project) -> bool:
@@ -241,48 +393,15 @@ def run_maps_for_auto_run(
             + "). Im Ordner des Vendored Remotion-Renderers einmal `npm ci` ausführen."
         )
 
-    total = len(targets)
-    for index, item in enumerate(targets, start=1):
-        if cancelled():
-            raise MapRenderCancelled("Auto-Lauf gestoppt.")
-        label = item.original_chapter_label or item.chapter_id
-        emit(
-            f"Karte {index}/{total} von {plan_count}: {label}",
-            item_label=label,
-            item_index=index,
-            item_total=total,
-        )
-        try:
-            result = active.render_item(
-                project,
-                item,
-                overwrite=False,
-                should_cancel=cancelled,
-            )
-        except MapRenderCancelled:
-            raise
-        except MapRenderError as exc:
-            failed.append((item.chapter_id, str(exc)))
-            item.render_status = RENDER_STATUS_FAILED
-            item.error_detail = str(exc)
-            continue
-        except Exception as exc:  # noqa: BLE001
-            failed.append((item.chapter_id, str(exc) or type(exc).__name__))
-            item.render_status = RENDER_STATUS_FAILED
-            item.error_detail = str(exc) or type(exc).__name__
-            continue
-        export_path = str(result.get("export_path") or "")
-        item.render_status = RENDER_STATUS_DONE
-        item.output_path = export_path
-        item.media_hash = str(result.get("content_hash") or "")
-        item.progress = 1.0
-        item.error_detail = ""
-        item.blocked_reason = ""
-        rendered.append(item.chapter_id)
-        if result.get("reused"):
-            reused += 1
-        save_map_plan(project, plan)
-
+    rendered, reused, failed = _render_auto_run_targets(
+        project,
+        plan,
+        targets,
+        renderer=active,
+        cancelled=cancelled,
+        emit=emit,
+        plan_count=plan_count,
+    )
     save_map_plan(project, plan)
     return {
         "plan": plan,
