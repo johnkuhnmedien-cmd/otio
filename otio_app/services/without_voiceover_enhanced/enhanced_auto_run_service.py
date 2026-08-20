@@ -2,7 +2,10 @@
 
 Pipeline-Schritte laufen nacheinander. Innerhalb eines Schritts bleiben
 LLM-/TTS-Calls strikt einzeln; Python Timing der Körper-Kapitel läuft
-parallel (bis ``ENHANCED_CHAPTER_TIMING_MAX_WORKERS``). OTIO-Export merkt
+parallel (bis ``ENHANCED_CHAPTER_TIMING_MAX_WORKERS``). Scheitert ein
+Körper-Kapitel, folgt ein sequenzieller Nachlauf: neuer LLM-Cut, bei offenen
+Coverage-Gaps Stocksuche + Funnel, dann Python Timing noch einmal. Ein
+zweites Timing-Scheitern stoppt den Auto-Lauf. OTIO-Export merkt
 Intro + alle Kapitel und bereitet Still-Holds/Aspect-Fill parallel vor
 (HD max. 4). Bereits erledigte
 Schritte werden übersprungen (skip-done). Kapitel-Skripte laufen zuerst
@@ -95,6 +98,7 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
 )
 from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
     ChapterCutError,
+    chapter_open_gap_ids,
     export_all_chapters_otio,
     generate_chapter_unified_cut,
     list_chapters_needing_python_timing,
@@ -102,6 +106,7 @@ from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
     list_chapters_ready_for_python_timing,
     refresh_merged_unified_cut_plan,
     resolve_all_chapter_timelines,
+    resolve_chapter_timeline,
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     CutPlanError,
@@ -654,6 +659,10 @@ def run_enhanced_auto_pipeline(
             emit=emit,
             checkpoint=checkpoint,
             finish=finish_step,
+            cancelled=cancelled,
+            cut_provider=cut_provider,
+            cut_model=cut_model,
+            funnel_model=models.enhanced_supplement_funnel.model,
         )
 
         checkpoint("music")
@@ -1446,14 +1455,26 @@ def _run_stock_and_funnel(
     cancelled: Callable[[], bool],
     funnel_model: str,
     finish: Callable[..., None],
+    recovery: bool = False,
+    gap_ids: list[str] | None = None,
 ) -> None:
     open_ids = list_open_funnel_gap_ids(project)
-    if skip_done and not open_ids:
+    if gap_ids is not None:
+        wanted = {str(gid).strip() for gid in gap_ids if str(gid).strip()}
+        open_ids = [gid for gid in open_ids if gid in wanted]
+    if recovery:
+        if not open_ids:
+            return
+    elif skip_done and not open_ids:
         emit("stock", "Keine offenen Coverage-Gaps — Stocksuche übersprungen.", skipped=True)
         finish("stock", skipped=True)
         emit("funnel", "Keine offenen Coverage-Gaps — Funnel übersprungen.", skipped=True)
         finish("funnel", skipped=True)
         return
+
+    def mark(step_id: str, *, skipped: bool) -> None:
+        if not recovery:
+            finish(step_id, skipped=skipped)
 
     save_stock_providers_config(project, AUTO_RUN_STOCK_PROVIDERS)
     emit(
@@ -1462,9 +1483,9 @@ def _run_stock_and_funnel(
     )
     if not open_ids:
         emit("stock", "Keine Coverage-Gaps — Stocksuche übersprungen.", skipped=True)
-        finish("stock", skipped=True)
+        mark("stock", skipped=True)
         emit("funnel", "Kein Funnel nötig.", skipped=True)
-        finish("funnel", skipped=True)
+        mark("funnel", skipped=True)
         return
 
     emit("stock", f"Stocksuche für {len(open_ids)} offene Gap(s)…")
@@ -1487,9 +1508,9 @@ def _run_stock_and_funnel(
         text = str(exc)
         if "bereits erfüllt" in text:
             emit("stock", "Alle Gaps bereits erfüllt — übersprungen.", skipped=True)
-            finish("stock", skipped=True)
+            mark("stock", skipped=True)
             emit("funnel", "Kein Funnel nötig.", skipped=True)
-            finish("funnel", skipped=True)
+            mark("funnel", skipped=True)
             return
         raise EnhancedAutoRunError(text) from exc
     except Exception as exc:  # noqa: BLE001
@@ -1497,7 +1518,7 @@ def _run_stock_and_funnel(
 
     n_candidates = len(getattr(results, "candidates", None) or [])
     emit("stock", f"Stocksuche fertig — {n_candidates} Kandidat(en).")
-    finish("stock", skipped=False)
+    mark("stock", skipped=False)
 
     checkpoint("funnel")
     emit("funnel", f"Alle offenen Gaps auflösen ({len(open_ids)})…")
@@ -1535,6 +1556,9 @@ def _run_stock_and_funnel(
         raise EnhancedAutoRunCancelled("Auto-Lauf gestoppt.")
 
     still_open = list_open_funnel_gap_ids(project)
+    if gap_ids is not None:
+        wanted = {str(gid).strip() for gid in gap_ids if str(gid).strip()}
+        still_open = [gid for gid in still_open if gid in wanted]
     if still_open:
         preview = ", ".join(still_open[:8])
         more = f" (+{len(still_open) - 8})" if len(still_open) > 8 else ""
@@ -1543,7 +1567,7 @@ def _run_stock_and_funnel(
             f"{preview}{more}"
         )
     emit("funnel", "Alle offenen Gaps erfüllt.")
-    finish("funnel", skipped=False)
+    mark("funnel", skipped=False)
 
 
 def _run_maps(
@@ -1602,6 +1626,100 @@ def _run_maps(
     finish("maps", skipped=False)
 
 
+def _recover_chapter_timing_after_failure(
+    project: Project,
+    chapter_name: str,
+    *,
+    emit: Callable[..., None],
+    checkpoint: Callable[[str], None],
+    cancelled: Callable[[], bool],
+    cut_provider: str,
+    cut_model: str,
+    funnel_model: str,
+) -> None:
+    """Ein fehlgeschlagenes Körper-Kapitel: LLM-Cut, ggf. Stock/Funnel, Timing noch einmal.
+
+    Ein zweites Timing-Scheitern bricht den Auto-Lauf ab — kein dritter Versuch.
+    """
+    checkpoint("timing")
+    emit(
+        "timing",
+        f"Python Timing für „{chapter_name}“ fehlgeschlagen — neuer LLM-Cut…",
+        item_label=chapter_name,
+    )
+    try:
+        result = generate_chapter_unified_cut(
+            project,
+            chapter_name,
+            provider=cut_provider,
+            model=cut_model,
+            on_retry=lambda err: emit(
+                "chapter_cuts",
+                f"Fehler nach LLM — zweiter Versuch: {chapter_name} "
+                f"({_short_retry_error(err)})",
+                item_label=chapter_name,
+            ),
+        )
+    except PlanLlmCancelledError:
+        raise
+    except ChapterCutError as exc:
+        raise EnhancedAutoRunError(
+            f"LLM-Cut-Nachlauf für „{chapter_name}“ fehlgeschlagen: {exc}"
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise EnhancedAutoRunError(
+            f"LLM-Cut-Nachlauf für „{chapter_name}“ fehlgeschlagen: {exc}"
+        ) from exc
+
+    emit(
+        "chapter_cuts",
+        f"Nachlauf-LLM-Cut {chapter_name}: {result.slot_count} Slots, "
+        f"{result.gap_count} Gaps.",
+        item_label=chapter_name,
+    )
+
+    open_gaps = chapter_open_gap_ids(project, chapter_name)
+    if open_gaps:
+        emit(
+            "timing",
+            f"{len(open_gaps)} Coverage-Gap(s) nach LLM-Cut in „{chapter_name}“ "
+            "— Stocksuche und Funnel…",
+            item_label=chapter_name,
+        )
+        _run_stock_and_funnel(
+            project,
+            skip_done=False,
+            emit=emit,
+            checkpoint=checkpoint,
+            cancelled=cancelled,
+            funnel_model=funnel_model,
+            finish=lambda *_a, **_k: None,
+            recovery=True,
+            gap_ids=open_gaps,
+        )
+
+    checkpoint("timing")
+    emit(
+        "timing",
+        f"Python Timing erneut: {chapter_name}",
+        item_label=chapter_name,
+    )
+    try:
+        resolve_chapter_timeline(project, chapter_name)
+    except PlanLlmCancelledError:
+        raise
+    except ChapterCutError as exc:
+        raise EnhancedAutoRunError(
+            f"Python Timing für „{chapter_name}“ nach LLM-Cut-Nachlauf erneut "
+            f"fehlgeschlagen: {exc}"
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise EnhancedAutoRunError(
+            f"Python Timing für „{chapter_name}“ nach LLM-Cut-Nachlauf erneut "
+            f"fehlgeschlagen: {exc}"
+        ) from exc
+
+
 def _run_timing(
     project: Project,
     *,
@@ -1609,7 +1727,12 @@ def _run_timing(
     emit: Callable[..., None],
     checkpoint: Callable[[str], None],
     finish: Callable[..., None],
+    cancelled: Callable[[], bool] | None = None,
+    cut_provider: str = "openai",
+    cut_model: str = "gpt-5.6-terra",
+    funnel_model: str = "",
 ) -> None:
+    cancel_fn = cancelled or (lambda: False)
     intro_done = intro_timing_complete(project)
     names = (
         list_chapters_needing_python_timing(project)
@@ -1631,6 +1754,7 @@ def _run_timing(
             raise EnhancedAutoRunError(f"Intro Python Timing fehlgeschlagen: {exc}") from exc
 
     timed = 0
+    first_timing_error: BaseException | None = None
     if names:
         total = len(names)
         workers = min(max(1, ENHANCED_CHAPTER_TIMING_MAX_WORKERS), total)
@@ -1659,17 +1783,47 @@ def _run_timing(
             )
             timed = len(timed_results)
         except ChapterCutError as exc:
-            raise EnhancedAutoRunError(str(exc)) from exc
+            first_timing_error = exc
+            emit(
+                "timing",
+                "Python Timing fehlgeschlagen — LLM-Cut-Nachlauf "
+                f"({_short_retry_error(str(exc))})",
+            )
         except Exception as exc:  # noqa: BLE001
-            raise EnhancedAutoRunError(f"Python Timing fehlgeschlagen: {exc}") from exc
+            first_timing_error = exc
+            emit(
+                "timing",
+                "Python Timing fehlgeschlagen — LLM-Cut-Nachlauf "
+                f"({_short_retry_error(str(exc))})",
+            )
 
     leftover = list_chapters_needing_python_timing(project)
     if leftover:
-        preview = ", ".join(leftover[:8])
-        more = f" (+{len(leftover) - 8})" if len(leftover) > 8 else ""
+        for name in leftover:
+            _recover_chapter_timing_after_failure(
+                project,
+                name,
+                emit=emit,
+                checkpoint=checkpoint,
+                cancelled=cancel_fn,
+                cut_provider=cut_provider,
+                cut_model=cut_model,
+                funnel_model=funnel_model,
+            )
+            timed += 1
+        leftover = list_chapters_needing_python_timing(project)
+        if leftover:
+            preview = ", ".join(leftover[:8])
+            more = f" (+{len(leftover) - 8})" if len(leftover) > 8 else ""
+            raise EnhancedAutoRunError(
+                f"Python Timing unvollständig, noch offen: {preview}{more}"
+            )
+    elif first_timing_error is not None:
+        if isinstance(first_timing_error, ChapterCutError):
+            raise EnhancedAutoRunError(str(first_timing_error)) from first_timing_error
         raise EnhancedAutoRunError(
-            f"Python Timing unvollständig, noch offen: {preview}{more}"
-        )
+            f"Python Timing fehlgeschlagen: {first_timing_error}"
+        ) from first_timing_error
     emit("timing", f"Python Timing fertig (Intro + {timed} Kapitel).")
     finish("timing", skipped=False)
 
