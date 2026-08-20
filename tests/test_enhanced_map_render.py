@@ -199,6 +199,8 @@ def test_selectable_maps_skip_blocked_and_missing_mode(tmp_path: Path) -> None:
     plan.maps[0].output_path = str(tmp_path / "exists.mp4")
     (tmp_path / "exists.mp4").write_bytes(b"ok")
     assert selectable_maps(plan.maps, mode="missing") == []
+    plan.maps[0].plan_hash = "stale-from-previous-code"
+    assert selectable_maps(plan.maps, mode="missing")[0].chapter_id == "Mount Athos"
     assert [item.chapter_id for item in selectable_maps(plan.maps, mode="one", chapter_id="Mount Athos")] == [
         "Mount Athos"
     ]
@@ -263,9 +265,14 @@ def test_render_reuses_identical_plan_hash(tmp_path: Path) -> None:
     assert first["has_audio"] is False
     sidecar = Path(first["export_path"]).with_suffix(".mp4.meta.json")
     assert sidecar.is_file()
-    third = renderer.render_item(project, plan.maps[0], overwrite=True)
+    stale = plan.maps[0].model_copy(update={"language": "EN"})
+    stale.plan_hash = first["plan_hash"]
+    third = renderer.render_item(project, stale)
     assert calls["n"] == 2
     assert third["reused"] is False
+    fourth = renderer.render_item(project, plan.maps[0], overwrite=True)
+    assert calls["n"] == 3
+    assert fourth["reused"] is False
 
 
 def test_validate_rejects_audio_and_wrong_fps(tmp_path: Path) -> None:
