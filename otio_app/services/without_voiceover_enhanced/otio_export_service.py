@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from threading import Lock
 
 import opentimelineio as otio
 
 from otio_app.analysis_models import TimelineItem
+from otio_app.defaults import (
+    ENHANCED_OTIO_MEDIA_MAX_WORKERS,
+    ENHANCED_OTIO_MEDIA_MAX_WORKERS_4K,
+)
 from otio_app.models import Project
 from otio_app.services.media_utils import (
     is_image_media,
@@ -68,12 +75,22 @@ class EnhancedOtioExportError(RuntimeError):
     pass
 
 
+class EnhancedOtioExportCancelled(EnhancedOtioExportError):
+    pass
+
+
+OtioExportProgressFn = Callable[[str, int, int], None]
+OtioCancelFn = Callable[[], bool]
+
+
 # PTS-Jitter liegt typisch unter 0.2s; Kamera-SMPTE-TC beginnt oft bei ≥1s
 # (häufig Stunden). Darüber: Clean mit -timecode 00:00:00:00 erzwingen.
 _CAMERA_TC_THRESHOLD_SEC = 1.0
 
 # Pfad+mtime+size → (avail_start, duration, rate) — doppeltes ffprobe vermeiden.
 _VIDEO_PROBE_CACHE: dict[str, tuple[float, float, float]] = {}
+_VIDEO_PROBE_CACHE_LOCK = Lock()
+_MEDIA_FILL_CACHE_LOCK = Lock()
 
 
 def _cache_key_for_path(path: Path) -> str:
@@ -95,6 +112,51 @@ def _catalog_folders_for_resolved(resolved: ResolvedTimelineDocument) -> list[st
             seen.add(folder)
             names.append(folder)
     return names
+
+
+def _export_asset_catalog(
+    project: Project,
+    resolved: ResolvedTimelineDocument,
+    *,
+    fps: float,
+) -> AssetCatalog:
+    """Katalog nur für Original-Still-Pfade — ohne Inventar-ffprobe."""
+    return build_asset_catalog(
+        project,
+        fps=fps,
+        folder_names=_catalog_folders_for_resolved(resolved) or None,
+        probe_media=False,
+    )
+
+
+def otio_export_media_workers(project: Project, shot_count: int) -> int:
+    """HD max. 4, 4K max. 2 — zoompan/aspect-fill sind CPU-schwer."""
+    height = int(getattr(project, "height", 0) or 0)
+    cap = (
+        ENHANCED_OTIO_MEDIA_MAX_WORKERS_4K
+        if height >= 2160
+        else ENHANCED_OTIO_MEDIA_MAX_WORKERS
+    )
+    return max(1, min(cap, max(1, int(shot_count))))
+
+
+def _raise_if_otio_cancelled(should_cancel: OtioCancelFn | None) -> None:
+    if should_cancel is not None and should_cancel():
+        raise EnhancedOtioExportCancelled("OTIO-Export abgebrochen.")
+
+
+def _notify_otio_progress(
+    progress_callback: OtioExportProgressFn | None,
+    label: str,
+    index: int,
+    total: int,
+) -> None:
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(label, index, total)
+    except TypeError:
+        progress_callback(label)  # type: ignore[misc,call-arg]
 
 
 def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> otio.opentime.TimeRange:
@@ -197,9 +259,10 @@ def _assert_local_file(path: str, *, label: str) -> Path:
 def _validate_video_file(path: Path, *, label: str, fps: float) -> tuple[float, float, float]:
     """Returns (available_start, duration, rate)."""
     cache_key = _cache_key_for_path(path)
-    cached = _VIDEO_PROBE_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
+    with _VIDEO_PROBE_CACHE_LOCK:
+        cached = _VIDEO_PROBE_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
 
     timing = probe_media_timing(path, default_rate=fps)
     duration = timing.duration_sec
@@ -254,7 +317,8 @@ def _validate_video_file(path: Path, *, label: str, fps: float) -> tuple[float, 
         float(duration),
         float(timing.rate or fps),
     )
-    _VIDEO_PROBE_CACHE[cache_key] = result_tuple
+    with _VIDEO_PROBE_CACHE_LOCK:
+        _VIDEO_PROBE_CACHE[cache_key] = result_tuple
     return result_tuple
 
 
@@ -280,7 +344,9 @@ def _original_still_path_for_export(
         return path
     if not _is_still_hold_shot(shot, path):
         return None
-    cat = catalog if catalog is not None else build_asset_catalog(project, fps=fps)
+    cat = catalog if catalog is not None else build_asset_catalog(
+        project, fps=fps, probe_media=False
+    )
     entry, _err = lookup_catalog_entry(cat, str(shot.asset_id or ""))
     if entry is None:
         return None
@@ -473,8 +539,12 @@ def _ensure_shot_media_for_export(
         cache_key = str(path.resolve())
     except OSError:
         cache_key = str(path)
-    if media_fill_cache is not None and cache_key in media_fill_cache:
-        path = media_fill_cache[cache_key]
+    cached_fill: Path | None = None
+    if media_fill_cache is not None and cache_key:
+        with _MEDIA_FILL_CACHE_LOCK:
+            cached_fill = media_fill_cache.get(cache_key)
+    if cached_fill is not None:
+        path = cached_fill
     else:
         try:
             from otio_app.services.otio_media_transform import (
@@ -490,7 +560,8 @@ def _ensure_shot_media_for_export(
             if filled.is_file():
                 path = filled.resolve()
             if media_fill_cache is not None and cache_key:
-                media_fill_cache[cache_key] = path
+                with _MEDIA_FILL_CACHE_LOCK:
+                    media_fill_cache[cache_key] = path
         except Exception as exc:  # noqa: BLE001
             raise EnhancedOtioExportError(
                 f"{label}: Video-Aspect-Fill fehlgeschlagen — {exc}"
@@ -709,11 +780,7 @@ def validate_resolved_timeline_for_production(
                 f"{curr.shot_id} ({curr.asset_id})."
             )
 
-    catalog = build_asset_catalog(
-        project,
-        fps=fps,
-        folder_names=_catalog_folders_for_resolved(resolved) or None,
-    )
+    catalog = _export_asset_catalog(project, resolved, fps=fps)
     for shot_index, shot in enumerate(resolved.shots):
         if bool(getattr(shot, "is_placeholder", False)) or bool(shot.open_gap):
             errors.append(
@@ -948,6 +1015,92 @@ def _folder_title_media_paths(items: list[TimelineItem]) -> list[tuple[Path, str
     return out
 
 
+def _prepare_export_shot_media(
+    project: Project,
+    shots: list[ResolvedShot],
+    *,
+    fps: float,
+    catalog: AssetCatalog,
+    media_fill_cache: dict[str, Path],
+    allow_errors: bool,
+    should_cancel: OtioCancelFn | None = None,
+    progress_callback: OtioExportProgressFn | None = None,
+    max_workers: int | None = None,
+) -> list[tuple[Path, float, float, float, float] | EnhancedOtioExportError]:
+    """Still-Hold und Aspect-Fill parallel — Clip-Reihenfolge bleibt danach seriell."""
+    total = len(shots)
+    if total == 0:
+        return []
+    workers = (
+        max(1, int(max_workers))
+        if max_workers is not None
+        else otio_export_media_workers(project, total)
+    )
+    workers = max(1, min(workers, total))
+    prepared: list[
+        tuple[Path, float, float, float, float] | EnhancedOtioExportError | None
+    ] = [None] * total
+    progress_lock = Lock()
+    done = 0
+
+    def _label(shot: ResolvedShot) -> str:
+        folder = str(shot.folder_name or shot.chapter_id or "").strip()
+        return folder or str(shot.shot_id or "Shot")
+
+    def work(index: int, shot: ResolvedShot) -> None:
+        nonlocal done
+        _raise_if_otio_cancelled(should_cancel)
+        try:
+            prepared[index] = _ensure_shot_media_for_export(
+                project,
+                shot,
+                fps=fps,
+                catalog=catalog,
+                media_fill_cache=media_fill_cache,
+                shot_index=index,
+            )
+        except EnhancedOtioExportCancelled:
+            raise
+        except EnhancedOtioExportError as exc:
+            if not allow_errors:
+                raise
+            prepared[index] = exc
+        with progress_lock:
+            done += 1
+            current = done
+        _notify_otio_progress(progress_callback, _label(shot), current, total)
+
+    _raise_if_otio_cancelled(should_cancel)
+    _notify_otio_progress(
+        progress_callback,
+        f"OTIO-Medien parallel (max. {workers})",
+        0,
+        total,
+    )
+    if workers <= 1:
+        for index, shot in enumerate(shots):
+            work(index, shot)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(work, index, shot) for index, shot in enumerate(shots)
+            ]
+            try:
+                for fut in as_completed(futures):
+                    _raise_if_otio_cancelled(should_cancel)
+                    fut.result()
+            except EnhancedOtioExportCancelled:
+                for fut in futures:
+                    fut.cancel()
+                raise
+    out: list[tuple[Path, float, float, float, float] | EnhancedOtioExportError] = []
+    for item in prepared:
+        if item is None:
+            raise EnhancedOtioExportError("OTIO-Medienvorbereitung unvollständig.")
+        out.append(item)
+    return out
+
+
 def export_otio_from_resolved_timeline(
     project: Project,
     *,
@@ -955,6 +1108,9 @@ def export_otio_from_resolved_timeline(
     allow_errors: bool = False,
     resolved: ResolvedTimelineDocument | None = None,
     timeline_name: str | None = None,
+    progress_callback: OtioExportProgressFn | None = None,
+    should_cancel: OtioCancelFn | None = None,
+    max_workers: int | None = None,
 ) -> Path:
     """Exportiert die aufgelöste Timeline als OTIO.
 
@@ -964,8 +1120,11 @@ def export_otio_from_resolved_timeline(
 
     Optional ``resolved``: In-Memory-Dokument (z. B. gefiltertes Intro) —
     die Datei ``resolved_timeline.json`` wird dann nicht angefasst.
+
+    Still-Holds und Aspect-Fill laufen parallel (HD max. 4, 4K max. 2).
     """
     assert_enhanced_work_root(project)
+    _raise_if_otio_cancelled(should_cancel)
     if resolved is None:
         resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
     if resolved is None:
@@ -1003,12 +1162,7 @@ def export_otio_from_resolved_timeline(
     )
     video_track = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
     audio_track = otio.schema.Track(name="Narration", kind=otio.schema.TrackKind.Audio)
-    catalog_folders = _catalog_folders_for_resolved(resolved)
-    catalog = build_asset_catalog(
-        project,
-        fps=fps,
-        folder_names=catalog_folders or None,
-    )
+    catalog = _export_asset_catalog(project, resolved, fps=fps)
 
     from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
         _resolved_shot_sort_key,
@@ -1016,34 +1170,32 @@ def export_otio_from_resolved_timeline(
 
     cursor = 0.0
     sorted_shots = sorted(resolved.shots, key=_resolved_shot_sort_key)
+    prepared = _prepare_export_shot_media(
+        project,
+        sorted_shots,
+        fps=fps,
+        catalog=catalog,
+        media_fill_cache=media_fill_cache,
+        allow_errors=allow_errors,
+        should_cancel=should_cancel,
+        progress_callback=progress_callback,
+        max_workers=max_workers,
+    )
     for shot_index, shot in enumerate(sorted_shots):
         if shot.timeline_start_seconds > cursor + 1e-6:
             gap = shot.timeline_start_seconds - cursor
             video_track.append(
                 otio.schema.Gap(source_range=_time_range(gap, fps))
             )
-        try:
-            media_path, avail_start, source_start, source_end, rate = (
-                _ensure_shot_media_for_export(
-                    project,
-                    shot,
-                    fps=fps,
-                    catalog=catalog,
-                    media_fill_cache=media_fill_cache,
-                    shot_index=shot_index,
-                )
-            )
-        except EnhancedOtioExportError:
-            if not allow_errors:
-                raise
-            # Test-Modus: Lücke statt ungültigem Clip.
+        media_or_error = prepared[shot_index]
+        if isinstance(media_or_error, EnhancedOtioExportError):
             gap = max(
                 0.01, shot.timeline_end_seconds - shot.timeline_start_seconds
             )
             video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
             cursor = shot.timeline_end_seconds
             continue
-
+        media_path, avail_start, source_start, source_end, _rate = media_or_error
         source_duration = source_end - source_start
         # Probe-Cache: _ensure_shot_media_for_export hat dieselbe Datei schon gelesen.
         _file_avail_start, file_dur, file_rate = _validate_video_file(
@@ -1269,31 +1421,30 @@ def export_portable_otio_package(
     # Clip → original media path for rewrite after staging
     pending_video: list[tuple[otio.schema.Clip, Path, str]] = []
     pending_audio: list[tuple[otio.schema.Clip, Path, str]] = []
-    catalog = build_asset_catalog(
-        project,
-        fps=fps,
-        folder_names=_catalog_folders_for_resolved(resolved) or None,
-    )
+    catalog = _export_asset_catalog(project, resolved, fps=fps)
 
     cursor = 0.0
     from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
         _resolved_shot_sort_key as _sort_shots,
     )
 
-    for shot_index, shot in enumerate(sorted(resolved.shots, key=_sort_shots)):
+    sorted_shots = sorted(resolved.shots, key=_sort_shots)
+    prepared = _prepare_export_shot_media(
+        project,
+        sorted_shots,
+        fps=fps,
+        catalog=catalog,
+        media_fill_cache=media_fill_cache,
+        allow_errors=False,
+    )
+    for shot_index, shot in enumerate(sorted_shots):
         if shot.timeline_start_seconds > cursor + 1e-6:
             gap = shot.timeline_start_seconds - cursor
             video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
-        media_path, avail_start, source_start, source_end, rate = (
-            _ensure_shot_media_for_export(
-                project,
-                shot,
-                fps=fps,
-                catalog=catalog,
-                media_fill_cache=media_fill_cache,
-                shot_index=shot_index,
-            )
-        )
+        media = prepared[shot_index]
+        if isinstance(media, EnhancedOtioExportError):
+            raise media
+        media_path, avail_start, source_start, source_end, _rate = media
         source_duration = source_end - source_start
         _file_avail_start, file_dur, file_rate = _validate_video_file(
             media_path, label=f"{shot.shot_id}", fps=fps

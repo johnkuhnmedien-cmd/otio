@@ -2141,7 +2141,8 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             use_container_width=True,
             help=(
                 "Intro + vorhandene Kapitel-Timelines mergen → eine OTIO und "
-                "globale resolved_timeline.json. Kapitel ohne passendes "
+                "globale resolved_timeline.json. Still-Holds und Aspect-Fill "
+                "laufen parallel (HD max. 4). Kapitel ohne passendes "
                 "Python-Timing werden übersprungen (kein stilles Nachrechnen)."
             ),
         )

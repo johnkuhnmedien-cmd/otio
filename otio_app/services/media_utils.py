@@ -8,11 +8,26 @@ import math
 import os
 import re
 import subprocess
+import threading
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
+
+_PATH_LOCK_GUARD = threading.Lock()
+_PATH_LOCKS: dict[str, threading.Lock] = {}
+
+
+def lock_for_path(path: str | Path) -> threading.Lock:
+    """Ein Lock je Ausgabepfad — parallele ffmpeg/Still-Writes nicht kreuzen."""
+    key = str(path)
+    with _PATH_LOCK_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PATH_LOCKS[key] = lock
+        return lock
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".heic"}

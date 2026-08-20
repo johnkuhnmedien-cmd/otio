@@ -2,7 +2,9 @@
 
 Pipeline-Schritte laufen nacheinander. Innerhalb eines Schritts bleiben
 LLM-/TTS-Calls strikt einzeln; Python Timing der Körper-Kapitel läuft
-parallel (bis ``ENHANCED_CHAPTER_TIMING_MAX_WORKERS``). Bereits erledigte
+parallel (bis ``ENHANCED_CHAPTER_TIMING_MAX_WORKERS``). OTIO-Export merkt
+Intro + alle Kapitel und bereitet Still-Holds/Aspect-Fill parallel vor
+(HD max. 4). Bereits erledigte
 Schritte werden übersprungen (skip-done). Kapitel-Skripte laufen zuerst
 komplett durch, danach die Freitext-Nachbearbeitung aller Kapitel, erst
 dann Script Lock. Der Aufruf über den Auto-Lauf-Button gilt als explizite
@@ -19,7 +21,10 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from otio_app.defaults import ENHANCED_CHAPTER_TIMING_MAX_WORKERS
+from otio_app.defaults import (
+    ENHANCED_CHAPTER_TIMING_MAX_WORKERS,
+    ENHANCED_OTIO_MEDIA_MAX_WORKERS,
+)
 from otio_app.models import Project
 from otio_app.project_layout import (
     get_dramaturgy_plan_confirmed_path,
@@ -136,6 +141,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     UnifiedCutPlanDocument,
 )
 from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+    EnhancedOtioExportCancelled,
     EnhancedOtioExportError,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
@@ -665,6 +671,8 @@ def run_enhanced_auto_pipeline(
             skip_done=skip_done,
             emit=emit,
             finish=finish_step,
+            cancelled=cancelled,
+            checkpoint=checkpoint,
         )
 
         checkpoint("youtube")
@@ -1703,19 +1711,40 @@ def _run_otio(
     skip_done: bool,
     emit: Callable[..., None],
     finish: Callable[..., None],
+    cancelled: Callable[[], bool],
+    checkpoint: Callable[[str], None],
 ) -> None:
     if skip_done and otio_export_complete(project):
         emit("otio", "OTIO-Export vorhanden — übersprungen.", skipped=True)
         finish("otio", skipped=True)
         return
-    emit("otio", "OTIO-Export (Intro + alle Kapitel)…")
+    workers = ENHANCED_OTIO_MEDIA_MAX_WORKERS
+    emit(
+        "otio",
+        f"OTIO-Export (Intro + alle Kapitel, Medien parallel max. {workers})…",
+    )
+
+    def _progress(label: str, index: int, total: int) -> None:
+        checkpoint("otio")
+        emit(
+            "otio",
+            f"OTIO-Medien parallel (max. {workers}) · {index}/{total}: {label}",
+            item_label=label,
+            item_index=index,
+            item_total=total,
+        )
+
     try:
         path = export_all_chapters_otio(
             project,
             basename=f"{project.name}_enhanced",
             allow_errors=True,
             include_intro=True,
+            progress_callback=_progress,
+            should_cancel=cancelled,
         )
+    except EnhancedOtioExportCancelled as exc:
+        raise EnhancedAutoRunCancelled(str(exc) or "Auto-Lauf gestoppt.") from exc
     except (ChapterCutError, EnhancedOtioExportError) as exc:
         raise EnhancedAutoRunError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

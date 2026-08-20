@@ -7,7 +7,12 @@ import subprocess
 from pathlib import Path
 
 from otio_app.models import Project
-from otio_app.services.media_utils import ffmpeg_has_drawtext, is_image_media, is_video_media
+from otio_app.services.media_utils import (
+    ffmpeg_has_drawtext,
+    is_image_media,
+    is_video_media,
+    lock_for_path,
+)
 from otio_app.services.otio_media_transform import escape_drawtext_value
 from otio_app.services.without_voiceover_enhanced.paths import (
     assert_enhanced_work_root,
@@ -353,37 +358,38 @@ def ensure_still_hold_video(
         ),
     )
     out = _hold_cache_dir(project) / f"still_hold_{key}.mp4"
-    if out.is_file() and out.stat().st_size > 0:
+    with lock_for_path(out):
+        if out.is_file() and out.stat().st_size > 0:
+            return out
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-loop",
+            "1",
+            "-i",
+            str(source),
+            "-vf",
+            vf,
+            "-t",
+            f"{duration_seconds:.3f}",
+            "-r",
+            f"{rate:.3f}",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            str(out),
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, check=False, timeout=180)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            raise MediaHoldError(f"Still-Hold-Video fehlgeschlagen: {exc}") from exc
+        if result.returncode != 0 or not out.is_file():
+            err = (result.stderr or b"").decode("utf-8", errors="replace")[:400]
+            raise MediaHoldError(f"Still-Hold-Video fehlgeschlagen: {err}")
         return out
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-loop",
-        "1",
-        "-i",
-        str(source),
-        "-vf",
-        vf,
-        "-t",
-        f"{duration_seconds:.3f}",
-        "-r",
-        f"{rate:.3f}",
-        "-pix_fmt",
-        "yuv420p",
-        "-an",
-        str(out),
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, check=False, timeout=180)
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        raise MediaHoldError(f"Still-Hold-Video fehlgeschlagen: {exc}") from exc
-    if result.returncode != 0 or not out.is_file():
-        err = (result.stderr or b"").decode("utf-8", errors="replace")[:400]
-        raise MediaHoldError(f"Still-Hold-Video fehlgeschlagen: {err}")
-    return out
 
 
 def ensure_video_padded_hold(
@@ -402,34 +408,35 @@ def ensure_video_padded_hold(
     rate = max(1.0, float(fps) or 25.0)
     key = _cache_key(str(source), f"{target_duration_seconds:.3f}", f"{rate:.3f}", "tpad")
     out = _hold_cache_dir(project) / f"video_hold_{key}.mp4"
-    if out.is_file() and out.stat().st_size > 0:
+    with lock_for_path(out):
+        if out.is_file() and out.stat().st_size > 0:
+            return out
+        # tpad stop_duration = zusätzliche Sekunden nach dem natürlichen Ende.
+        # Wir kennen die Quelldauer nicht exakt hier — nutzen -t Ziel und tpad großzügig.
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(source),
+            "-vf",
+            f"tpad=stop_mode=clone:stop_duration={target_duration_seconds:.3f}",
+            "-t",
+            f"{target_duration_seconds:.3f}",
+            "-r",
+            f"{rate:.3f}",
+            "-an",
+            "-pix_fmt",
+            "yuv420p",
+            str(out),
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, check=False, timeout=300)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            raise MediaHoldError(f"Video-Hold fehlgeschlagen: {exc}") from exc
+        if result.returncode != 0 or not out.is_file():
+            err = (result.stderr or b"").decode("utf-8", errors="replace")[:400]
+            raise MediaHoldError(f"Video-Hold fehlgeschlagen: {err}")
         return out
-    # tpad stop_duration = zusätzliche Sekunden nach dem natürlichen Ende.
-    # Wir kennen die Quelldauer nicht exakt hier — nutzen -t Ziel und tpad großzügig.
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        str(source),
-        "-vf",
-        f"tpad=stop_mode=clone:stop_duration={target_duration_seconds:.3f}",
-        "-t",
-        f"{target_duration_seconds:.3f}",
-        "-r",
-        f"{rate:.3f}",
-        "-an",
-        "-pix_fmt",
-        "yuv420p",
-        str(out),
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, check=False, timeout=300)
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        raise MediaHoldError(f"Video-Hold fehlgeschlagen: {exc}") from exc
-    if result.returncode != 0 or not out.is_file():
-        err = (result.stderr or b"").decode("utf-8", errors="replace")[:400]
-        raise MediaHoldError(f"Video-Hold fehlgeschlagen: {err}")
-    return out

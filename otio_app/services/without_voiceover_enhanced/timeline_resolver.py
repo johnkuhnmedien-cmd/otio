@@ -347,6 +347,7 @@ def _probe_entry(
     fps: float,
     known_duration: float | None = None,
     probe_cache: dict[str, dict] | None = None,
+    probe_media: bool = True,
 ) -> dict:
     kind = "image" if is_image_media(path) or media_type_hint in {"photo", "image"} else "video"
     try:
@@ -373,6 +374,10 @@ def _probe_entry(
     rate = float(fps)
 
     if duration is not None and is_clean:
+        pass
+    elif not probe_media:
+        # OTIO braucht vom Katalog nur Pfade (Original-Still). ffprobe der
+        # ganzen Inventare würde den Export um Minuten verlängern.
         pass
     else:
         try:
@@ -421,6 +426,7 @@ def build_asset_catalog(
     *,
     fps: float = 25.0,
     folder_names: Iterable[str] | None = None,
+    probe_media: bool = True,
 ) -> AssetCatalog:
     """Baut eindeutigen Katalog; doppelte explizite IDs → collisions.
 
@@ -429,6 +435,9 @@ def build_asset_catalog(
 
     ``folder_names``: optional nur diese Ordner indexieren (Kapitel-Timing).
     Ohne Angabe: selected + asset_subdir_names + Körper-Kapitel.
+
+    ``probe_media=False``: nur Pfade indexieren, kein ffprobe — für OTIO-Export,
+    der die Shot-Dateien selbst prüft.
     """
     result = AssetCatalog()
     explicit_paths: dict[str, list[str]] = defaultdict(list)
@@ -595,6 +604,7 @@ def build_asset_catalog(
                 fps=fps,
                 known_duration=float(duration) if duration is not None else None,
                 probe_cache=probe_cache,
+                probe_media=probe_media,
             )
             if duration is not None and entry["duration_seconds"] is None:
                 entry["duration_seconds"] = float(duration)
@@ -678,6 +688,7 @@ def build_asset_catalog(
                     ),
                     fps=fps,
                     probe_cache=probe_cache,
+                    probe_media=probe_media,
                 )
                 entry["canonical_id"] = register_id
                 _register(
@@ -746,6 +757,7 @@ def build_asset_catalog(
                     else None
                 ),
                 probe_cache=probe_cache,
+                probe_media=probe_media,
             )
             entry["supplement"] = True
             entry["export_ready"] = True
@@ -776,6 +788,7 @@ def build_asset_catalog(
                 else None
             ),
             probe_cache=probe_cache,
+            probe_media=probe_media,
         )
         entry["supplement"] = True
         entry["export_ready"] = True
