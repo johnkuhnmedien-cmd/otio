@@ -348,14 +348,16 @@ def build_rhetoric_ledger_prompt_block(ledger: RhetoricLedgerDocument) -> str:
         "- related_chapter_ref: set when naming another chapter from FILM CHAPTER MAP; "
         "else empty string.",
         "- Do NOT reuse ALREADY USED slots or close paraphrases of their device.",
-        "- Do NOT invent future highlights — only if supported by CHAPTER EDITORIAL "
-        "NOTES / verified facts.",
+        "- Do NOT invent future highlights — only if supported by THIS CHAPTER "
+        "DRAMATURGY / verified facts.",
         "",
     ]
     if ledger.claims:
         lines.append("ALREADY USED — do NOT reuse:")
         for claim in ledger.claims:
-            quote = claim.evidence_quote or "(no quote)"
+            quote = (claim.evidence_quote or "(no quote)").strip()
+            if len(quote) > 80:
+                quote = quote[:77].rstrip() + "..."
             ref = f" → {claim.related_chapter_ref}" if claim.related_chapter_ref else ""
             lines.append(
                 f'- {claim.slot_id} @ "{claim.folder_name}": "{quote}"{ref}'
@@ -365,13 +367,11 @@ def build_rhetoric_ledger_prompt_block(ledger: RhetoricLedgerDocument) -> str:
         lines.append("ALREADY USED: (none yet)")
         lines.append("")
 
-    lines.append("AVAILABLE (use ONLY if editorially justified):")
+    lines.append("AVAILABLE (ids only — use ONLY if editorially justified):")
     available = [slot for slot in RHETORIC_SLOTS if slot.slot_id not in used_ids]
     if not available:
         lines.append("- (none — all slots already claimed)")
     else:
         for slot in available:
-            examples = " / ".join(f'"{p}"' for p in slot.example_phrases[:2])
             lines.append(f"- {slot.slot_id}: {slot.description}")
-            lines.append(f"  examples: {examples}")
     return "\n".join(lines)

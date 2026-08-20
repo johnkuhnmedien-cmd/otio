@@ -116,11 +116,11 @@ LLM_INPUT_INFO = {
         "Kein Brief, keine Dramaturgie, kein Style, kein Inventory."
     ),
     "enhanced_script": (
-        "Project Brief · Film-Kontext (Titel, Promise, Arc) · "
+        "Project Brief (ohne Titel-Referenzen, kompakt) · Film-Kontext · "
         "Kapitel-Dramaturgie (Rolle, Reason, Wortziel) · "
-        "FILM CHAPTER MAP (alle Überschriften + Rolle + Reason) · "
-        "Satzanfang-Inventar (Phrase/Stem max. 2× filmweit) · "
-        "Rhetoric-Slot-Ledger (filmweit, jeder Slot max. 1×) · "
+        "FILM CHAPTER MAP (Überschriften + Rolle, ohne Reasons der anderen Kapitel) · "
+        "Satzanfang-Inventar (letzte 4 Sätze + Keys; Stem max. 2× filmweit) · "
+        "Rhetoric-Slot-Ledger (filmweit, kompakt ohne Beispielsätze) · "
         "ab Kapitel 3: erster/letzter Satz der zwei Vorgänger (Opening-Varianz) · "
         "Kontrast/Gemeinsamkeit/Übergänge nur bei Dramaturgie-Brief · "
         "Vorgänger-/Nachfolger-Kapitel · Style Profile · verifizierte "

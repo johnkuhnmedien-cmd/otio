@@ -6,6 +6,7 @@ Ergebnisse werden in ein EnhancedScriptDocument gemerged.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -112,11 +113,29 @@ class FolderScriptBuildResult:
     segment_count: int = 0
 
 
+_BRIEF_PROMPT_EXCLUDE = frozenset(
+    {
+        "project_id",
+        "generated_at",
+        # Title-LLM inspiration only — not needed for chapter narration.
+        "title_references",
+    }
+)
+
+
 def _brief_text(project: Project) -> str:
     brief = load_project_brief(project)
     if brief is None:
         return "(kein Project Brief)"
-    return brief.model_dump_json(indent=2)
+    payload = brief.model_dump(mode="json", exclude=_BRIEF_PROMPT_EXCLUDE)
+    compact = {
+        key: value
+        for key, value in payload.items()
+        if value not in (None, "", [], {})
+    }
+    if not compact:
+        return "(kein Project Brief)"
+    return json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
 
 
 def _style_text(project: Project, *, for_chapter: bool = True) -> str:

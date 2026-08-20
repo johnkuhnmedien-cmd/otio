@@ -1,6 +1,6 @@
 """Nachbar-Kontext für Enhanced-Skript-Prompts (Schritt ④).
 
-- Kapitelliste (Überschriften + Rolle + Reason) immer in Filmreihenfolge
+- Kapitelliste (Überschriften + Rolle, ohne filmweite Reason-Texte)
 - Erste/letzte Sätze der zwei unmittelbar vorherigen Kapitel (ab Kapitel 3)
 - Gesprochene Übergänge nur bei expliziten FolderVoiceoverSetting-Flags
 """
@@ -40,45 +40,32 @@ def build_chapter_order_block(
     *,
     current_folder_name: str,
 ) -> str:
-    """Nummerierte Kapitelliste; bei Entries inkl. Rolle + Reason-Zeile."""
+    """Nummerierte Kapitelliste mit Rolle; Reasons nur in THIS CHAPTER DRAMATURGY."""
     map_lines: list[str] = []
-    note_lines: list[str] = []
     for index, item in enumerate(chapters, start=1):
         if isinstance(item, str):
             name = item
             role = ""
-            reason = ""
         else:
             name = item.folder_name
             role = (item.dramaturgy_role or "").strip()
-            reason = (item.reason or "").strip()
         marker = " ← THIS CHAPTER" if name == current_folder_name else ""
         role_part = f"  [{role}]" if role else ""
         map_lines.append(f"{index:2d}. {name}{role_part}{marker}")
-        if reason:
-            note_lines.append(f"{index:2d}. {name} — {reason}")
 
-    blocks = [
-        "FILM CHAPTER MAP — SILENT EDITORIAL METADATA (NOT spoken narration):",
-        "",
-        "Use this map only for silent film orientation: order, emphasis, contrast.",
-        "Do NOT recite, summarize, or verbalize the map, roles, reasons, or chapter order.",
-        "Do NOT invent spoken bridges from this map unless SPOKEN CHAPTER LINK "
-        "PERMISSIONS explicitly allow a direction.",
-        "",
-        *map_lines,
-    ]
-    if note_lines:
-        blocks.extend(
-            [
-                "",
-                "CHAPTER EDITORIAL NOTES — SILENT METADATA ONLY "
-                "(do NOT treat as spoken copy; do NOT invent beyond these):",
-                "",
-                *note_lines,
-            ]
-        )
-    return "\n".join(blocks)
+    return "\n".join(
+        [
+            "FILM CHAPTER MAP — SILENT EDITORIAL METADATA (NOT spoken narration):",
+            "",
+            "Use this map only for silent film orientation: order and chapter names.",
+            "Do NOT recite, summarize, or verbalize the map, roles, or chapter order.",
+            "Do NOT invent spoken bridges from this map unless SPOKEN CHAPTER LINK "
+            "PERMISSIONS explicitly allow a direction.",
+            "Chapter reasons live in THIS CHAPTER DRAMATURGY for the current folder only.",
+            "",
+            *map_lines,
+        ]
+    )
 
 
 def build_film_wide_editorial_links_block(
