@@ -144,6 +144,46 @@ def test_migrate_root_mapping_after_existing_scope(tmp_path: Path) -> None:
     assert '"late"' in scoped.read_text(encoding="utf-8")
 
 
+def test_migrate_moves_otio_but_leaves_shared_hold_cache(tmp_path: Path) -> None:
+    project = _project(tmp_path, language="fr")
+    work = project.work_dir_path
+    hold = work / "exports" / "hold_cache" / "still_hold_abc.mp4"
+    hold.parent.mkdir(parents=True)
+    hold.write_bytes(b"EN-HOLD")
+    (work / "exports" / "chapter.otio").write_text("timeline", encoding="utf-8")
+
+    lang_dir = migrate_language_scope(project)
+    assert (lang_dir / "exports" / "chapter.otio").is_file()
+    assert not (work / "exports" / "chapter.otio").exists()
+    assert hold.is_file()
+    assert hold.read_bytes() == b"EN-HOLD"
+    assert not (lang_dir / "exports" / "hold_cache").exists()
+
+
+def test_sibling_language_does_not_steal_hold_cache_only_exports(tmp_path: Path) -> None:
+    """EN-Resolve zeigt auf ``exports/hold_cache``; FR darf den Ordner nicht nach FR schieben."""
+    en = _project(tmp_path, language="en")
+    work = en.work_dir_path
+    ensure_language_scope(en)
+    hold = work / "exports" / "hold_cache" / "still_hold_abc.mp4"
+    hold.parent.mkdir(parents=True)
+    hold.write_bytes(b"EN-HOLD")
+
+    fr = Project(
+        id="lang-scope-fr",
+        name="USA FR",
+        project_root=en.project_root,
+        work_dir=str(work),
+        language="fr",
+        asset_subdir_names=en.asset_subdir_names,
+        selected_asset_subdirs=en.selected_asset_subdirs,
+    )
+    migrate_language_scope(fr)
+    assert hold.is_file()
+    assert hold.read_bytes() == b"EN-HOLD"
+    assert not (work / "FR" / "exports" / "hold_cache").exists()
+
+
 def test_cut_plan_settings_land_in_language_scope(tmp_path: Path) -> None:
     project = _project(tmp_path)
     save_cut_plan_settings(

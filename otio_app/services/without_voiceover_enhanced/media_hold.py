@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from otio_app.models import Project
+from otio_app.project_layout import language_folder_name
 from otio_app.services.media_utils import (
     ffmpeg_has_drawtext,
     is_image_media,
@@ -15,7 +16,9 @@ from otio_app.services.media_utils import (
 )
 from otio_app.services.otio_media_transform import escape_drawtext_value
 from otio_app.services.without_voiceover_enhanced.paths import (
-    assert_enhanced_work_root,
+    hold_cache_dir,
+    legacy_hold_cache_dir,
+    legacy_placeholders_dir,
     placeholders_dir,
 )
 
@@ -24,16 +27,89 @@ class MediaHoldError(RuntimeError):
     pass
 
 
-def _hold_cache_dir(project: Project) -> Path:
-    root = assert_enhanced_work_root(project)
-    path = root / "exports" / "hold_cache"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
 def _cache_key(*parts: str) -> str:
     digest = hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
     return digest
+
+
+def _language_tag(project: Project) -> str:
+    return language_folder_name(getattr(project, "language", "") or "de")
+
+
+def _usable_media(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _first_usable(*paths: Path) -> Path | None:
+    for path in paths:
+        if _usable_media(path):
+            return path
+    return None
+
+
+def _unlink_quiet(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _hold_filenames(prefix: str, content_parts: tuple[str, ...], language: str) -> tuple[str, str]:
+    """``(sprachspezifischer Name, Legacy-Name ohne Sprache)``."""
+    legacy = f"{prefix}_{_cache_key(*content_parts)}.mp4"
+    scoped = f"{prefix}_{_cache_key(*content_parts, f'lang={language}')}.mp4"
+    return scoped, legacy
+
+
+def _resolve_hold_cache_file(
+    project: Project,
+    *,
+    prefix: str,
+    content_parts: tuple[str, ...],
+) -> tuple[Path, Path | None]:
+    """Zielpfad für neue Encodes plus vorhandene Datei (Legacy zuerst nicht überschreiben)."""
+    scoped_name, legacy_name = _hold_filenames(prefix, content_parts, _language_tag(project))
+    dest_dir = hold_cache_dir(project)
+    dest = dest_dir / scoped_name
+    legacy_dir = legacy_hold_cache_dir(project)
+    existing = _first_usable(
+        dest,
+        dest_dir / legacy_name,
+        legacy_dir / legacy_name,
+        legacy_dir / scoped_name,
+    )
+    return dest, existing
+
+
+def _run_ffmpeg_atomic(
+    cmd_prefix: list[str],
+    out: Path,
+    *,
+    timeout: int,
+    error_label: str,
+) -> Path:
+    """ffmpeg schreibt auf ``.partial``, danach atomares ``replace`` — kein Truncate am Resolve-Pfad."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(f".{out.stem}.partial{out.suffix}")
+    with lock_for_path(out):
+        if _usable_media(out):
+            return out
+        _unlink_quiet(tmp)
+        cmd = [*cmd_prefix, str(tmp)]
+        try:
+            result = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            _unlink_quiet(tmp)
+            raise MediaHoldError(f"{error_label}: {exc}") from exc
+        if result.returncode != 0 or not _usable_media(tmp):
+            _unlink_quiet(tmp)
+            err = (result.stderr or b"").decode("utf-8", errors="replace")[:400]
+            raise MediaHoldError(f"{error_label}: {err}")
+        tmp.replace(out)
+        return out
 
 
 def _default_slate_font() -> Path | None:
@@ -63,7 +139,7 @@ def ensure_gap_placeholder_slate(
     color: str = "0x2b1d1d",
     title: str = "PLACEHOLDER / OPEN GAP",
 ) -> Path:
-    """Rendert ein lesbares Gap-/Bridge-Slate unter ``_otio_enhanced/placeholders/``.
+    """Rendert ein lesbares Gap-/Bridge-Slate unter ``_otio_enhanced/{LANG}/placeholders/``.
 
     ``color``: ffmpeg lavfi color (z. B. ``0xCC0000`` für Shortfall-Rot).
     """
@@ -73,7 +149,7 @@ def ensure_gap_placeholder_slate(
     visual = (needed_visual or "").strip() or "(keine needed_visual)"
     color_key = str(color or "0x2b1d1d").strip() or "0x2b1d1d"
     title_text = (title or "PLACEHOLDER / OPEN GAP").strip() or "PLACEHOLDER / OPEN GAP"
-    key = _cache_key(
+    content_parts = (
         shot_id,
         gap,
         visual,
@@ -86,9 +162,19 @@ def ensure_gap_placeholder_slate(
         title_text,
         "slate_v2",
     )
-    out = placeholders_dir(project) / f"placeholder_{shot_id}_{key}.mp4"
-    if out.is_file() and out.stat().st_size > 0:
-        return out
+    scoped_name, legacy_name = _hold_filenames(
+        f"placeholder_{shot_id}", content_parts, _language_tag(project)
+    )
+    dest_dir = placeholders_dir(project)
+    dest = dest_dir / scoped_name
+    existing = _first_usable(
+        dest,
+        dest_dir / legacy_name,
+        legacy_placeholders_dir(project) / legacy_name,
+        legacy_placeholders_dir(project) / scoped_name,
+    )
+    if existing is not None:
+        return existing
 
     lines = [
         title_text,
@@ -135,17 +221,14 @@ def ensure_gap_placeholder_slate(
             "-pix_fmt",
             "yuv420p",
             "-an",
-            str(out),
         ]
     )
-    try:
-        result = subprocess.run(cmd, capture_output=True, check=False, timeout=180)
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        raise MediaHoldError(f"Placeholder-Slate fehlgeschlagen: {exc}") from exc
-    if result.returncode != 0 or not out.is_file() or out.stat().st_size <= 0:
-        err = (result.stderr or b"").decode("utf-8", errors="replace")[:400]
-        raise MediaHoldError(f"Placeholder-Slate fehlgeschlagen: {err}")
-    return out
+    return _run_ffmpeg_atomic(
+        cmd,
+        dest,
+        timeout=180,
+        error_label="Placeholder-Slate fehlgeschlagen",
+    )
 
 
 def still_hold_video_filter(
@@ -345,51 +428,51 @@ def ensure_still_hold_video(
     else:
         vf = still_hold_video_filter(width=tw or None, height=th or None)
         cache_tag = "still_v2"
-    key = _cache_key(
-        str(source),
-        f"{duration_seconds:.3f}",
-        f"{rate:.3f}",
-        f"{tw}x{th}",
-        vf,
-        (
-            f"{cache_tag}_{float(zoom_factor):.3f}"
-            if (use_dynamic or use_pan)
-            else cache_tag
+    tag = (
+        f"{cache_tag}_{float(zoom_factor):.3f}"
+        if (use_dynamic or use_pan)
+        else cache_tag
+    )
+    dest, existing = _resolve_hold_cache_file(
+        project,
+        prefix="still_hold",
+        content_parts=(
+            str(source),
+            f"{duration_seconds:.3f}",
+            f"{rate:.3f}",
+            f"{tw}x{th}",
+            vf,
+            tag,
         ),
     )
-    out = _hold_cache_dir(project) / f"still_hold_{key}.mp4"
-    with lock_for_path(out):
-        if out.is_file() and out.stat().st_size > 0:
-            return out
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-loop",
-            "1",
-            "-i",
-            str(source),
-            "-vf",
-            vf,
-            "-t",
-            f"{duration_seconds:.3f}",
-            "-r",
-            f"{rate:.3f}",
-            "-pix_fmt",
-            "yuv420p",
-            "-an",
-            str(out),
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, check=False, timeout=180)
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            raise MediaHoldError(f"Still-Hold-Video fehlgeschlagen: {exc}") from exc
-        if result.returncode != 0 or not out.is_file():
-            err = (result.stderr or b"").decode("utf-8", errors="replace")[:400]
-            raise MediaHoldError(f"Still-Hold-Video fehlgeschlagen: {err}")
-        return out
+    if existing is not None:
+        return existing
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-loop",
+        "1",
+        "-i",
+        str(source),
+        "-vf",
+        vf,
+        "-t",
+        f"{duration_seconds:.3f}",
+        "-r",
+        f"{rate:.3f}",
+        "-pix_fmt",
+        "yuv420p",
+        "-an",
+    ]
+    return _run_ffmpeg_atomic(
+        cmd,
+        dest,
+        timeout=180,
+        error_label="Still-Hold-Video fehlgeschlagen",
+    )
 
 
 def ensure_video_padded_hold(
@@ -406,37 +489,41 @@ def ensure_video_padded_hold(
     if not source.is_file():
         raise MediaHoldError(f"Video fehlt: {source}")
     rate = max(1.0, float(fps) or 25.0)
-    key = _cache_key(str(source), f"{target_duration_seconds:.3f}", f"{rate:.3f}", "tpad")
-    out = _hold_cache_dir(project) / f"video_hold_{key}.mp4"
-    with lock_for_path(out):
-        if out.is_file() and out.stat().st_size > 0:
-            return out
-        # tpad stop_duration = zusätzliche Sekunden nach dem natürlichen Ende.
-        # Wir kennen die Quelldauer nicht exakt hier — nutzen -t Ziel und tpad großzügig.
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
+    dest, existing = _resolve_hold_cache_file(
+        project,
+        prefix="video_hold",
+        content_parts=(
             str(source),
-            "-vf",
-            f"tpad=stop_mode=clone:stop_duration={target_duration_seconds:.3f}",
-            "-t",
             f"{target_duration_seconds:.3f}",
-            "-r",
             f"{rate:.3f}",
-            "-an",
-            "-pix_fmt",
-            "yuv420p",
-            str(out),
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, check=False, timeout=300)
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            raise MediaHoldError(f"Video-Hold fehlgeschlagen: {exc}") from exc
-        if result.returncode != 0 or not out.is_file():
-            err = (result.stderr or b"").decode("utf-8", errors="replace")[:400]
-            raise MediaHoldError(f"Video-Hold fehlgeschlagen: {err}")
-        return out
+            "tpad",
+        ),
+    )
+    if existing is not None:
+        return existing
+    # tpad stop_duration = zusätzliche Sekunden nach dem natürlichen Ende.
+    # Wir kennen die Quelldauer nicht exakt hier — nutzen -t Ziel und tpad großzügig.
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source),
+        "-vf",
+        f"tpad=stop_mode=clone:stop_duration={target_duration_seconds:.3f}",
+        "-t",
+        f"{target_duration_seconds:.3f}",
+        "-r",
+        f"{rate:.3f}",
+        "-an",
+        "-pix_fmt",
+        "yuv420p",
+    ]
+    return _run_ffmpeg_atomic(
+        cmd,
+        dest,
+        timeout=300,
+        error_label="Video-Hold fehlgeschlagen",
+    )

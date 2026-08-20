@@ -30,6 +30,11 @@ _LANGUAGE_DIRS: tuple[str, ...] = (
     "supplement",
 )
 
+# Still-Hold-MP4s lagen historisch unter dem gemeinsamen ``exports/hold_cache``.
+# Resolve importiert absolute Pfade dorthin. Eine Sibling-Sprache darf diesen
+# Ordner nicht nach ``{LANG}/exports`` verschieben (sonst Media Offline).
+_EXPORTS_PRESERVE_CHILDREN: frozenset[str] = frozenset({"hold_cache"})
+
 # Einzeldateien am `_otio/`-Root → Language-Scope.
 _LANGUAGE_ROOT_FILES: tuple[str, ...] = (
     "edit_plan_rules.json",
@@ -87,9 +92,31 @@ def _write_marker(work_dir: Path, *, lang: str, source_layout: str) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _exports_has_migratable_children(path: Path) -> bool:
+    """True wenn ``exports/`` OTIO o. ä. enthält — nicht nur den shared hold_cache."""
+    if not path.exists():
+        return False
+    if path.is_file():
+        return True
+    try:
+        children = path.iterdir()
+    except OSError:
+        return False
+    for child in children:
+        if child.name in _EXPORTS_PRESERVE_CHILDREN or child.name.startswith("."):
+            continue
+        return True
+    return False
+
+
 def _has_flat_language_artifacts(work_dir: Path) -> bool:
     for name in _LANGUAGE_DIRS:
-        if (work_dir / name).exists():
+        path = work_dir / name
+        if name == "exports":
+            if _exports_has_migratable_children(path):
+                return True
+            continue
+        if path.exists():
             return True
     for name in _LANGUAGE_ROOT_FILES:
         if (work_dir / name).is_file():
@@ -107,6 +134,29 @@ def _safe_move(src: Path, dest: Path) -> None:
         # Ziel schon da — Quelle nicht überschreiben; flat-Rest bleibt liegen.
         return
     shutil.move(str(src), str(dest))
+
+
+def _migrate_dir(
+    src: Path,
+    dest: Path,
+    *,
+    preserve_children: frozenset[str] = frozenset(),
+) -> None:
+    """Verschiebt einen Language-Ordner, optional ohne geschützte Unterordner."""
+    if not src.exists():
+        return
+    if not preserve_children:
+        _safe_move(src, dest)
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        children = list(src.iterdir())
+    except OSError:
+        return
+    for child in children:
+        if child.name in preserve_children:
+            continue
+        _safe_move(child, dest / child.name)
 
 
 def _maybe_migrate_root_mapping(project: Project, lang_dir: Path) -> None:
@@ -187,7 +237,12 @@ def migrate_language_scope(project: Project) -> Path:
         new_prefix = str(lang_dir)
 
     for name in _LANGUAGE_DIRS:
-        _safe_move(work_dir / name, lang_dir / name)
+        src = work_dir / name
+        dest = lang_dir / name
+        if name == "exports":
+            _migrate_dir(src, dest, preserve_children=_EXPORTS_PRESERVE_CHILDREN)
+        else:
+            _safe_move(src, dest)
 
     for name in _LANGUAGE_ROOT_FILES:
         _safe_move(work_dir / name, lang_dir / name)
