@@ -48,6 +48,9 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
     MapPlanItem,
     MapRenderSettings,
 )
+from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
+    country_label,
+)
 from otio_app.services.without_voiceover_enhanced.paths import (
     map_coordinates_path,
     map_output_dir,
@@ -135,6 +138,7 @@ def compute_plan_hash(item: MapPlanItem) -> str:
         "heading": item.heading,
         "language": item.language,
         "country": item.country,
+        "country_label": country_label(item.country, item.language),
         "from_chapter_id": item.from_chapter_id,
         "start_latitude": item.start_latitude,
         "start_longitude": item.start_longitude,
