@@ -25,7 +25,10 @@ from otio_app.project_layout import (
     get_dramaturgy_plan_draft_path,
 )
 from otio_app.services.gemini_client import _extract_json
-from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
+from otio_app.services.plan_llm_client import (
+    generate_plan_text_with_metadata,
+    reraise_if_llm_cancelled,
+)
 from otio_app.services.voiceover_generation.folder_inventory_summary import (
     build_and_save_folder_inventory_summaries,
     load_folder_inventory_summaries,
@@ -618,6 +621,7 @@ def build_dramaturgy_plan(
     except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
         # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
         # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).
+        reraise_if_llm_cancelled(exc)
         write_llm_raw_response(run_dir, raw_text=f"ERROR: {exc}", provider=provider, model=model)
         write_llm_parsed_response(run_dir, {"parse_error": str(exc)})
         write_llm_manifest(

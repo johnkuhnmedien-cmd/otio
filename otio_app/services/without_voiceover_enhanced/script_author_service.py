@@ -18,7 +18,10 @@ from otio_app.defaults import (
 from otio_app.models import Project
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.gemini_client import _extract_json
-from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
+from otio_app.services.plan_llm_client import (
+    generate_plan_text_with_metadata,
+    reraise_if_llm_cancelled,
+)
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
     build_default_folder_voiceover_settings,
@@ -841,6 +844,7 @@ def revise_enhanced_script_for_folder(
             ),
         )
     except Exception as exc:  # noqa: BLE001
+        reraise_if_llm_cancelled(exc)
         return FolderScriptBuildResult(
             folder_name=folder_name,
             status="FAIL",
@@ -1178,6 +1182,7 @@ def generate_enhanced_script_for_folder(
             error=last_error,
         )
     except Exception as exc:  # noqa: BLE001
+        reraise_if_llm_cancelled(exc)
         return FolderScriptBuildResult(
             folder_name=folder_name,
             status="FAIL",

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import base64
 import mimetypes
+import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Iterator, Optional, Sequence
 
 from otio_app.config import get_gemini_model_from_env
 from otio_app.defaults import EDIT_PLAN_MODEL_CHOICES, EDIT_PLAN_MODEL_LABELS, GEMINI_MODEL_CHOICES
@@ -48,6 +51,130 @@ class PlanLlmTruncatedResponseError(RuntimeError):
 
 class PlanLlmConnectionError(RuntimeError):
     """Transport-/Netzwerkfehler zum LLM-Provider (kein HTTP-Status vom Modell)."""
+
+
+class PlanLlmCancelledError(RuntimeError):
+    """Nutzer hat Stop gedrückt — der laufende LLM-HTTP-Call wurde abgebrochen."""
+
+
+_llm_cancel_check: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "otio_llm_cancel_check", default=None
+)
+_active_http_lock = threading.Lock()
+_active_http_closers: list[Callable[[], None]] = []
+
+
+@contextmanager
+def bind_llm_cancel(should_cancel: Callable[[], bool] | None) -> Iterator[None]:
+    """Bindet den Auto-Lauf-Stop an LLM-HTTP-Calls in diesem Thread."""
+    if should_cancel is None:
+        yield
+        return
+    token = _llm_cancel_check.set(should_cancel)
+    try:
+        yield
+    finally:
+        _llm_cancel_check.reset(token)
+
+
+def llm_cancel_requested() -> bool:
+    checker = _llm_cancel_check.get()
+    return bool(checker and checker())
+
+
+def raise_if_llm_cancelled() -> None:
+    if llm_cancel_requested():
+        raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.")
+
+
+def reraise_if_llm_cancelled(exc: BaseException | None = None) -> None:
+    """Wenn Stop aktiv ist, Cancel weiterwerfen statt als normalen LLM-Fehler."""
+    if isinstance(exc, PlanLlmCancelledError):
+        raise exc
+    if llm_cancel_requested():
+        raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.") from exc
+
+
+def abort_registered_llm_http() -> None:
+    """Schließt alle registrierten LLM-HTTP-Clients — auch aus einem anderen Thread."""
+    with _active_http_lock:
+        closers = list(_active_http_closers)
+    for close in closers:
+        try:
+            close()
+        except Exception:
+            pass
+
+
+@contextmanager
+def cancellable_httpx_client(**client_kwargs):
+    """Eigenes httpx.Client, das Stop schließen kann.
+
+    Ohne gebundenen Cancel-Checker: kein Extra-Client (SDK-Default bleibt).
+    """
+    if _llm_cancel_check.get() is None:
+        yield None
+        return
+    import httpx
+
+    factory = client_kwargs.pop("factory", None)
+    timeout = client_kwargs.pop("timeout", _LLM_REQUEST_TIMEOUT_SEC)
+    if factory is None:
+        client = httpx.Client(timeout=timeout, **client_kwargs)
+    else:
+        client = factory(timeout=timeout, **client_kwargs)
+    closed = False
+    close_lock = threading.Lock()
+
+    def close() -> None:
+        nonlocal closed
+        with close_lock:
+            if closed:
+                return
+            closed = True
+        try:
+            client.close()
+        except Exception:
+            pass
+
+    stop_watch = threading.Event()
+
+    def watch() -> None:
+        while not stop_watch.wait(0.2):
+            if llm_cancel_requested():
+                close()
+                return
+
+    with _active_http_lock:
+        _active_http_closers.append(close)
+    watcher = threading.Thread(
+        target=watch, daemon=True, name="llm-cancel-watch"
+    )
+    watcher.start()
+    try:
+        raise_if_llm_cancelled()
+        yield client
+    except PlanLlmCancelledError:
+        raise
+    except Exception as exc:
+        if llm_cancel_requested():
+            raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.") from exc
+        raise
+    finally:
+        stop_watch.set()
+        close()
+        with _active_http_lock:
+            try:
+                _active_http_closers.remove(close)
+            except ValueError:
+                pass
+
+
+def _iter_checking_cancel(iterable):
+    raise_if_llm_cancelled()
+    for item in iterable:
+        raise_if_llm_cancelled()
+        yield item
 
 
 def format_truncated_plan_response_error(
@@ -212,12 +339,43 @@ def generate_plan_text_with_metadata(
     images: optionale lokale Mittel-Frames (Gemini + OpenAI). Andere Provider
     lehnen Bilder mit PlanLlmNotConfiguredError ab.
     """
+    raise_if_llm_cancelled()
     resolved = resolve_plan_model(model)
     provider = plan_model_provider(resolved)
     api_model = _provider_api_model(resolved)
     started = time.perf_counter()
     image_list = list(images or [])
 
+    try:
+        return _dispatch_plan_text(
+            provider=provider,
+            api_model=api_model,
+            resolved=resolved,
+            prompt=prompt,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=disable_thinking,
+            image_list=image_list,
+            started=started,
+        )
+    except PlanLlmCancelledError:
+        raise
+    except Exception as exc:
+        if llm_cancel_requested():
+            raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.") from exc
+        raise
+
+
+def _dispatch_plan_text(
+    *,
+    provider: str,
+    api_model: str,
+    resolved: str,
+    prompt: str,
+    max_output_tokens: int | None,
+    disable_thinking: bool,
+    image_list: list[PlanImageAttachment],
+    started: float,
+) -> PlanLlmResponse:
     if provider == PROVIDER_GEMINI:
         raw_text, token_usage = _generate_gemini_text_with_usage(
             prompt=prompt,
@@ -419,22 +577,33 @@ def _generate_gemini_text_with_usage(
         # Verfügung (siehe generate_plan_text_with_metadata()-Docstring).
         config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
 
-    client = genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=_GEMINI_HTTP_TIMEOUT_MS),
-    )
-    user_parts = _gemini_user_parts(prompt, list(images or []), types)
-    # Streaming hält die Verbindung bei langen Antworten offen; am Ende
-    # aggregieren wir denselben Text wie bei einem Non-Stream-Call.
-    stream = client.models.generate_content_stream(
-        model=model,
-        contents=[types.Content(role="user", parts=user_parts)],
-        config=types.GenerateContentConfig(**config_kwargs),
-    )
+    http_options_kwargs: dict = {"timeout": _GEMINI_HTTP_TIMEOUT_MS}
+    with cancellable_httpx_client() as http:
+        if http is not None:
+            http_options_kwargs["httpx_client"] = http
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(**http_options_kwargs),
+        )
+        user_parts = _gemini_user_parts(prompt, list(images or []), types)
+        # Streaming hält die Verbindung bei langen Antworten offen; am Ende
+        # aggregieren wir denselben Text wie bei einem Non-Stream-Call.
+        stream = client.models.generate_content_stream(
+            model=model,
+            contents=[types.Content(role="user", parts=user_parts)],
+            config=types.GenerateContentConfig(**config_kwargs),
+        )
+        return _consume_gemini_stream(
+            stream,
+            effective_max_tokens=effective_max_tokens,
+        )
+
+
+def _consume_gemini_stream(stream, *, effective_max_tokens: int) -> tuple[str, dict[str, int]]:
     text_parts: list[str] = []
     token_usage: dict[str, int] = {}
     finish_reason = ""
-    for chunk in stream:
+    for chunk in _iter_checking_cancel(stream):
         chunk_text = getattr(chunk, "text", None)
         if chunk_text:
             text_parts.append(chunk_text)
@@ -493,16 +662,39 @@ def _generate_openai_text_with_usage(
             "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
     _require_sdk_module("openai")
-    from openai import BadRequestError, OpenAI
+    from openai import OpenAI
 
     effective_max_tokens = max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
-    client = OpenAI(api_key=api_key, timeout=_LLM_REQUEST_TIMEOUT_SEC)
     messages = [
         {
             "role": "user",
             "content": _openai_user_content(prompt, list(images or [])),
         }
     ]
+    with cancellable_httpx_client() as http:
+        client_kwargs: dict = {
+            "api_key": api_key,
+            "timeout": _LLM_REQUEST_TIMEOUT_SEC,
+        }
+        if http is not None:
+            client_kwargs["http_client"] = http
+        client = OpenAI(**client_kwargs)
+        return _openai_complete_stream(
+            client,
+            messages=messages,
+            model=model,
+            effective_max_tokens=effective_max_tokens,
+        )
+
+
+def _openai_complete_stream(
+    client,
+    *,
+    messages: list,
+    model: str,
+    effective_max_tokens: int,
+) -> tuple[str, dict[str, int]]:
+    from openai import BadRequestError
 
     def _stream(*, use_temperature: bool, use_max_completion_tokens: bool) -> tuple[str, str | None, dict[str, int]]:
         kwargs: dict = {
@@ -521,7 +713,7 @@ def _generate_openai_text_with_usage(
         text_parts: list[str] = []
         finish_reason: str | None = None
         token_usage: dict[str, int] = {}
-        for event in stream:
+        for event in _iter_checking_cancel(stream):
             usage = getattr(event, "usage", None)
             if usage is not None:
                 token_usage = _token_usage_dict(
@@ -613,61 +805,64 @@ def _generate_openai_compatible_text_with_usage(
     }
     if default_headers:
         client_kwargs["default_headers"] = default_headers
-    client = OpenAI(**client_kwargs)
     messages = [{"role": "user", "content": prompt}]
+    with cancellable_httpx_client() as http:
+        if http is not None:
+            client_kwargs["http_client"] = http
+        client = OpenAI(**client_kwargs)
 
-    def _stream(*, use_temperature: bool) -> tuple[str, str | None, dict[str, int]]:
-        kwargs: dict = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": effective_max_tokens,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        if use_temperature:
-            kwargs["temperature"] = 0.2
-        stream = client.chat.completions.create(**kwargs)
-        text_parts: list[str] = []
-        finish_reason: str | None = None
-        token_usage: dict[str, int] = {}
-        for event in stream:
-            usage = getattr(event, "usage", None)
-            if usage is not None:
-                token_usage = _token_usage_dict(
-                    input_tokens=getattr(usage, "prompt_tokens", None),
-                    output_tokens=getattr(usage, "completion_tokens", None),
-                    total_tokens=getattr(usage, "total_tokens", None),
+        def _stream(*, use_temperature: bool) -> tuple[str, str | None, dict[str, int]]:
+            kwargs: dict = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": effective_max_tokens,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+            if use_temperature:
+                kwargs["temperature"] = 0.2
+            stream = client.chat.completions.create(**kwargs)
+            text_parts: list[str] = []
+            finish_reason: str | None = None
+            token_usage: dict[str, int] = {}
+            for event in _iter_checking_cancel(stream):
+                usage = getattr(event, "usage", None)
+                if usage is not None:
+                    token_usage = _token_usage_dict(
+                        input_tokens=getattr(usage, "prompt_tokens", None),
+                        output_tokens=getattr(usage, "completion_tokens", None),
+                        total_tokens=getattr(usage, "total_tokens", None),
+                    )
+                if not event.choices:
+                    continue
+                choice = event.choices[0]
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+                delta = getattr(choice.delta, "content", None)
+                if delta:
+                    text_parts.append(delta)
+            return "".join(text_parts).strip(), finish_reason, token_usage
+
+        try:
+            text, finish_reason, token_usage = _stream(use_temperature=True)
+        except BadRequestError as exc:
+            if not _is_temperature_rejected_error(exc):
+                raise
+            text, finish_reason, token_usage = _stream(use_temperature=False)
+
+        if finish_reason == "length":
+            raise PlanLlmTruncatedResponseError(
+                format_truncated_plan_response_error(
+                    stop_reason="length",
+                    max_output_tokens=effective_max_tokens,
+                    output_tokens=token_usage.get("output_tokens"),
                 )
-            if not event.choices:
-                continue
-            choice = event.choices[0]
-            if choice.finish_reason:
-                finish_reason = choice.finish_reason
-            delta = getattr(choice.delta, "content", None)
-            if delta:
-                text_parts.append(delta)
-        return "".join(text_parts).strip(), finish_reason, token_usage
-
-    try:
-        text, finish_reason, token_usage = _stream(use_temperature=True)
-    except BadRequestError as exc:
-        if not _is_temperature_rejected_error(exc):
-            raise
-        text, finish_reason, token_usage = _stream(use_temperature=False)
-
-    if finish_reason == "length":
-        raise PlanLlmTruncatedResponseError(
-            format_truncated_plan_response_error(
-                stop_reason="length",
-                max_output_tokens=effective_max_tokens,
-                output_tokens=token_usage.get("output_tokens"),
             )
-        )
-    if not text:
-        raise PlanLlmTruncatedResponseError(
-            "Das Modell hat keinen verwertbaren Text zurückgegeben. Bitte erneut versuchen."
-        )
-    return text, token_usage
+        if not text:
+            raise PlanLlmTruncatedResponseError(
+                "Das Modell hat keinen verwertbaren Text zurückgegeben. Bitte erneut versuchen."
+            )
+        return text, token_usage
 
 
 def _generate_xai_text_with_usage(
@@ -730,7 +925,7 @@ def _anthropic_final_message(client, create_kwargs: dict, *, use_temperature: bo
     return client.messages.create(**kwargs)
 
 
-def _build_anthropic_client(api_key: str, *, trust_env: bool):
+def _build_anthropic_client(api_key: str, *, trust_env: bool, http_client=None):
     """Anthropic-Client mit explizitem httpx-Transport.
 
     ``trust_env=False`` ignoriert kaputte System-/Env-Proxys (häufige Ursache
@@ -745,10 +940,11 @@ def _build_anthropic_client(api_key: str, *, trust_env: bool):
     except ImportError:  # pragma: no cover - ältere SDKs
         HttpClient = httpx.Client
 
-    http_client = HttpClient(
-        timeout=_LLM_REQUEST_TIMEOUT_SEC,
-        trust_env=trust_env,
-    )
+    if http_client is None:
+        http_client = HttpClient(
+            timeout=_LLM_REQUEST_TIMEOUT_SEC,
+            trust_env=trust_env,
+        )
     return Anthropic(
         api_key=api_key,
         http_client=http_client,
@@ -854,19 +1050,35 @@ def _generate_anthropic_text_with_usage(
     #    Request war oft schon angenommen; Retry = erneute Input-Rechnung.
     last_connection_error: BaseException | None = None
     response = None
+    import httpx
+
+    try:
+        from anthropic import DefaultHttpxClient as HttpClient
+    except ImportError:  # pragma: no cover - ältere SDKs
+        HttpClient = httpx.Client
+
     for trust_env in (True, False):
-        client = _build_anthropic_client(api_key, trust_env=trust_env)
-        try:
-            response = _call_anthropic_messages(client, create_kwargs)
-            break
-        except APIConnectionError as exc:
-            last_connection_error = exc
-            if _is_anthropic_billed_disconnect(exc):
+        with cancellable_httpx_client(
+            factory=HttpClient, trust_env=trust_env
+        ) as http:
+            client = _build_anthropic_client(
+                api_key, trust_env=trust_env, http_client=http
+            )
+            try:
+                response = _call_anthropic_messages(client, create_kwargs)
                 break
-            # Früher Connect-/Proxy-Fehler → ein zweiter Versuch ohne Env-Proxy.
-            if trust_env is False:
-                break
-            continue
+            except PlanLlmCancelledError:
+                raise
+            except APIConnectionError as exc:
+                if llm_cancel_requested():
+                    raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.") from exc
+                last_connection_error = exc
+                if _is_anthropic_billed_disconnect(exc):
+                    break
+                # Früher Connect-/Proxy-Fehler → ein zweiter Versuch ohne Env-Proxy.
+                if trust_env is False:
+                    break
+                continue
     if response is None:
         assert last_connection_error is not None
         raise PlanLlmConnectionError(

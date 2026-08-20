@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
@@ -16,6 +17,12 @@ from otio_app.services.api_keys import is_api_key_set
 from otio_app.services.gemini_client import (
     _extract_json,
     _get_client,
+)
+from otio_app.services.plan_llm_client import (
+    PlanLlmCancelledError,
+    abort_registered_llm_http,
+    cancellable_httpx_client,
+    llm_cancel_requested,
 )
 from otio_app.services.without_voiceover_enhanced.models import (
     CoverageGap,
@@ -729,16 +736,24 @@ def _generate_funnel_content(*, client: Any, model: str, contents: Any) -> Any:
         return client.models.generate_content(model=resolved, contents=contents)
 
     timeout_sec = float(FUNNEL_GEMINI_HARD_TIMEOUT_SEC)
+    deadline = time.monotonic() + timeout_sec
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="funnel-gemini")
     try:
         future = executor.submit(_call)
-        try:
-            return future.result(timeout=timeout_sec)
-        except FuturesTimeout as exc:
-            raise FunnelRankError(
-                f"Funnel-LLM Timeout nach {int(timeout_sec)}s "
-                f"(Modell {resolved}). Gap wird übersprungen."
-            ) from exc
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                abort_registered_llm_http()
+                raise FunnelRankError(
+                    f"Funnel-LLM Timeout nach {int(timeout_sec)}s "
+                    f"(Modell {resolved}). Gap wird übersprungen."
+                )
+            try:
+                return future.result(timeout=min(0.25, remaining))
+            except FuturesTimeout:
+                if llm_cancel_requested():
+                    abort_registered_llm_http()
+                    raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.")
     finally:
         # wait=False: sonst blockiert shutdown() weiter auf dem hängenden Call.
         executor.shutdown(wait=False, cancel_futures=True)
@@ -747,22 +762,30 @@ def _generate_funnel_content(*, client: Any, model: str, contents: Any) -> Any:
 def default_funnel_text_llm(prompt: str, *, model: str = DEFAULT_FUNNEL_MODEL) -> str:
     if not is_api_key_set("GEMINI_API_KEY"):
         raise FunnelRankError("GEMINI_API_KEY fehlt.")
-    client = _get_client(timeout_ms=FUNNEL_GEMINI_TIMEOUT_MS)
     from google.genai import types
 
-    try:
-        response = _generate_funnel_content(
-            client=client,
-            model=model,
-            contents=[
-                types.Content(role="user", parts=[types.Part.from_text(text=prompt)])
-            ],
-        )
-    except FunnelRankError:
-        raise
-    except Exception as exc:  # noqa: BLE001 — Timeout/API in FunnelRankError
-        raise FunnelRankError(f"Funnel-Text-LLM: {exc}") from exc
-    return (response.text or "").strip()
+    with cancellable_httpx_client() as http:
+        extra = {}
+        if http is not None:
+            extra["http_client"] = http
+        client = _get_client(timeout_ms=FUNNEL_GEMINI_TIMEOUT_MS, **extra)
+        try:
+            response = _generate_funnel_content(
+                client=client,
+                model=model,
+                contents=[
+                    types.Content(role="user", parts=[types.Part.from_text(text=prompt)])
+                ],
+            )
+        except PlanLlmCancelledError:
+            raise
+        except FunnelRankError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — Timeout/API in FunnelRankError
+            if llm_cancel_requested():
+                raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.") from exc
+            raise FunnelRankError(f"Funnel-Text-LLM: {exc}") from exc
+        return (response.text or "").strip()
 
 
 def default_funnel_vision_llm(
@@ -773,23 +796,31 @@ def default_funnel_vision_llm(
 ) -> str:
     if not is_api_key_set("GEMINI_API_KEY"):
         raise FunnelRankError("GEMINI_API_KEY fehlt.")
-    client = _get_client(timeout_ms=FUNNEL_GEMINI_TIMEOUT_MS)
     from google.genai import types
 
     parts: list = [types.Part.from_text(text=prompt)]
     for _label, data in images:
         parts.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
-    try:
-        response = _generate_funnel_content(
-            client=client,
-            model=model,
-            contents=[types.Content(role="user", parts=parts)],
-        )
-    except FunnelRankError:
-        raise
-    except Exception as exc:  # noqa: BLE001 — Timeout/API in FunnelRankError
-        raise FunnelRankError(f"Funnel-Vision-LLM: {exc}") from exc
-    return (response.text or "").strip()
+    with cancellable_httpx_client() as http:
+        extra = {}
+        if http is not None:
+            extra["http_client"] = http
+        client = _get_client(timeout_ms=FUNNEL_GEMINI_TIMEOUT_MS, **extra)
+        try:
+            response = _generate_funnel_content(
+                client=client,
+                model=model,
+                contents=[types.Content(role="user", parts=parts)],
+            )
+        except PlanLlmCancelledError:
+            raise
+        except FunnelRankError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — Timeout/API in FunnelRankError
+            if llm_cancel_requested():
+                raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.") from exc
+            raise FunnelRankError(f"Funnel-Vision-LLM: {exc}") from exc
+        return (response.text or "").strip()
 
 
 # Kompatibilitäts-Aliase (ältere Imports/Tests).

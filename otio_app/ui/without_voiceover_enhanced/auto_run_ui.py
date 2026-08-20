@@ -98,7 +98,11 @@ def _render_running_auto_run_status(project_id: str, key_scope: str) -> None:
         state = manager.get_state(project_id)
         if state is None or state.status != JobStatus.RUNNING:
             return
-        extra = " **(Stop angefordert …)**" if state.cancel_requested else ""
+        extra = (
+            " **(Stop angefordert — LLM-Call wird abgebrochen …)**"
+            if state.cancel_requested
+            else ""
+        )
         detail = state.message or state.step_label or "läuft"
         if state.item_total > 0 and state.item_label:
             detail = (
@@ -188,6 +192,7 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
         "OTIO-Export → YouTube-Metadaten. Quiz bleibt manuell unter Final Output. "
         "LLM-/TTS-Calls bleiben einzeln. Offene Gaps nach dem Funnel gelten als Fehler. "
         "Fertige Schritte werden übersprungen."
+        " Stop bricht auch einen laufenden LLM-Call ab (nicht erst danach)."
     )
     start_disabled = running or other_running
     help_text = None

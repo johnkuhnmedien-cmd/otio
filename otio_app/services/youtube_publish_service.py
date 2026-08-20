@@ -22,7 +22,10 @@ from otio_app.services.otio_exporter import (
     _compute_timeline_sections,
 )
 from otio_app.services.otio_media_transform import format_folder_display_name
-from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
+from otio_app.services.plan_llm_client import (
+    generate_plan_text_with_metadata,
+    reraise_if_llm_cancelled,
+)
 from otio_app.services.voiceover_generation.final_plan_service import (
     load_confirmed_voiceover_project_plan,
 )
@@ -509,6 +512,7 @@ def _call_youtube_llm(
     try:
         llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
     except Exception as exc:  # noqa: BLE001 — UI soll Fehler als FAIL sehen, nicht crashen
+        reraise_if_llm_cancelled(exc)
         write_llm_raw_response(run_dir, raw_text=f"ERROR: {exc}", provider=provider, model=model)
         write_llm_parsed_response(run_dir, {"parse_error": str(exc)})
         write_llm_manifest(

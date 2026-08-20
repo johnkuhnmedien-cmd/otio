@@ -16,7 +16,9 @@ from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.plan_llm_client import (
     PlanImageAttachment,
+    PlanLlmCancelledError,
     generate_plan_text_with_metadata,
+    reraise_if_llm_cancelled,
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     format_shot_constraints_for_prompt,
@@ -2184,7 +2186,10 @@ def generate_unified_cut_for_folder(
             pause_count=len(plan.pause_directives),
             gap_count=len(coverage.gaps),
         )
+    except PlanLlmCancelledError:
+        raise
     except Exception as exc:  # noqa: BLE001
+        reraise_if_llm_cancelled(exc)
         return FolderUnifiedCutResult(
             folder_name=display_name,
             status="FAIL",

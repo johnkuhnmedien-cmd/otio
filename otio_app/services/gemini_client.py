@@ -115,7 +115,7 @@ def format_gemini_model_label(model_id: str) -> str:
     return GEMINI_MODEL_LABELS.get(model_id, model_id)
 
 
-def _get_client(*, timeout_ms: int | None = None):
+def _get_client(*, timeout_ms: int | None = None, http_client=None):
     api_key = get_api_key("GEMINI_API_KEY")
     if not api_key:
         raise GeminiNotConfiguredError(
@@ -123,15 +123,19 @@ def _get_client(*, timeout_ms: int | None = None):
             "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
     from google import genai
-
-    if timeout_ms is None:
-        return genai.Client(api_key=api_key)
     from google.genai import types
 
-    return genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=int(timeout_ms)),
-    )
+    options: dict = {}
+    if timeout_ms is not None:
+        options["timeout"] = int(timeout_ms)
+    if http_client is not None:
+        options["httpx_client"] = http_client
+    if options:
+        return genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(**options),
+        )
+    return genai.Client(api_key=api_key)
 
 
 def _extract_json(text: str) -> Any:
