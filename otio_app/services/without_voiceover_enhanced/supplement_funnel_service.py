@@ -233,6 +233,7 @@ def _gap_already_export_ready(
     trust_accepted: bool = True,
     gap: CoverageGap | None = None,
     expected_run_id: str = "",
+    export_ready_supplements: list[StockCandidate] | None = None,
 ) -> bool:
     """Idempotenz: Gap erfüllt nur bei merge-fähigem Kandidaten (E2E-4).
 
@@ -267,7 +268,12 @@ def _gap_already_export_ready(
         return False
 
     if trust_accepted:
-        for supplement in list_export_ready_supplements(project):
+        ready = (
+            export_ready_supplements
+            if export_ready_supplements is not None
+            else list_export_ready_supplements(project)
+        )
+        for supplement in ready:
             if (supplement.gap_id or "") != gap_id:
                 continue
             if expected_run_id:
@@ -767,6 +773,7 @@ def list_open_funnel_gap_ids(project: Project) -> list[str]:
         previous, expected_run_id=expected_run_id
     )
     active_previous = previous if funnel_ok else None
+    supplements = list_export_ready_supplements(project)
     open_ids: list[str] = []
     for gap in coverage.gaps:
         if not _gap_already_export_ready(
@@ -776,6 +783,7 @@ def list_open_funnel_gap_ids(project: Project) -> list[str]:
             trust_accepted=True,
             gap=gap,
             expected_run_id=expected_run_id,
+            export_ready_supplements=supplements,
         ):
             open_ids.append(gap.gap_id)
     return open_ids
