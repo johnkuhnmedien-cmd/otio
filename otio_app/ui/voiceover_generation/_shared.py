@@ -124,7 +124,8 @@ LLM_INPUT_INFO = {
         "ab Kapitel 3: erster/letzter Satz der zwei Vorgänger (Opening-Varianz) · "
         "Kontrast/Gemeinsamkeit/Übergänge nur bei Dramaturgie-Brief · "
         "Vorgänger-/Nachfolger-Kapitel · Style Profile · verifizierte "
-        "Fakten/Metadaten. LLM liefert Skript + rhetoric_usage. "
+        "Fakten/Metadaten · am letzten Kapitel optional Serie-Brücke zum "
+        "anderen Film (keine YouTube-CTA). LLM liefert Skript + rhetoric_usage. "
         "Ein Call = nur dieses Kapitel — kein Inventar, keine Asset-Zuordnung."
     ),
     "enhanced_script_revision": (

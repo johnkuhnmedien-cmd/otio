@@ -175,6 +175,11 @@ class ProjectBrief(BaseModel):
     global_extra_prompt: str = ""
     # Drei Beispieltitel als Inspiration für den Titel-LLM — keine starre Vorlage.
     title_references: list[str] = Field(default_factory=list)
+    # Letztes Kapitel: dokumentarische Brücke zu einem anderen Film der Serie.
+    series_bridge_enabled: bool = False
+    series_bridge_destination: str = ""
+    series_bridge_hook_facts: str = ""
+    series_bridge_angle: str = ""
 
 
 class ProjectBriefLanguageDefaults(BaseModel):

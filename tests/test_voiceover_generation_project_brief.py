@@ -121,6 +121,10 @@ def test_save_and_load_project_brief_roundtrip(tmp_path: Path) -> None:
         forbidden_phrases=["breathtaking", "must-see"],
         global_extra_prompt="Schreibe wie ein Naturfilm-Kommentator.",
         title_references=["Die Wunder von Italien", "The Wonders of Japan"],
+        series_bridge_enabled=True,
+        series_bridge_destination="Griechenland",
+        series_bridge_hook_facts="Die Adria verbindet beide Küsten.",
+        series_bridge_angle="gleiches Meer, anderes Licht",
     )
     save_project_brief(project, brief)
 
@@ -132,6 +136,10 @@ def test_save_and_load_project_brief_roundtrip(tmp_path: Path) -> None:
     assert loaded.negative_rule_flags == {"no_invented_facts": True, "no_repetition": False}
     assert loaded.forbidden_phrases == ["breathtaking", "must-see"]
     assert loaded.global_extra_prompt == "Schreibe wie ein Naturfilm-Kommentator."
+    assert loaded.series_bridge_enabled is True
+    assert loaded.series_bridge_destination == "Griechenland"
+    assert loaded.series_bridge_hook_facts == "Die Adria verbindet beide Küsten."
+    assert loaded.series_bridge_angle == "gleiches Meer, anderes Licht"
 
 
 def test_load_project_brief_returns_default_when_missing(tmp_path: Path) -> None:
