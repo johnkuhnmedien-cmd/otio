@@ -1610,3 +1610,60 @@ def test_enhanced_navigation_includes_auto_run_page() -> None:
     assert PAGE_AUTO_RUN == "▶ Auto-Lauf"
     assert PAGE_AUTO_RUN in VOICEOVER_GEN_ENHANCED_NAVIGATION_OPTIONS
     assert PAGE_AUTO_RUN not in VOICEOVER_GEN_NAVIGATION_OPTIONS
+
+
+def test_run_otio_emits_media_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    messages: list[tuple[str, dict]] = []
+
+    def fake_export(_project, **kwargs):
+        callback = kwargs.get("progress_callback")
+        assert kwargs.get("should_cancel") is not None
+        if callback is not None:
+            callback("Athens", 2, 8)
+        return Path("/tmp/PT_Greece_enhanced.otio")
+
+    monkeypatch.setattr(auto_run, "export_all_chapters_otio", fake_export)
+    monkeypatch.setattr(auto_run, "otio_export_complete", lambda _p: False)
+
+    auto_run._run_otio(
+        project,
+        skip_done=False,
+        emit=lambda step, message, **kwargs: messages.append((message, kwargs)),
+        finish=lambda _sid, *, skipped: None,
+        cancelled=lambda: False,
+        checkpoint=lambda _sid: None,
+    )
+    progress = [item for item in messages if "2/8" in item[0]]
+    assert progress
+    assert progress[0][1].get("item_index") == 2
+    assert progress[0][1].get("item_total") == 8
+    assert progress[0][1].get("item_label") == "Athens"
+
+
+def test_run_otio_stop_raises_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        EnhancedOtioExportCancelled,
+    )
+
+    project = _project(tmp_path)
+
+    def fake_export(_project, **kwargs):
+        raise EnhancedOtioExportCancelled("OTIO-Export abgebrochen.")
+
+    monkeypatch.setattr(auto_run, "export_all_chapters_otio", fake_export)
+    monkeypatch.setattr(auto_run, "otio_export_complete", lambda _p: False)
+
+    with pytest.raises(EnhancedAutoRunCancelled):
+        auto_run._run_otio(
+            project,
+            skip_done=False,
+            emit=lambda *_a, **_k: None,
+            finish=lambda _sid, *, skipped: None,
+            cancelled=lambda: True,
+            checkpoint=lambda _sid: None,
+        )

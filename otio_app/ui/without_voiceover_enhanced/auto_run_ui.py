@@ -83,7 +83,7 @@ def render_enhanced_auto_run_page() -> None:
         "**① Analysen** und **SFX** bleiben manuell. Danach: Stocksuche (Wikimedia, Openverse, "
         "Archive.org) → alle offenen Gaps → Karten (Plan, Koordinaten, Rendern, HD max. 4 parallel) → "
         "(optional) Python Timing (Kapitel parallel) → "
-        "ElevenLabs Music → OTIO → YouTube-Metadaten. Quiz bleibt manuell unter Final Output."
+        "ElevenLabs Music → OTIO (Intro + alle Kapitel, Still-Holds parallel) → YouTube-Metadaten. Quiz bleibt manuell unter Final Output."
     )
     from otio_app.ui.project_context import render_project_selector
 
@@ -200,7 +200,7 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
         "alle Kapitel-Cuts → Stocksuche (Wikimedia/Openverse/Archive.org) → "
         "alle offenen Gaps. **bis Funnel** stoppt dort; **bis YouTube** macht "
         "weiter mit Karten (HD max. 4 parallel) → Python Timing (Kapitel parallel, max. 8) → ElevenLabs Music → "
-        "OTIO-Export → YouTube-Metadaten. Quiz bleibt manuell unter Final Output. "
+        "OTIO-Export (Intro + alle Kapitel, Still-Holds parallel, HD max. 4) → YouTube-Metadaten. Quiz bleibt manuell unter Final Output. "
         "LLM-/TTS-Calls bleiben einzeln. Offene Gaps nach dem Funnel gelten als Fehler. "
         "Fertige Schritte werden übersprungen."
         " Stop bricht auch einen laufenden LLM-Call ab (nicht erst danach)."

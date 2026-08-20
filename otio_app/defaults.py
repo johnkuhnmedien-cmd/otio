@@ -239,6 +239,10 @@ ENHANCED_CUT_LLM_MODEL_LABELS: dict[str, str] = {
 # Python-Timing darf parallel laufen (lokal/CPU, kein Provider-Rate-Limit).
 ENHANCED_CHAPTER_LLM_MAX_WORKERS = 1
 ENHANCED_CHAPTER_TIMING_MAX_WORKERS = 8
+# OTIO-Export: Still-Hold (zoompan) und Aspect-Fill sind lokales ffmpeg.
+# Auto-Lauf und „Alle OTIO“ laufen sonst minutenlang strikt nacheinander.
+ENHANCED_OTIO_MEDIA_MAX_WORKERS = 4
+ENHANCED_OTIO_MEDIA_MAX_WORKERS_4K = 2
 # Supplement-Funnel (Text + Thumbnail-Vision): nur Gemini — Vision-Pfad
 # nutzt google.genai mit Bild-Parts. Default bleibt 3.5 Flash; Flash Lite
 # ist die günstige Experimentier-Option.

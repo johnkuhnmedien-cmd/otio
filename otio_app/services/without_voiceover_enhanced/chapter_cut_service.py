@@ -1144,6 +1144,9 @@ def export_all_chapters_otio(
     basename: str | None = None,
     allow_errors: bool = True,
     include_intro: bool = True,
+    progress_callback=None,
+    should_cancel=None,
+    max_workers: int | None = None,
 ) -> Path:
     """Merged Intro + alle Kapitel → eine OTIO (+ globale resolved_timeline.json)."""
     merged = build_merged_resolved_timeline(
@@ -1158,4 +1161,7 @@ def export_all_chapters_otio(
         allow_errors=allow_errors,
         resolved=merged,
         timeline_name=f"{project.name} enhanced",
+        progress_callback=progress_callback,
+        should_cancel=should_cancel,
+        max_workers=max_workers,
     )

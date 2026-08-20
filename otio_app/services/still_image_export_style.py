@@ -17,7 +17,7 @@ from pathlib import Path
 
 from otio_app.models import Project
 from otio_app.project_layout import get_folder_clean_output_dir, safe_folder_slug
-from otio_app.services.media_utils import is_image_media
+from otio_app.services.media_utils import is_image_media, lock_for_path
 
 __all__ = [
     "STILL_BACKGROUND_VINTAGE",
@@ -294,23 +294,35 @@ def ensure_styled_still_for_export(
         except OSError:
             pass
 
-    try:
-        render_styled_still_image(
-            source,
-            output,
-            width=width,
-            height=height,
-            zoom=zoom,
-            background_style=style,
-        )
-        token_path.write_text(token, encoding="utf-8")
-        if notes is not None:
-            notes.append(
-                f"{original_path.name}: Still-Style gerendert "
-                f"(zoom={zoom:.2f}, background={style}) → `{output.name}`"
+    with lock_for_path(output):
+        if output.is_file() and token_path.is_file():
+            try:
+                if (
+                    token_path.read_text(encoding="utf-8").strip() == token
+                    and output.stat().st_size > 0
+                ):
+                    return output
+            except OSError:
+                pass
+        try:
+            render_styled_still_image(
+                source,
+                output,
+                width=width,
+                height=height,
+                zoom=zoom,
+                background_style=style,
             )
-        return output
-    except Exception as exc:  # noqa: BLE001 — Export soll Original behalten
-        if notes is not None:
-            notes.append(f"{original_path.name}: Still-Style fehlgeschlagen ({exc}) — Original verwendet.")
-        return source
+            token_path.write_text(token, encoding="utf-8")
+            if notes is not None:
+                notes.append(
+                    f"{original_path.name}: Still-Style gerendert "
+                    f"(zoom={zoom:.2f}, background={style}) → `{output.name}`"
+                )
+            return output
+        except Exception as exc:  # noqa: BLE001 — Export soll Original behalten
+            if notes is not None:
+                notes.append(
+                    f"{original_path.name}: Still-Style fehlgeschlagen ({exc}) — Original verwendet."
+                )
+            return source

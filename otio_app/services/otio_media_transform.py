@@ -13,7 +13,7 @@ from otio_app.services.clean_media import (
     load_clean_media_manifest,
     probe_media,
 )
-from otio_app.services.media_utils import is_image_media
+from otio_app.services.media_utils import is_image_media, lock_for_path
 
 
 def compute_fill_zoom_factor(
@@ -252,62 +252,65 @@ def ensure_export_media_for_export(
         width=project.width,
         height=project.height,
     )
-    if path_is_readable_file(filled_candidate) and filled_candidate.stat().st_size >= 1024:
-        out_w, out_h = media_resolution_probe(filled_candidate)
-        if media_matches_target_resolution(
-            out_w, out_h, project.width, project.height
-        ):
-            if notes is not None and src_w and src_h and out_w and out_h:
-                notes.append(
-                    f"{original_path.name}: Cache {src_w}×{src_h} → "
-                    f"{out_w}×{out_h} · `{filled_candidate}`"
-                )
-            return filled_candidate.resolve()
+    with lock_for_path(filled_candidate):
+        if path_is_readable_file(filled_candidate) and filled_candidate.stat().st_size >= 1024:
+            out_w, out_h = media_resolution_probe(filled_candidate)
+            if media_matches_target_resolution(
+                out_w, out_h, project.width, project.height
+            ):
+                if notes is not None and src_w and src_h and out_w and out_h:
+                    notes.append(
+                        f"{original_path.name}: Cache {src_w}×{src_h} → "
+                        f"{out_w}×{out_h} · `{filled_candidate}`"
+                    )
+                return filled_candidate.resolve()
 
-    def _resolved_path(entry) -> Path:
-        if entry.clean_path:
-            return Path(entry.clean_path).expanduser().resolve()
-        return fallback
+        def _resolved_path(entry) -> Path:
+            if entry.clean_path:
+                return Path(entry.clean_path).expanduser().resolve()
+            return fallback
 
-    entry = process_media_file(
-        project,
-        folder_name,
-        original_path,
-        auto_zoom_fill=auto_zoom_fill,
-    )
-    media_path = _resolved_path(entry)
-
-    out_w, out_h = media_resolution_probe(media_path)
-    still_wrong = auto_zoom_fill and needs_zoom and not media_matches_target_resolution(
-        out_w,
-        out_h,
-        project.width,
-        project.height,
-    )
-    if still_wrong:
         entry = process_media_file(
             project,
             folder_name,
             original_path,
-            force_transcode=True,
             auto_zoom_fill=auto_zoom_fill,
         )
         media_path = _resolved_path(entry)
-        if entry.status == CLEAN_STATUS_FAILED and entry.error and notes is not None:
-            notes.append(f"{original_path.name}: Export-Transcode fehlgeschlagen — {entry.error}")
+
         out_w, out_h = media_resolution_probe(media_path)
-
-    if auto_zoom_fill and needs_zoom:
-        warning = aspect_fill_warning(project, media_path, label=original_path.name)
-        if warning:
-            if notes is not None:
-                notes.append(warning)
-        elif notes is not None and src_w and src_h and out_w and out_h:
-            notes.append(
-                f"{original_path.name}: {src_w}×{src_h} → {out_w}×{out_h} · `{media_path}`"
+        still_wrong = auto_zoom_fill and needs_zoom and not media_matches_target_resolution(
+            out_w,
+            out_h,
+            project.width,
+            project.height,
+        )
+        if still_wrong:
+            entry = process_media_file(
+                project,
+                folder_name,
+                original_path,
+                force_transcode=True,
+                auto_zoom_fill=auto_zoom_fill,
             )
+            media_path = _resolved_path(entry)
+            if entry.status == CLEAN_STATUS_FAILED and entry.error and notes is not None:
+                notes.append(
+                    f"{original_path.name}: Export-Transcode fehlgeschlagen — {entry.error}"
+                )
+            out_w, out_h = media_resolution_probe(media_path)
 
-    return media_path
+        if auto_zoom_fill and needs_zoom:
+            warning = aspect_fill_warning(project, media_path, label=original_path.name)
+            if warning:
+                if notes is not None:
+                    notes.append(warning)
+            elif notes is not None and src_w and src_h and out_w and out_h:
+                notes.append(
+                    f"{original_path.name}: {src_w}×{src_h} → {out_w}×{out_h} · `{media_path}`"
+                )
+
+        return media_path
 
 
 def ensure_zoomed_media_for_export(
