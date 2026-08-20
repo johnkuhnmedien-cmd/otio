@@ -19,6 +19,8 @@ from otio_app.models import Project
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.gemini_client import _extract_json
 from otio_app.services.plan_llm_client import (
+    PlanLlmCancelledError,
+    PlanLlmNotConfiguredError,
     generate_plan_text_with_metadata,
     reraise_if_llm_cancelled,
 )
@@ -627,6 +629,30 @@ Return the complete required JSON again.
 """
 
 
+# Wie Unified-Cut: ein automatischer Zweitversuch nach Fehler hinter dem LLM-Call.
+SCRIPT_LLM_ATTEMPTS = 2
+
+
+def _generic_script_retry_instruction(error: str) -> str:
+    """Repair-Hinweis, wenn die erste Antwort nach dem LLM-Call unbrauchbar war."""
+    detail = (error or "").strip()
+    if len(detail) > 500:
+        detail = detail[:500] + "…"
+    return (
+        "RETRY REQUIRED\n"
+        "The previous model response could not be used after the LLM call.\n"
+        f"Error: {detail}\n"
+        "Return a complete valid JSON object that satisfies the schema.\n"
+        "Do not repeat the previous mistake."
+    )
+
+
+def _notify_llm_retry(on_retry: Callable[[str], None] | None, error: str) -> None:
+    if on_retry is None:
+        return
+    on_retry((error or "").strip() or "unbekannter Fehler")
+
+
 def _compose_script_repair_instruction(
     *,
     link_errors: list[str],
@@ -786,6 +812,7 @@ def revise_enhanced_script_for_folder(
     model: str = "gpt-5.4-mini",
     max_output_tokens: int | None = DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS,
     llm_callable: Callable[..., Any] | None = None,
+    on_retry: Callable[[str], None] | None = None,
 ) -> FolderScriptBuildResult:
     """Revidiert ein bestehendes Kapitel-Skript — nur Freitext + aktuelles Skript ans LLM."""
     instructions = (editor_instructions or "").strip()
@@ -813,43 +840,70 @@ def revise_enhanced_script_for_folder(
         language=project.language,
     )
     model_id = resolve_llm_model_id(provider, model)
-    try:
-        if llm_callable is not None:
-            raw = llm_callable(
-                prompt=prompt,
-                model=model_id,
-                max_output_tokens=max_output_tokens,
+    last_error = "Freitext-Nachbearbeitung fehlgeschlagen."
+    for attempt in range(SCRIPT_LLM_ATTEMPTS):
+        attempt_prompt = prompt
+        if attempt > 0:
+            attempt_prompt = (
+                f"{prompt}\n\n{_generic_script_retry_instruction(last_error)}"
             )
-            raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
-        else:
-            raw_text = generate_plan_text_with_metadata(
-                prompt=prompt,
-                model=model_id,
-                max_output_tokens=max_output_tokens,
-            ).raw_text
-        revised = _strip_plain_narration_response(raw_text)
-        if not revised:
+        try:
+            if llm_callable is not None:
+                raw = llm_callable(
+                    prompt=attempt_prompt,
+                    model=model_id,
+                    max_output_tokens=max_output_tokens,
+                )
+                raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+            else:
+                raw_text = generate_plan_text_with_metadata(
+                    prompt=attempt_prompt,
+                    model=model_id,
+                    max_output_tokens=max_output_tokens,
+                ).raw_text
+            revised = _strip_plain_narration_response(raw_text)
+            if not revised:
+                last_error = "LLM-Antwort war leer."
+                if attempt + 1 >= SCRIPT_LLM_ATTEMPTS:
+                    return FolderScriptBuildResult(
+                        folder_name=folder_name,
+                        status="FAIL",
+                        error=last_error,
+                    )
+                _notify_llm_retry(on_retry, last_error)
+                continue
+            updated = update_folder_chapter_narration(project, folder_name, revised)
+            return FolderScriptBuildResult(
+                folder_name=folder_name,
+                status="PASS",
+                document=updated,
+                segment_count=sum(
+                    1 for seg in updated.segments if seg.folder_name == folder_name
+                ),
+            )
+        except PlanLlmCancelledError:
+            raise
+        except PlanLlmNotConfiguredError as exc:
             return FolderScriptBuildResult(
                 folder_name=folder_name,
                 status="FAIL",
-                error="LLM-Antwort war leer.",
+                error=str(exc),
             )
-        updated = update_folder_chapter_narration(project, folder_name, revised)
-        return FolderScriptBuildResult(
-            folder_name=folder_name,
-            status="PASS",
-            document=updated,
-            segment_count=sum(
-                1 for seg in updated.segments if seg.folder_name == folder_name
-            ),
-        )
-    except Exception as exc:  # noqa: BLE001
-        reraise_if_llm_cancelled(exc)
-        return FolderScriptBuildResult(
-            folder_name=folder_name,
-            status="FAIL",
-            error=str(exc),
-        )
+        except Exception as exc:  # noqa: BLE001
+            reraise_if_llm_cancelled(exc)
+            last_error = str(exc)
+            if attempt + 1 >= SCRIPT_LLM_ATTEMPTS:
+                return FolderScriptBuildResult(
+                    folder_name=folder_name,
+                    status="FAIL",
+                    error=last_error,
+                )
+            _notify_llm_retry(on_retry, last_error)
+    return FolderScriptBuildResult(
+        folder_name=folder_name,
+        status="FAIL",
+        error=last_error,
+    )
 
 
 def revise_all_enhanced_scripts(
@@ -902,6 +956,7 @@ def generate_enhanced_script_for_folder(
     model: str = "gpt-5.4-mini",
     max_output_tokens: int | None = DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS,
     llm_callable: Callable[..., Any] | None = None,
+    on_retry: Callable[[str], None] | None = None,
 ) -> FolderScriptBuildResult:
     entries = list_enabled_dramaturgy_folders(project)
     if not entries:
@@ -968,8 +1023,8 @@ def generate_enhanced_script_for_folder(
     model_id = resolve_llm_model_id(provider, model)
     repair_instruction = ""
     last_error = "Skripterzeugung fehlgeschlagen."
-    try:
-        for attempt in range(2):
+    for attempt in range(SCRIPT_LLM_ATTEMPTS):
+        try:
             prompt = build_enhanced_folder_script_prompt(
                 project_brief_text=_brief_text(project),
                 film_context_text=_film_context_text(plan),
@@ -1023,11 +1078,15 @@ def generate_enhanced_script_for_folder(
             )
             if not partial.segments:
                 last_error = "LLM-Antwort enthielt keine Segmente."
-                return FolderScriptBuildResult(
-                    folder_name=folder_name,
-                    status="FAIL",
-                    error=last_error,
-                )
+                if attempt + 1 >= SCRIPT_LLM_ATTEMPTS:
+                    return FolderScriptBuildResult(
+                        folder_name=folder_name,
+                        status="FAIL",
+                        error=last_error,
+                    )
+                repair_instruction = _generic_script_retry_instruction(last_error)
+                _notify_llm_retry(on_retry, last_error)
+                continue
 
             payload = _extract_json(raw_text) if isinstance(raw_text, str) else raw_text
             payload_dict = payload if isinstance(payload, dict) else None
@@ -1042,11 +1101,16 @@ def generate_enhanced_script_for_folder(
                 narration_full=partial.narration_full,
             )
             if rhetoric_errors:
-                return FolderScriptBuildResult(
-                    folder_name=folder_name,
-                    status="FAIL",
-                    error="Rhetoric-Ledger: " + " ".join(rhetoric_errors),
-                )
+                last_error = "Rhetoric-Ledger: " + " ".join(rhetoric_errors)
+                if attempt + 1 >= SCRIPT_LLM_ATTEMPTS:
+                    return FolderScriptBuildResult(
+                        folder_name=folder_name,
+                        status="FAIL",
+                        error=last_error,
+                    )
+                repair_instruction = _generic_script_retry_instruction(last_error)
+                _notify_llm_retry(on_retry, last_error)
+                continue
 
             opening_for_validation = remove_opening_for_folder(
                 load_opening_inventory(project), folder_name
@@ -1057,11 +1121,16 @@ def generate_enhanced_script_for_folder(
                 folder_name=folder_name,
             )
             if opening_errors:
-                return FolderScriptBuildResult(
-                    folder_name=folder_name,
-                    status="FAIL",
-                    error="Satzanfang-Inventar: " + " ".join(opening_errors),
-                )
+                last_error = "Satzanfang-Inventar: " + " ".join(opening_errors)
+                if attempt + 1 >= SCRIPT_LLM_ATTEMPTS:
+                    return FolderScriptBuildResult(
+                        folder_name=folder_name,
+                        status="FAIL",
+                        error=last_error,
+                    )
+                repair_instruction = _generic_script_retry_instruction(last_error)
+                _notify_llm_retry(on_retry, last_error)
+                continue
 
             link_errors = detect_chapter_link_violations(
                 partial.narration_full,
@@ -1095,42 +1164,43 @@ def generate_enhanced_script_for_folder(
 
             if link_errors or style_errors or cta_errors:
                 last_error = " ".join(link_errors + style_errors + cta_errors)
-                if attempt == 0:
-                    pause_errs = [
-                        err
-                        for err in style_errors
-                        if "zeitlich markierte Pausen" in err
-                        or "author_pause_after_seconds" in err
-                    ]
-                    other_style = [
-                        err for err in style_errors if err not in pause_errs
-                    ]
-                    if pause_errs and not other_style:
-                        style_repair = RAW_STYLE_PAUSE_REPAIR_INSTRUCTION
-                    elif pause_errs and other_style:
-                        style_repair = (
-                            RAW_STYLE_REPAIR_INSTRUCTION
-                            + "\n\n"
-                            + RAW_STYLE_PAUSE_REPAIR_INSTRUCTION
-                        )
-                    else:
-                        style_repair = RAW_STYLE_REPAIR_INSTRUCTION
-                    repair_instruction = _compose_script_repair_instruction(
-                        link_errors=link_errors,
-                        style_errors=style_errors,
-                        cta_errors=cta_errors,
-                        series_bridge_active=series_bridge_active,
-                        style_repair=style_repair if style_errors else "",
+                if attempt + 1 >= SCRIPT_LLM_ATTEMPTS:
+                    return FolderScriptBuildResult(
+                        folder_name=folder_name,
+                        status="FAIL",
+                        error=(
+                            "Kapitel-Narration nach Repair weiterhin ungültig: "
+                            + last_error
+                        ),
                     )
-                    continue
-                return FolderScriptBuildResult(
-                    folder_name=folder_name,
-                    status="FAIL",
-                    error=(
-                        "Kapitel-Narration nach Repair weiterhin ungültig: "
-                        + last_error
-                    ),
+                pause_errs = [
+                    err
+                    for err in style_errors
+                    if "zeitlich markierte Pausen" in err
+                    or "author_pause_after_seconds" in err
+                ]
+                other_style = [
+                    err for err in style_errors if err not in pause_errs
+                ]
+                if pause_errs and not other_style:
+                    style_repair = RAW_STYLE_PAUSE_REPAIR_INSTRUCTION
+                elif pause_errs and other_style:
+                    style_repair = (
+                        RAW_STYLE_REPAIR_INSTRUCTION
+                        + "\n\n"
+                        + RAW_STYLE_PAUSE_REPAIR_INSTRUCTION
+                    )
+                else:
+                    style_repair = RAW_STYLE_REPAIR_INSTRUCTION
+                repair_instruction = _compose_script_repair_instruction(
+                    link_errors=link_errors,
+                    style_errors=style_errors,
+                    cta_errors=cta_errors,
+                    series_bridge_active=series_bridge_active,
+                    style_repair=style_repair if style_errors else "",
                 )
+                _notify_llm_retry(on_retry, last_error)
+                continue
 
             partial = partial.model_copy(
                 update={"source_style_context_hash": style_hash}
@@ -1175,19 +1245,31 @@ def generate_enhanced_script_for_folder(
                     1 for s in merged.segments if s.folder_name == folder_name
                 ),
             )
+        except PlanLlmCancelledError:
+            raise
+        except PlanLlmNotConfiguredError as exc:
+            return FolderScriptBuildResult(
+                folder_name=folder_name,
+                status="FAIL",
+                error=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            reraise_if_llm_cancelled(exc)
+            last_error = str(exc)
+            if attempt + 1 >= SCRIPT_LLM_ATTEMPTS:
+                return FolderScriptBuildResult(
+                    folder_name=folder_name,
+                    status="FAIL",
+                    error=last_error,
+                )
+            repair_instruction = _generic_script_retry_instruction(last_error)
+            _notify_llm_retry(on_retry, last_error)
 
-        return FolderScriptBuildResult(
-            folder_name=folder_name,
-            status="FAIL",
-            error=last_error,
-        )
-    except Exception as exc:  # noqa: BLE001
-        reraise_if_llm_cancelled(exc)
-        return FolderScriptBuildResult(
-            folder_name=folder_name,
-            status="FAIL",
-            error=str(exc),
-        )
+    return FolderScriptBuildResult(
+        folder_name=folder_name,
+        status="FAIL",
+        error=last_error,
+    )
 
 
 def generate_all_enhanced_scripts(

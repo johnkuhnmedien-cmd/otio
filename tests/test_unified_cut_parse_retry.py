@@ -6,8 +6,11 @@ import json
 import wave
 from pathlib import Path
 
+import pytest
+
 from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
 from otio_app.models import Project, ProjectMode
+from otio_app.services.plan_llm_client import PlanLlmCancelledError
 from otio_app.services.voiceover_generation.dramaturgy_service import (
     save_confirmed_dramaturgy,
 )
@@ -252,3 +255,67 @@ def test_generate_unified_cut_fails_after_two_parse_errors(
     assert result.status == "FAIL"
     assert calls["n"] == 2
     assert "Invariante" in (result.error or "")
+
+
+def test_generate_unified_cut_retries_once_on_llm_exception(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = _project(tmp_path)
+    _lock_and_time(project)
+    calls = {"n": 0}
+    retries: list[str] = []
+
+    def fake_llm(*, prompt: str, model: str, images=None):  # noqa: ANN001
+        del prompt, model, images
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("529 overloaded")
+        return json.dumps(_valid_payload())
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.cut_plan_service._local_assets_payload",
+        lambda *args, **kwargs: [
+            {
+                "asset_id": "loc_a",
+                "path": "Canyon/a.mp4",
+                "duration_seconds": 8.0,
+                "media_type": "video",
+            },
+            {
+                "asset_id": "loc_b",
+                "path": "Canyon/b.mp4",
+                "duration_seconds": 6.0,
+                "media_type": "video",
+            },
+        ],
+    )
+
+    result = generate_unified_cut_for_folder(
+        project, "Canyon", llm_callable=fake_llm, on_retry=retries.append
+    )
+    assert result.status == "PASS", result.error
+    assert calls["n"] == 2
+    assert retries
+    assert "529" in retries[0]
+
+
+def test_generate_unified_cut_does_not_retry_cancelled_llm(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = _project(tmp_path)
+    _lock_and_time(project)
+    calls = {"n": 0}
+
+    def fake_llm(*, prompt: str, model: str, images=None):  # noqa: ANN001
+        del prompt, model, images
+        calls["n"] += 1
+        raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.")
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.cut_plan_service._local_assets_payload",
+        lambda *args, **kwargs: [],
+    )
+
+    with pytest.raises(PlanLlmCancelledError):
+        generate_unified_cut_for_folder(project, "Canyon", llm_callable=fake_llm)
+    assert calls["n"] == 1

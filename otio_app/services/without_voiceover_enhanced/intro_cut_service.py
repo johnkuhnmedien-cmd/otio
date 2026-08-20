@@ -626,6 +626,7 @@ def generate_intro_unified_cut(
     provider: str = "openai",
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
+    on_retry: Callable[[str], None] | None = None,
 ) -> IntroCutGenerateResult:
     """Nur Intro: Unified-LLM mit gebündeltem Inventar + strong-only."""
     assert_enhanced_work_root(project)
@@ -658,6 +659,7 @@ def generate_intro_unified_cut(
         provider=provider,
         model=model,
         llm_callable=llm_callable,
+        on_retry=on_retry,
     )
     if result.status != "PASS" or result.plan is None:
         raise IntroCutError(result.error or "Intro Unified Cut fehlgeschlagen.")

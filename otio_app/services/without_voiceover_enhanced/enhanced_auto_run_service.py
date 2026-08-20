@@ -852,6 +852,13 @@ def _run_dramaturgy(
     finish("dramaturgy", skipped=False)
 
 
+def _short_retry_error(error: str) -> str:
+    detail = " ".join((error or "").strip().split())
+    if len(detail) > 180:
+        return detail[:180] + "…"
+    return detail or "unbekannter Fehler"
+
+
 def _run_scripts(
     project: Project,
     *,
@@ -903,6 +910,13 @@ def _run_scripts(
             entry.folder_name,
             provider=provider,
             model=model,
+            on_retry=lambda err, folder=entry.folder_name, idx=index: emit(
+                "scripts",
+                f"Fehler nach LLM — zweiter Versuch: {folder} ({_short_retry_error(err)})",
+                item_label=folder,
+                item_index=idx,
+                item_total=len(pending),
+            ),
         )
         if result.status != "PASS":
             raise EnhancedAutoRunError(
@@ -967,6 +981,13 @@ def _run_script_revise(
             editor_instructions=instructions,
             provider=provider,
             model=model,
+            on_retry=lambda err, folder=entry.folder_name, idx=index: emit(
+                "script_revise",
+                f"Fehler nach LLM — zweiter Versuch: {folder} ({_short_retry_error(err)})",
+                item_label=folder,
+                item_index=idx,
+                item_total=len(folders),
+            ),
         )
         if result.status != "PASS":
             raise EnhancedAutoRunError(
@@ -1106,7 +1127,13 @@ def _run_intro_cut(
         return
     emit("intro_cut", "Intro LLM Cut…")
     result = generate_intro_unified_cut(
-        project, provider=provider, model=model
+        project,
+        provider=provider,
+        model=model,
+        on_retry=lambda err: emit(
+            "intro_cut",
+            f"Fehler nach LLM — zweiter Versuch ({_short_retry_error(err)})",
+        ),
     )
     emit(
         "intro_cut",
@@ -1156,6 +1183,13 @@ def _run_chapter_cuts(
                 provider=provider,
                 model=model,
                 refresh_merged=False,
+                on_retry=lambda err, folder=name, idx=index: emit(
+                    "chapter_cuts",
+                    f"Fehler nach LLM — zweiter Versuch: {folder} ({_short_retry_error(err)})",
+                    item_label=folder,
+                    item_index=idx,
+                    item_total=total,
+                ),
             )
             generated += 1
         except PlanLlmCancelledError:
