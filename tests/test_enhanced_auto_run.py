@@ -1128,6 +1128,29 @@ def test_auto_run_status_overview_covers_every_step(tmp_path: Path) -> None:
     assert by_id["otio"].done is False
 
 
+def test_stock_funnel_status_waits_for_chapter_cuts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Alte erfüllte Gaps dürfen Stock/Funnel nicht abhaken, solange Cuts laufen."""
+    project = _project(tmp_path)
+    monkeypatch.setattr(auto_run, "list_open_funnel_gap_ids", lambda _p: [])
+    monkeypatch.setattr(
+        auto_run, "list_chapters_needing_unified_cut", lambda _p: ["Lake Hévíz"]
+    )
+    by_id = {row.step_id: row for row in auto_run.list_auto_run_step_statuses(project)}
+    assert by_id["chapter_cuts"].done is False
+    assert by_id["stock"].done is False
+    assert by_id["funnel"].done is False
+
+
+def test_format_auto_run_status_caption_is_one_line() -> None:
+    rows = [
+        auto_run.AutoRunStepStatus("brief", "①", "Brief", True),
+        auto_run.AutoRunStepStatus("stock", "⑧", "Stock", False),
+    ]
+    assert auto_run.format_auto_run_status_caption(rows) == "Brief ✓ · Stock —"
+
+
 def test_summarize_auto_run_stage_does_not_scan_later_checkers(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1428,6 +1451,8 @@ def test_auto_run_ui_exports_page_and_banner() -> None:
     assert 'key_scope == "auto_page"' in source
     assert "_render_auto_run_status_overview" in source
     assert "Statusübersicht" in source
+    assert "format_auto_run_status_caption" in source
+    assert "st.metric(item.short_label" not in source
     assert "YouTube Publish" in source
     assert "bis Funnel" in source
     assert "bis YouTube" in source

@@ -195,6 +195,7 @@ __all__ = [
     "auto_run_stop_step_id",
     "auto_run_steps_through",
     "format_auto_run_failure_message",
+    "format_auto_run_status_caption",
     "list_auto_run_step_statuses",
     "llm_cut_provider_model",
     "normalize_auto_run_stop_after",
@@ -343,6 +344,13 @@ class AutoRunStepStatus:
     label: str
     short_label: str
     done: bool
+
+
+def format_auto_run_status_caption(rows: list[AutoRunStepStatus]) -> str:
+    """Eine Zeile für die Statusübersicht statt riesiger Metric-Kacheln."""
+    return " · ".join(
+        f"{row.short_label} {'✓' if row.done else '—'}" for row in rows
+    )
 
 
 @dataclass(frozen=True)
@@ -1264,6 +1272,11 @@ def list_auto_run_step_statuses(
             funnel_gaps_done = gaps_done()
         return funnel_gaps_done
 
+    def stock_funnel_done() -> bool:
+        # Ohne fertige Cuts ist coverage_gaps.json oft noch der Stand *vorheriger*
+        # Läufe (alle Gaps erfüllt) — Stock/Funnel sähen dann fälschlich erledigt aus.
+        return intro_cut_done() and chapter_cuts_done() and gaps_done_cached()
+
     checkers: dict[str, Callable[[], bool]] = {
         "brief": brief_done,
         "style": style_done,
@@ -1275,8 +1288,8 @@ def list_auto_run_step_statuses(
         "tts": tts_done,
         "intro_cut": intro_cut_done,
         "chapter_cuts": chapter_cuts_done,
-        "stock": gaps_done_cached,
-        "funnel": gaps_done_cached,
+        "stock": stock_funnel_done,
+        "funnel": stock_funnel_done,
         "maps": lambda: maps_complete(project),
         "timing": timing_done,
         "music": lambda: _music_targets_complete(project),
