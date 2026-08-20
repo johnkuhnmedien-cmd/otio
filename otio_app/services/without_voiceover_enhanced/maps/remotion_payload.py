@@ -3,12 +3,21 @@
 No Thomas imports or absolute Thomas paths. Animation modes map
 ``opening`` → Remotion ``intro`` (ramp zoom) and ``transition`` → quadratic pan.
 Visible labels are localized; ``exportLabel`` keeps the dramaturgy original name.
+
+``item.country`` stays the shared family ``video_place`` (geocode / numeric id).
+The on-map ``countryLabel`` is translated to the project language here, right
+before render — there is no extra LLM step.
 """
 
 from __future__ import annotations
 
+import unicodedata
 import uuid
+from typing import NamedTuple
 
+from otio_app.services.voiceover_generation.project_brief_defaults_service import (
+    normalize_brief_language,
+)
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     ENGINE_STYLE_VERSION,
     MAP_ANIMATION_OPENING,
@@ -16,38 +25,405 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
     MapPlanItem,
 )
 
-_COUNTRY_NUMERIC: dict[str, str] = {
-    "usa": "840",
-    "united states": "840",
-    "united states of america": "840",
-    "america": "840",
-    "ireland": "372",
-    "eire": "372",
-    "éire": "372",
-    "greece": "300",
-    "griechenland": "300",
-    "hellas": "300",
-    "germany": "276",
-    "deutschland": "276",
-    "france": "250",
-    "frankreich": "250",
-    "italy": "380",
-    "italien": "380",
-    "italia": "380",
-    "spain": "724",
-    "spanien": "724",
-    "espana": "724",
-    "españa": "724",
-    "portugal": "620",
-    "united kingdom": "826",
-    "uk": "826",
-    "great britain": "826",
-    "austria": "040",
-    "österreich": "040",
-    "oesterreich": "040",
-    "switzerland": "756",
-    "schweiz": "756",
+_LABEL_LANGS = ("EN", "DE", "FR", "IT", "ES", "PT")
+
+
+class _Country(NamedTuple):
+    numeric: str
+    labels: dict[str, str]
+    aliases: tuple[str, ...] = ()
+
+
+# Canonical English key → ISO numeric id + display names in brief languages.
+_COUNTRIES: dict[str, _Country] = {
+    "albania": _Country(
+        "008",
+        {
+            "EN": "Albania",
+            "DE": "Albanien",
+            "FR": "Albanie",
+            "IT": "Albania",
+            "ES": "Albania",
+            "PT": "Albânia",
+        },
+    ),
+    "austria": _Country(
+        "040",
+        {
+            "EN": "Austria",
+            "DE": "Österreich",
+            "FR": "Autriche",
+            "IT": "Austria",
+            "ES": "Austria",
+            "PT": "Áustria",
+        },
+        ("oesterreich",),
+    ),
+    "belgium": _Country(
+        "056",
+        {
+            "EN": "Belgium",
+            "DE": "Belgien",
+            "FR": "Belgique",
+            "IT": "Belgio",
+            "ES": "Bélgica",
+            "PT": "Bélgica",
+        },
+    ),
+    "bulgaria": _Country(
+        "100",
+        {
+            "EN": "Bulgaria",
+            "DE": "Bulgarien",
+            "FR": "Bulgarie",
+            "IT": "Bulgaria",
+            "ES": "Bulgaria",
+            "PT": "Bulgária",
+        },
+    ),
+    "croatia": _Country(
+        "191",
+        {
+            "EN": "Croatia",
+            "DE": "Kroatien",
+            "FR": "Croatie",
+            "IT": "Croazia",
+            "ES": "Croacia",
+            "PT": "Croácia",
+        },
+    ),
+    "cyprus": _Country(
+        "196",
+        {
+            "EN": "Cyprus",
+            "DE": "Zypern",
+            "FR": "Chypre",
+            "IT": "Cipro",
+            "ES": "Chipre",
+            "PT": "Chipre",
+        },
+    ),
+    "czechia": _Country(
+        "203",
+        {
+            "EN": "Czechia",
+            "DE": "Tschechien",
+            "FR": "Tchéquie",
+            "IT": "Cechia",
+            "ES": "Chequia",
+            "PT": "Chéquia",
+        },
+        ("czech republic", "cesko", "tschechische republik"),
+    ),
+    "denmark": _Country(
+        "208",
+        {
+            "EN": "Denmark",
+            "DE": "Dänemark",
+            "FR": "Danemark",
+            "IT": "Danimarca",
+            "ES": "Dinamarca",
+            "PT": "Dinamarca",
+        },
+    ),
+    "egypt": _Country(
+        "818",
+        {
+            "EN": "Egypt",
+            "DE": "Ägypten",
+            "FR": "Égypte",
+            "IT": "Egitto",
+            "ES": "Egipto",
+            "PT": "Egito",
+        },
+        ("aegypten",),
+    ),
+    "finland": _Country(
+        "246",
+        {
+            "EN": "Finland",
+            "DE": "Finnland",
+            "FR": "Finlande",
+            "IT": "Finlandia",
+            "ES": "Finlandia",
+            "PT": "Finlândia",
+        },
+    ),
+    "france": _Country(
+        "250",
+        {
+            "EN": "France",
+            "DE": "Frankreich",
+            "FR": "France",
+            "IT": "Francia",
+            "ES": "Francia",
+            "PT": "França",
+        },
+    ),
+    "germany": _Country(
+        "276",
+        {
+            "EN": "Germany",
+            "DE": "Deutschland",
+            "FR": "Allemagne",
+            "IT": "Germania",
+            "ES": "Alemania",
+            "PT": "Alemanha",
+        },
+    ),
+    "greece": _Country(
+        "300",
+        {
+            "EN": "Greece",
+            "DE": "Griechenland",
+            "FR": "Grèce",
+            "IT": "Grecia",
+            "ES": "Grecia",
+            "PT": "Grécia",
+        },
+        ("hellas", "ellada"),
+    ),
+    "hungary": _Country(
+        "348",
+        {
+            "EN": "Hungary",
+            "DE": "Ungarn",
+            "FR": "Hongrie",
+            "IT": "Ungheria",
+            "ES": "Hungría",
+            "PT": "Hungria",
+        },
+    ),
+    "iceland": _Country(
+        "352",
+        {
+            "EN": "Iceland",
+            "DE": "Island",
+            "FR": "Islande",
+            "IT": "Islanda",
+            "ES": "Islandia",
+            "PT": "Islândia",
+        },
+    ),
+    "ireland": _Country(
+        "372",
+        {
+            "EN": "Ireland",
+            "DE": "Irland",
+            "FR": "Irlande",
+            "IT": "Irlanda",
+            "ES": "Irlanda",
+            "PT": "Irlanda",
+        },
+        ("eire",),
+    ),
+    "italy": _Country(
+        "380",
+        {
+            "EN": "Italy",
+            "DE": "Italien",
+            "FR": "Italie",
+            "IT": "Italia",
+            "ES": "Italia",
+            "PT": "Itália",
+        },
+    ),
+    "malta": _Country(
+        "470",
+        {
+            "EN": "Malta",
+            "DE": "Malta",
+            "FR": "Malte",
+            "IT": "Malta",
+            "ES": "Malta",
+            "PT": "Malta",
+        },
+    ),
+    "montenegro": _Country(
+        "499",
+        {
+            "EN": "Montenegro",
+            "DE": "Montenegro",
+            "FR": "Monténégro",
+            "IT": "Montenegro",
+            "ES": "Montenegro",
+            "PT": "Montenegro",
+        },
+        ("crna gora",),
+    ),
+    "morocco": _Country(
+        "504",
+        {
+            "EN": "Morocco",
+            "DE": "Marokko",
+            "FR": "Maroc",
+            "IT": "Marocco",
+            "ES": "Marruecos",
+            "PT": "Marrocos",
+        },
+    ),
+    "netherlands": _Country(
+        "528",
+        {
+            "EN": "Netherlands",
+            "DE": "Niederlande",
+            "FR": "Pays-Bas",
+            "IT": "Paesi Bassi",
+            "ES": "Países Bajos",
+            "PT": "Países Baixos",
+        },
+        ("holland",),
+    ),
+    "norway": _Country(
+        "578",
+        {
+            "EN": "Norway",
+            "DE": "Norwegen",
+            "FR": "Norvège",
+            "IT": "Norvegia",
+            "ES": "Noruega",
+            "PT": "Noruega",
+        },
+    ),
+    "poland": _Country(
+        "616",
+        {
+            "EN": "Poland",
+            "DE": "Polen",
+            "FR": "Pologne",
+            "IT": "Polonia",
+            "ES": "Polonia",
+            "PT": "Polónia",
+        },
+    ),
+    "portugal": _Country(
+        "620",
+        {
+            "EN": "Portugal",
+            "DE": "Portugal",
+            "FR": "Portugal",
+            "IT": "Portogallo",
+            "ES": "Portugal",
+            "PT": "Portugal",
+        },
+    ),
+    "romania": _Country(
+        "642",
+        {
+            "EN": "Romania",
+            "DE": "Rumänien",
+            "FR": "Roumanie",
+            "IT": "Romania",
+            "ES": "Rumanía",
+            "PT": "Roménia",
+        },
+    ),
+    "slovenia": _Country(
+        "705",
+        {
+            "EN": "Slovenia",
+            "DE": "Slowenien",
+            "FR": "Slovénie",
+            "IT": "Slovenia",
+            "ES": "Eslovenia",
+            "PT": "Eslovénia",
+        },
+    ),
+    "spain": _Country(
+        "724",
+        {
+            "EN": "Spain",
+            "DE": "Spanien",
+            "FR": "Espagne",
+            "IT": "Spagna",
+            "ES": "España",
+            "PT": "Espanha",
+        },
+        ("espana",),
+    ),
+    "sweden": _Country(
+        "752",
+        {
+            "EN": "Sweden",
+            "DE": "Schweden",
+            "FR": "Suède",
+            "IT": "Svezia",
+            "ES": "Suecia",
+            "PT": "Suécia",
+        },
+    ),
+    "switzerland": _Country(
+        "756",
+        {
+            "EN": "Switzerland",
+            "DE": "Schweiz",
+            "FR": "Suisse",
+            "IT": "Svizzera",
+            "ES": "Suiza",
+            "PT": "Suíça",
+        },
+    ),
+    "turkey": _Country(
+        "792",
+        {
+            "EN": "Turkey",
+            "DE": "Türkei",
+            "FR": "Turquie",
+            "IT": "Turchia",
+            "ES": "Turquía",
+            "PT": "Turquia",
+        },
+        ("turkiye",),
+    ),
+    "united kingdom": _Country(
+        "826",
+        {
+            "EN": "United Kingdom",
+            "DE": "Vereinigtes Königreich",
+            "FR": "Royaume-Uni",
+            "IT": "Regno Unito",
+            "ES": "Reino Unido",
+            "PT": "Reino Unido",
+        },
+        ("uk", "great britain", "britain", "england"),
+    ),
+    "united states": _Country(
+        "840",
+        {
+            "EN": "USA",
+            "DE": "USA",
+            "FR": "États-Unis",
+            "IT": "Stati Uniti",
+            "ES": "Estados Unidos",
+            "PT": "Estados Unidos",
+        },
+        ("usa", "us", "america", "united states of america"),
+    ),
 }
+
+
+def _norm_country_key(value: str) -> str:
+    stripped = unicodedata.normalize("NFKD", str(value or ""))
+    ascii_only = stripped.encode("ascii", "ignore").decode("ascii")
+    return " ".join(ascii_only.casefold().split())
+
+
+def _build_alias_index() -> dict[str, str]:
+    index: dict[str, str] = {}
+    for canonical, meta in _COUNTRIES.items():
+        index[_norm_country_key(canonical)] = canonical
+        for label in meta.labels.values():
+            index[_norm_country_key(label)] = canonical
+        for alias in meta.aliases:
+            index[_norm_country_key(alias)] = canonical
+    return index
+
+
+_COUNTRY_ALIASES = _build_alias_index()
+
+
+def canonical_country_key(country: str) -> str | None:
+    return _COUNTRY_ALIASES.get(_norm_country_key(country))
 
 
 def remotion_uuid(value: str, *, namespace: str) -> str:
@@ -59,18 +435,31 @@ def remotion_uuid(value: str, *, namespace: str) -> str:
 
 
 def country_numeric_id(country: str) -> str:
-    key = str(country or "").strip().lower()
-    if key in _COUNTRY_NUMERIC:
-        return _COUNTRY_NUMERIC[key]
-    for name, code in _COUNTRY_NUMERIC.items():
-        if name and name in key:
-            return code
+    canonical = canonical_country_key(country)
+    if canonical is not None:
+        return _COUNTRIES[canonical].numeric
+    key = _norm_country_key(country)
+    if not key:
+        return "000"
+    for canonical, meta in _COUNTRIES.items():
+        needles = [canonical, *meta.labels.values(), *meta.aliases]
+        for needle in needles:
+            normalized = _norm_country_key(needle)
+            if len(normalized) >= 5 and normalized in key:
+                return meta.numeric
     return "000"
 
 
-def country_label(country: str) -> str:
-    label = str(country or "").strip() or "Map"
-    return label[:100]
+def country_label(country: str, language: str = "DE") -> str:
+    raw = str(country or "").strip() or "Map"
+    canonical = canonical_country_key(raw)
+    if canonical is None:
+        return raw[:100]
+    labels = _COUNTRIES[canonical].labels
+    lang = normalize_brief_language(language)
+    if lang not in _LABEL_LANGS:
+        lang = "EN"
+    return (labels.get(lang) or labels.get("EN") or raw)[:100]
 
 
 def _clip_label(value: str, limit: int) -> str:
@@ -131,7 +520,7 @@ def remotion_payload(item: MapPlanItem) -> dict:
         },
         "exportLabel": _clip_label(item.original_chapter_label, 200),
         "countryNumericId": numeric_id,
-        "countryLabel": country_label(item.country),
+        "countryLabel": country_label(item.country, item.language),
         "language": (str(item.language or "DE").strip().upper()[:20] or "DE"),
         "chapterOrdinal": int(item.chapter_ordinal),
         "chapterCount": int(item.chapter_count),

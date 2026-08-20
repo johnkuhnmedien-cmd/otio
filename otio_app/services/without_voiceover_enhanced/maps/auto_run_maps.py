@@ -24,6 +24,7 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     dramaturgy_fingerprint,
     load_map_plan,
     load_map_settings,
+    map_item_hash_is_current,
     save_map_plan,
 )
 from otio_app.services.without_voiceover_enhanced.maps.render_service import (
@@ -59,7 +60,11 @@ def maps_complete(project: Project) -> bool:
         if item.render_status == RENDER_STATUS_BLOCKED:
             continue
         path = _item_output_path(project, item)
-        if item.render_status == RENDER_STATUS_DONE and output_file_nonempty(path):
+        if (
+            item.render_status == RENDER_STATUS_DONE
+            and output_file_nonempty(path)
+            and map_item_hash_is_current(item)
+        ):
             continue
         return False
     return True

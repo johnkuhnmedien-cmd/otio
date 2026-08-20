@@ -26,6 +26,7 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     apply_geocode_hits,
     build_map_plan,
     load_map_coordinates,
+    load_map_plan,
     save_map_plan,
 )
 from otio_app.services.without_voiceover_enhanced.paths import map_output_dir
@@ -138,6 +139,29 @@ def test_auto_run_maps_confirms_geocode_and_renders(tmp_path: Path) -> None:
     assert maps_complete(project) is True
     assert any("Koordinaten prüfen" in line for line in messages)
     assert any("Koordinaten bestätigen" in line for line in messages)
+
+
+def test_maps_complete_false_when_saved_plan_hash_is_stale(tmp_path: Path) -> None:
+    folders = ["Karpathos"]
+    project = _project(tmp_path, folders)
+    _confirm(project, folders)
+    result = run_maps_for_auto_run(
+        project,
+        geocode_fn=lambda place, country: {
+            "latitude": 35.507,
+            "longitude": 27.213,
+            "confidence": 0.9,
+            "original_label": place,
+            "display_label": place,
+        },
+        renderer=_FakeRenderer(),
+    )
+    assert maps_complete(project) is True
+    plan = result["plan"]
+    plan.maps[0].plan_hash = "stale-from-previous-code"
+    save_map_plan(project, plan)
+    assert load_map_plan(project).maps[0].plan_hash == "stale-from-previous-code"
+    assert maps_complete(project) is False
 
 
 def test_needs_review_geocode_stays_blocked_until_confirm(tmp_path: Path) -> None:

@@ -52,6 +52,7 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     map_heading,
     map_output_filename,
     rebuild_saved_map_plan,
+    refresh_stale_map_plan,
     save_map_coordinates,
     save_map_plan,
     status_after_saving_coordinates,
@@ -413,6 +414,33 @@ def test_identical_plan_hash_reuses_completed_output(tmp_path: Path) -> None:
     assert reused.maps[0].content_hash == reused.maps[0].plan_hash
     assert reused.maps[0].render_status == RENDER_STATUS_DONE
     assert reused.maps[0].output_path == "/tmp/fr_Mount Athos_Map.mp4"
+
+
+def test_refresh_stale_map_plan_marks_done_maps_idle(tmp_path: Path) -> None:
+    folders = ["Mount Athos"]
+    project = _project(tmp_path, folders)
+    _confirm(project, folders)
+    coordinates = _coords(
+        project,
+        {"Mount Athos": (40.27, 24.21, COORDINATE_STATUS_MANUAL, 1.0)},
+    )
+    plan = build_map_plan(project, coordinates=coordinates)
+    plan.maps[0].render_status = RENDER_STATUS_DONE
+    plan.maps[0].output_path = "/tmp/fr_Mount Athos_Map.mp4"
+    plan.maps[0].plan_hash = "stale-from-previous-code"
+    save_map_plan(project, plan)
+    refreshed, changed = refresh_stale_map_plan(
+        project, coordinates=coordinates, previous=plan
+    )
+    assert changed is True
+    assert refreshed is not None
+    assert refreshed.maps[0].plan_hash == compute_plan_hash(refreshed.maps[0])
+    assert refreshed.maps[0].render_status == RENDER_STATUS_IDLE
+    again, changed_again = refresh_stale_map_plan(
+        project, coordinates=coordinates, previous=refreshed
+    )
+    assert changed_again is False
+    assert again is refreshed or again.maps[0].plan_hash == refreshed.maps[0].plan_hash
 
 
 def test_build_and_save_plan_does_not_change_confirmed_dramaturgy(tmp_path: Path) -> None:

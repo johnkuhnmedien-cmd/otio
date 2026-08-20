@@ -487,6 +487,7 @@ class MapRenderJobManager:
                     render_status=RENDER_STATUS_DONE,
                     output_path=export_path,
                     media_hash=str(result.get("content_hash") or ""),
+                    plan_hash=str(result.get("plan_hash") or item.plan_hash or ""),
                     progress=1.0,
                     error_detail="",
                 )
@@ -588,6 +589,7 @@ class MapRenderJobManager:
         render_status: str,
         output_path: str = "",
         media_hash: str = "",
+        plan_hash: str = "",
         progress: float | None = None,
         error_detail: str = "",
     ) -> None:
@@ -603,6 +605,8 @@ class MapRenderJobManager:
                     item.output_path = output_path
                 if media_hash:
                     item.media_hash = media_hash
+                if plan_hash:
+                    item.plan_hash = plan_hash
                 if progress is not None:
                     item.progress = max(item.progress, progress)
                 item.error_detail = error_detail

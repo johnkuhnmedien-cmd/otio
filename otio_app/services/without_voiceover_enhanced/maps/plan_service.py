@@ -48,6 +48,9 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
     MapPlanItem,
     MapRenderSettings,
 )
+from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
+    country_label,
+)
 from otio_app.services.without_voiceover_enhanced.paths import (
     map_coordinates_path,
     map_output_dir,
@@ -135,6 +138,7 @@ def compute_plan_hash(item: MapPlanItem) -> str:
         "heading": item.heading,
         "language": item.language,
         "country": item.country,
+        "country_label": country_label(item.country, item.language),
         "from_chapter_id": item.from_chapter_id,
         "start_latitude": item.start_latitude,
         "start_longitude": item.start_longitude,
@@ -153,6 +157,46 @@ def compute_plan_hash(item: MapPlanItem) -> str:
     }
     blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def map_item_hash_is_current(item: MapPlanItem) -> bool:
+    stored = str(item.plan_hash or "").strip()
+    return bool(stored) and stored == compute_plan_hash(item)
+
+
+def map_plan_is_stale(plan: MapPlanDocument) -> bool:
+    return any(not map_item_hash_is_current(item) for item in plan.maps)
+
+
+def refresh_stale_map_plan(
+    project: Project,
+    *,
+    settings: MapRenderSettings | None = None,
+    coordinates: MapCoordinatesDocument | None = None,
+    previous: MapPlanDocument | None = None,
+) -> tuple[MapPlanDocument | None, bool]:
+    """Rebuild a saved plan when hashes no longer match current render inputs.
+
+    Does not overwrite a plan whose dramaturgy fingerprint is outdated — that
+    stays an explicit user action. Returns ``(plan, refreshed)``.
+    """
+    plan = previous if previous is not None else load_map_plan(project)
+    if plan is None:
+        return None, False
+    confirmed = load_confirmed_dramaturgy(project)
+    if confirmed is not None and plan.dramaturgy_fingerprint != dramaturgy_fingerprint(
+        confirmed
+    ):
+        return plan, False
+    if not map_plan_is_stale(plan):
+        return plan, False
+    rebuilt = rebuild_saved_map_plan(
+        project,
+        coordinates=coordinates if coordinates is not None else load_map_coordinates(project),
+        settings=settings,
+        previous=plan,
+    )
+    return rebuilt, True
 
 
 def _record_ready(record: MapCoordinateRecord | None) -> bool:

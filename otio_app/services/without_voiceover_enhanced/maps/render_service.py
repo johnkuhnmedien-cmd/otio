@@ -30,6 +30,10 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
     RENDER_STATUS_IDLE,
     MapPlanItem,
 )
+from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
+    compute_plan_hash,
+    map_item_hash_is_current,
+)
 from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
     remotion_payload,
 )
@@ -150,6 +154,7 @@ class MapRenderer:
         """Render one map. Reuses an identical plan_hash output when possible."""
         if item.render_status == RENDER_STATUS_BLOCKED:
             raise MapRenderError(item.blocked_reason or "Koordinaten fehlen oder sind unsicher.")
+        item.plan_hash = compute_plan_hash(item)
         payload = remotion_payload(item)
         output_dir = map_output_dir(project)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -518,9 +523,12 @@ def selectable_maps(
             }:
                 selected.append(item)
                 continue
-            if item.render_status == RENDER_STATUS_DONE and output_file_nonempty(item.output_path):
+            if (
+                item.render_status == RENDER_STATUS_DONE
+                and output_file_nonempty(item.output_path)
+                and map_item_hash_is_current(item)
+            ):
                 continue
-            if not output_file_nonempty(item.output_path):
-                selected.append(item)
+            selected.append(item)
         return selected
     return available

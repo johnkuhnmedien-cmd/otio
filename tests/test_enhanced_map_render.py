@@ -40,6 +40,7 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
 )
 from otio_app.services.job_registry import any_job_running
 from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
+    country_label,
     country_numeric_id,
     remotion_payload,
     view_bounds,
@@ -167,6 +168,7 @@ def test_remotion_payload_opening_and_transition_and_filename_identity(tmp_path:
     assert opening["from"]["latitude"] == opening["to"]["latitude"]
     assert opening["exportLabel"] == "Mount Athos"
     assert opening["to"]["label"] == "Mount Athos"
+    assert opening["countryLabel"] == "Grèce"
     assert opening["styleVersion"] == "otio-vintage-map-v11"
     assert "thomas" not in str(opening).lower()
     assert transition["animationMode"] == "transition"
@@ -197,14 +199,40 @@ def test_selectable_maps_skip_blocked_and_missing_mode(tmp_path: Path) -> None:
     plan.maps[0].output_path = str(tmp_path / "exists.mp4")
     (tmp_path / "exists.mp4").write_bytes(b"ok")
     assert selectable_maps(plan.maps, mode="missing") == []
+    plan.maps[0].plan_hash = "stale-from-previous-code"
+    assert selectable_maps(plan.maps, mode="missing")[0].chapter_id == "Mount Athos"
     assert [item.chapter_id for item in selectable_maps(plan.maps, mode="one", chapter_id="Mount Athos")] == [
         "Mount Athos"
     ]
 
 
+def test_country_label_follows_project_language() -> None:
+    assert country_label("Griechenland", "EN") == "Greece"
+    assert country_label("Greece", "DE") == "Griechenland"
+    assert country_label("Grèce", "EN") == "Greece"
+    assert country_label("hellas", "FR") == "Grèce"
+    assert country_label("USA", "DE") == "USA"
+    assert country_label("Atlantis", "EN") == "Atlantis"
+
+
+def test_remotion_payload_localizes_german_video_place_for_english(tmp_path: Path) -> None:
+    folders = ["Karpathos"]
+    project = _project(tmp_path, folders, language="en")
+    project.video_place = "Griechenland"
+    _confirm(project, folders, language="EN")
+    plan = build_map_plan(project, coordinates=_coords(project, folders))
+    payload = remotion_payload(plan.maps[0])
+    assert plan.maps[0].country == "Griechenland"
+    assert payload["countryLabel"] == "Greece"
+    assert payload["language"] == "EN"
+    assert payload["countryNumericId"] == "300"
+
+
 def test_view_bounds_usa_ireland_and_unknown() -> None:
     assert country_numeric_id("USA") == "840"
     assert country_numeric_id("Ireland") == "372"
+    assert country_numeric_id("Griechenland") == "300"
+    assert country_numeric_id("Grèce") == "300"
     assert country_numeric_id("Atlantis") == "000"
     assert view_bounds("840", 0.0, 0.0, 1.0, 1.0) == [[-125.0, 24.0], [-66.0, 50.0]]
     assert view_bounds("372", 0.0, 0.0, 1.0, 1.0) == [[-11.2, 51.15], [-5.05, 55.85]]
@@ -237,9 +265,14 @@ def test_render_reuses_identical_plan_hash(tmp_path: Path) -> None:
     assert first["has_audio"] is False
     sidecar = Path(first["export_path"]).with_suffix(".mp4.meta.json")
     assert sidecar.is_file()
-    third = renderer.render_item(project, plan.maps[0], overwrite=True)
+    stale = plan.maps[0].model_copy(update={"language": "EN"})
+    stale.plan_hash = first["plan_hash"]
+    third = renderer.render_item(project, stale)
     assert calls["n"] == 2
     assert third["reused"] is False
+    fourth = renderer.render_item(project, plan.maps[0], overwrite=True)
+    assert calls["n"] == 3
+    assert fourth["reused"] is False
 
 
 def test_validate_rejects_audio_and_wrong_fps(tmp_path: Path) -> None:

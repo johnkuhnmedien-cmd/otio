@@ -38,12 +38,14 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     load_map_settings,
     map_heading,
     rebuild_saved_map_plan,
+    refresh_stale_map_plan,
     save_map_coordinates,
     save_map_plan,
     save_map_settings,
     status_after_saving_coordinates,
     unique_chapter_places,
 )
+from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import country_label
 from otio_app.services.without_voiceover_enhanced.maps.render_service import MapRenderer
 from otio_app.services.without_voiceover_enhanced.paths import map_output_dir
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
@@ -113,6 +115,14 @@ def render_enhanced_maps_page() -> None:
     saved_plan = load_map_plan(project)
     live_fp = dramaturgy_fingerprint(confirmed)
     enabled = sum(1 for folder in confirmed.recommended_folder_order if folder.enabled)
+    plan_refreshed = False
+    if saved_plan is not None and saved_plan.dramaturgy_fingerprint == live_fp:
+        saved_plan, plan_refreshed = refresh_stale_map_plan(
+            project,
+            settings=stored_settings,
+            coordinates=coordinates,
+            previous=saved_plan,
+        )
 
     col_a, col_b, col_c = st.columns(3)
     with col_a:
@@ -121,6 +131,12 @@ def render_enhanced_maps_page() -> None:
         st.metric("Kapitel (aktiviert)", enabled)
     with col_c:
         st.metric("Kartenüberschrift", map_heading(confirmed.language))
+    overlay_country = country_label(project.video_place, confirmed.language)
+    place_field = (project.video_place or "").strip()
+    if overlay_country and overlay_country != place_field:
+        st.caption(f"Land auf der Karte: **{overlay_country}** (Projektfeld: {place_field})")
+    elif overlay_country:
+        st.caption(f"Land auf der Karte: **{overlay_country}**")
     st.caption(f"Ausgabeordner: `{map_output_dir(project)}`")
     st.caption(
         "Dateinamen nutzen den Originalkapitelnamen aus der Dramaturgie, "
@@ -132,6 +148,11 @@ def render_enhanced_maps_page() -> None:
             "Die bestätigte Dramaturgie hat sich geändert. Der gespeicherte Kartenplan "
             "wird nicht automatisch überschrieben. Klicken Sie auf "
             "„Kartenplan aus Dramaturgie erzeugen“, um neu zu planen."
+        )
+    if plan_refreshed:
+        st.info(
+            "Kartenplan aktualisiert: der Ländername folgt jetzt der Projektsprache. "
+            "Bitte die Karten neu rendern — die alten MP4s enthalten noch den bisherigen Text."
         )
 
     st.subheader("Render-Einstellungen")
