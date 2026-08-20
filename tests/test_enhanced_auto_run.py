@@ -837,6 +837,210 @@ def test_auto_run_python_timing_runs_chapters_in_parallel(
     assert max_seen <= len(folders)
 
 
+def test_auto_run_timing_failure_triggers_llm_cut_then_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    needing = {"v": ["Athens", "Győr"]}
+    cuts: list[str] = []
+    retried: list[str] = []
+    stock_calls = {"n": 0}
+
+    def fake_needing(_p):
+        return list(needing["v"])
+
+    def fake_resolve_all(_project, *, chapter_names, **_k):
+        needing["v"] = ["Győr"]
+        raise auto_run.ChapterCutError("Győr: Timing passt nicht")
+
+    def fake_cut(_project, folder_name, **_k):
+        cuts.append(folder_name)
+        return MagicMock(slot_count=6, gap_count=0)
+
+    def fake_retry(_project, folder_name):
+        retried.append(folder_name)
+        needing["v"] = []
+        return MagicMock()
+
+    monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
+    monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", fake_needing)
+    monkeypatch.setattr(auto_run, "resolve_all_chapter_timelines", fake_resolve_all)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", fake_cut)
+    monkeypatch.setattr(auto_run, "chapter_open_gap_ids", lambda *_a, **_k: [])
+    monkeypatch.setattr(auto_run, "resolve_chapter_timeline", fake_retry)
+    monkeypatch.setattr(
+        auto_run,
+        "_run_stock_and_funnel",
+        lambda *_a, **_k: stock_calls.__setitem__("n", stock_calls["n"] + 1),
+    )
+
+    auto_run._run_timing(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        checkpoint=lambda _step: None,
+        finish=lambda *_a, **_k: None,
+        cancelled=lambda: False,
+        cut_provider="openai",
+        cut_model="gpt-5.6-terra",
+        funnel_model="funnel-model",
+    )
+    assert cuts == ["Győr"]
+    assert retried == ["Győr"]
+    assert stock_calls["n"] == 0
+
+
+def test_auto_run_timing_recut_with_new_gaps_runs_stock_and_funnel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    needing = {"v": ["Athens"]}
+    cuts: list[str] = []
+    stock: list[list[str] | None] = []
+    funnel: list[list[str]] = []
+    retried: list[str] = []
+    open_ids = {"v": ["gap-new"]}
+
+    def fake_needing(_p):
+        return list(needing["v"])
+
+    def fake_resolve_all(_project, **_k):
+        raise auto_run.ChapterCutError("Athens: Timing passt nicht")
+
+    def fake_cut(_project, folder_name, **_k):
+        cuts.append(folder_name)
+        return MagicMock(slot_count=4, gap_count=1)
+
+    def fake_open(_p):
+        return list(open_ids["v"])
+
+    def fake_search(_project, progress_callback=None, **_k):
+        stock.append(list(open_ids["v"]))
+        return MagicMock(candidates=["c1"])
+
+    def fake_funnel(_project, gap_ids=None, **_k):
+        funnel.append(list(gap_ids or []))
+        open_ids["v"] = []
+        needing["v"] = []
+        return MagicMock(stopped=False)
+
+    def fake_retry(_project, folder_name):
+        retried.append(folder_name)
+        needing["v"] = []
+        return MagicMock()
+
+    monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
+    monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", fake_needing)
+    monkeypatch.setattr(auto_run, "resolve_all_chapter_timelines", fake_resolve_all)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", fake_cut)
+    monkeypatch.setattr(auto_run, "chapter_open_gap_ids", lambda *_a, **_k: ["gap-new"])
+    monkeypatch.setattr(auto_run, "list_open_funnel_gap_ids", fake_open)
+    monkeypatch.setattr(auto_run, "save_stock_providers_config", lambda *_a, **_k: None)
+    monkeypatch.setattr(auto_run, "search_supplements_for_gaps", fake_search)
+    monkeypatch.setattr(auto_run, "run_supplement_funnel_for_gaps", fake_funnel)
+    monkeypatch.setattr(auto_run, "resolve_chapter_timeline", fake_retry)
+
+    auto_run._run_timing(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        checkpoint=lambda _step: None,
+        finish=lambda *_a, **_k: None,
+        cancelled=lambda: False,
+        cut_provider="openai",
+        cut_model="gpt-5.6-terra",
+        funnel_model="funnel-model",
+    )
+    assert cuts == ["Athens"]
+    assert stock == [["gap-new"]]
+    assert funnel == [["gap-new"]]
+    assert retried == ["Athens"]
+
+
+def test_auto_run_timing_second_attempt_failure_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    needing = {"v": ["Athens"]}
+    cuts: list[str] = []
+
+    def fake_needing(_p):
+        return list(needing["v"])
+
+    def fake_resolve_all(_project, **_k):
+        raise auto_run.ChapterCutError("Athens: Timing passt nicht")
+
+    def fake_cut(_project, folder_name, **_k):
+        cuts.append(folder_name)
+        return MagicMock(slot_count=4, gap_count=0)
+
+    def fake_retry(_project, folder_name):
+        raise auto_run.ChapterCutError("Athens: immer noch zu kurz")
+
+    monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
+    monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", fake_needing)
+    monkeypatch.setattr(auto_run, "resolve_all_chapter_timelines", fake_resolve_all)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", fake_cut)
+    monkeypatch.setattr(auto_run, "chapter_open_gap_ids", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        auto_run,
+        "_run_stock_and_funnel",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("kein Stock ohne neue Gaps")),
+    )
+    monkeypatch.setattr(auto_run, "resolve_chapter_timeline", fake_retry)
+
+    with pytest.raises(EnhancedAutoRunError, match="nach LLM-Cut-Nachlauf erneut"):
+        auto_run._run_timing(
+            project,
+            skip_done=True,
+            emit=lambda *_a, **_k: None,
+            checkpoint=lambda _step: None,
+            finish=lambda *_a, **_k: None,
+            cancelled=lambda: False,
+            cut_provider="openai",
+            cut_model="gpt-5.6-terra",
+        )
+    assert cuts == ["Athens"]
+
+
+def test_auto_run_timing_second_failure_does_not_recut_other_chapters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    needing = {"v": ["Athens", "Győr"]}
+    cuts: list[str] = []
+
+    def fake_needing(_p):
+        return list(needing["v"])
+
+    def fake_resolve_all(_project, **_k):
+        raise auto_run.ChapterCutError("2/2 Python-Timing(s) fehlgeschlagen")
+
+    def fake_cut(_project, folder_name, **_k):
+        cuts.append(folder_name)
+        return MagicMock(slot_count=4, gap_count=0)
+
+    def fake_retry(_project, folder_name):
+        raise auto_run.ChapterCutError(f"{folder_name}: immer noch zu kurz")
+
+    monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
+    monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", fake_needing)
+    monkeypatch.setattr(auto_run, "resolve_all_chapter_timelines", fake_resolve_all)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", fake_cut)
+    monkeypatch.setattr(auto_run, "chapter_open_gap_ids", lambda *_a, **_k: [])
+    monkeypatch.setattr(auto_run, "resolve_chapter_timeline", fake_retry)
+
+    with pytest.raises(EnhancedAutoRunError, match="nach LLM-Cut-Nachlauf erneut"):
+        auto_run._run_timing(
+            project,
+            skip_done=True,
+            emit=lambda *_a, **_k: None,
+            checkpoint=lambda _step: None,
+            finish=lambda *_a, **_k: None,
+        )
+    assert cuts == ["Athens"]
+
+
 def test_auto_run_revises_existing_scripts_before_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
