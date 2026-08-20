@@ -54,10 +54,12 @@ from otio_app.services.without_voiceover_enhanced.pause_resolver import (
 from otio_app.services.voiceover_generation.dramaturgy_service import (
     save_confirmed_dramaturgy,
 )
+from otio_app.services.voiceover_generation.project_brief_service import save_project_brief
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
     DramaturgyPlan,
     FolderVoiceoverSetting,
+    ProjectBrief,
 )
 from otio_app.services.without_voiceover_enhanced.script_neighbor_context import (
     build_chapter_order_block,
@@ -87,6 +89,7 @@ from otio_app.services.without_voiceover_enhanced.script_rhetoric import (
     validate_rhetoric_usage_against_ledger,
 )
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
+    _brief_text,
     chapter_display_text_for_folder,
     chapter_narration_text,
     folders_present_in_script,
@@ -1309,8 +1312,10 @@ def test_chapter_order_block_includes_role_and_reason() -> None:
     ]
     block = build_chapter_order_block(entries, current_folder_name="Desert")
     assert "[hook]" in block
-    assert "CHAPTER EDITORIAL NOTES" in block
-    assert "Opens with red rock drama." in block
+    assert "CHAPTER EDITORIAL NOTES" not in block
+    assert "Opens with red rock drama." not in block
+    assert "Heat and silence." not in block
+    assert "Desert" in block and "THIS CHAPTER" in block
 
 
 def test_recent_neighbor_excerpts_block_empty_when_no_prior_scripts() -> None:
@@ -1431,6 +1436,9 @@ def test_generate_third_chapter_includes_prior_opening_sentences(tmp_path: Path)
     assert "Letzter Satz Canyon." in prompt
     assert "Erster Satz Desert." in prompt
     assert "Letzter Satz Desert." in prompt
+    assert "CHAPTER EDITORIAL NOTES" not in prompt
+    assert "Kapitel Canyon" not in prompt
+    assert "Kapitel Coast" in prompt
 
 
 def test_rhetoric_usage_parsed_and_stored_in_ledger(tmp_path: Path) -> None:
@@ -1578,6 +1586,7 @@ def test_rhetoric_ledger_prompt_lists_available_and_used() -> None:
     assert "opener_wide_landscape" in block
     assert "stay_tuned_payoff" in block
     assert "AVAILABLE" in block
+    assert "examples:" not in block
 
 
 def test_extract_opening_keys_collapses_after_previous_stem() -> None:
@@ -1637,6 +1646,46 @@ def test_opening_inventory_prompt_lists_forbidden_stem() -> None:
     block = build_opening_inventory_prompt_block(inv)
     assert "FORBIDDEN" in block
     assert "After/Nach" in block
+
+
+def test_opening_inventory_prompt_keeps_only_recent_full_sentences() -> None:
+    inv = OpeningInventoryDocument(
+        entries=[
+            OpeningInventoryEntry(
+                folder_name=f"Ch{index}",
+                first_sentence=f"Unique opening sentence number {index}.",
+                keys=extract_opening_keys(f"Unique opening sentence number {index}."),
+            )
+            for index in range(1, 7)
+        ]
+    )
+    block = build_opening_inventory_prompt_block(inv)
+    assert "OLDER OPENINGS" in block
+    assert "Unique opening sentence number 1." not in block
+    assert "Unique opening sentence number 2." not in block
+    assert "Unique opening sentence number 6." in block
+    assert "Ch1:" in block
+
+
+def test_brief_text_omits_title_references_and_empty_fields(tmp_path: Path) -> None:
+    project = _project(tmp_path, folders=["Canyon"])
+    save_project_brief(
+        project,
+        ProjectBrief(
+            project_id=project.id,
+            video_title="Ungarn",
+            language="DE",
+            title_references=["Die Wunder von Italien", "The Wonders of Japan"],
+            global_extra_prompt="Nur belegte Fakten.",
+        ),
+    )
+    text = _brief_text(project)
+    assert "title_references" not in text
+    assert "Die Wunder von Italien" not in text
+    assert "Ungarn" in text
+    assert "Nur belegte Fakten." in text
+    assert "generated_at" not in text
+    assert "\n  " not in text
 
 
 def test_generate_records_opening_in_inventory(tmp_path: Path) -> None:

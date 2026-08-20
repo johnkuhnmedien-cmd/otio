@@ -213,7 +213,6 @@ _SHARED_SCRIPT_RULES = _SHARED_SCRIPT_CORE_RULES + "\n" + _DEFAULT_DOCUMENTARY_S
 
 def _json_schema_block(*, id_prefix: str = "") -> str:
     seg = f"{id_prefix}segment_001" if id_prefix else "segment_001"
-    fact = f"{id_prefix}fact_001" if id_prefix else "fact_001"
     return f"""\
 OUTPUT (JSON only):
 {{
@@ -230,23 +229,8 @@ OUTPUT (JSON only):
       "folder_name": "EXACT_FOLDER_NAME"
     }}
   ],
-  "fact_check_hints": [
-    {{
-      "hint_id": "{fact}",
-      "related_segment_id": "{seg}",
-      "claim": "...",
-      "status": "fact_check_required",
-      "note": "..."
-    }}
-  ],
-  "rhetoric_usage": [
-    {{
-      "slot_id": "stay_tuned_payoff|named_future_highlight|callback_early_chapter|film_arc_echo|superlative_unique_once|distant_contrast|distant_commonality|opener_rhetorical_question|opener_time_of_day|opener_wide_landscape",
-      "used": true,
-      "evidence_quote": "exact phrase from narration_full",
-      "related_chapter_ref": "chapter heading from FILM CHAPTER MAP or empty"
-    }}
-  ],
+  "fact_check_hints": [],
+  "rhetoric_usage": [],
   "chapter_link_usage": {{
     "from_previous": false,
     "to_next": false,
@@ -255,42 +239,26 @@ OUTPUT (JSON only):
   }},
   "style_reference_usage": {{
     "mode": "raw_text|style_profile|default",
-    "matched_features": ["direct opening", "short factual beats", "restrained atmosphere"],
+    "matched_features": ["direct opening"],
     "intentional_deviations": []
   }}
 }}
 
-rhetoric_usage:
-- Prefer an empty array [].
-- Include only slots you actually used (used=true). Omit unused slots.
-- At most 2 used:true entries per chapter.
-- evidence_quote MUST appear in narration_full.
+rhetoric_usage: prefer []. Only used:true slots from the RHETORIC SLOT LEDGER
+(at most 2). evidence_quote must appear in narration_full.
 
-chapter_link_usage:
-- Audit only — not spoken.
-- evidence_quotes MUST appear exactly in narration_full.
-- Without a used spoken link: all booleans false and evidence_quotes [].
-- Never set a boolean true unless SPOKEN CHAPTER LINK PERMISSIONS allow that direction.
+chapter_link_usage: audit only. Booleans true only if SPOKEN CHAPTER LINK
+PERMISSIONS allow that direction; evidence_quotes must appear in narration_full.
 
-style_reference_usage:
-- Audit only — not spoken.
-- matched_features must describe prose traits, never copy facts or wording from the reference.
+style_reference_usage: audit only — prose traits, never copied facts/wording.
 
 AUTHOR PAUSES
-- When the Raw Chapter Reference uses explicit timed pauses, record that rhythm with
-  author_pause_after_seconds on segments (for ElevenLabs TTS pause tags).
-- Use 0 when no pause follows.
-- Use the reference's observed duration range.
-- Shorter pauses connect closely related facts.
-- Longer pauses follow a major geographic change, important historical statement,
-  strong visual reveal, or completed subject block.
-- Do not use the same duration mechanically after every segment.
+- Mirror timed pauses from the Raw Chapter Reference via
+  author_pause_after_seconds (0..8). Use 0 when no pause follows.
 - Do not write [pause X seconds] inside segment.text or narration_full.
-- The application maps author_pause_after_seconds to [pause N seconds] markers
-  in the chapter TTS call (same form as in the Folder Voice-over editor).
-- Cut planning uses measured ElevenLabs timestamps from the chapter audio —
-  not these pause fields as cut instructions.
-- Every positive author pause should normally also set paragraph_break_after=true.
+- Vary durations; a positive pause should also set paragraph_break_after=true.
+- TTS maps these fields to [pause N seconds] markers.
+- Cut planning uses measured ElevenLabs timestamps, not these fields as cuts.
 """
 
 

@@ -22,6 +22,8 @@ from otio_app.services.without_voiceover_enhanced.segment_alignment_service impo
 )
 
 MAX_OPENING_USES = 2
+# Full first sentences of only the most recent openings — older ones are keys only.
+MAX_RECENT_OPENING_SENTENCES_IN_PROMPT = 4
 
 # Schematische Stems: nur das Muster zählt, nicht der Ortsname danach.
 _STEM_FIRST_WORDS: dict[str, str] = {
@@ -37,6 +39,7 @@ _STEM_FIRST_WORDS: dict[str, str] = {
 
 __all__ = [
     "MAX_OPENING_USES",
+    "MAX_RECENT_OPENING_SENTENCES_IN_PROMPT",
     "OpeningInventoryDocument",
     "OpeningInventoryEntry",
     "build_opening_inventory_prompt_block",
@@ -209,8 +212,17 @@ def build_opening_inventory_prompt_block(
         e for e in inventory.entries if not exclude_folder or e.folder_name != exclude_folder
     ]
     if visible:
-        lines.append("USED FIRST SENTENCES:")
-        for entry in visible:
+        recent = visible[-MAX_RECENT_OPENING_SENTENCES_IN_PROMPT:]
+        older = visible[:-MAX_RECENT_OPENING_SENTENCES_IN_PROMPT]
+        if older:
+            lines.append("OLDER OPENINGS (keys only — do not repeat these stems/phrases):")
+            for entry in older:
+                keys = entry.keys or extract_opening_keys(entry.first_sentence)
+                key_text = ", ".join(keys[:3]) if keys else "(no keys)"
+                lines.append(f'- {entry.folder_name}: {key_text}')
+            lines.append("")
+        lines.append("RECENT FIRST SENTENCES:")
+        for entry in recent:
             lines.append(f'- "{entry.folder_name}": "{entry.first_sentence}"')
         lines.append("")
     else:
