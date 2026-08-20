@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
 from otio_app.models import Project, ProjectMode
+from otio_app.services.plan_llm_client import PlanLlmCancelledError
 from otio_app.services.voiceover_generation.models import (
     STYLE_MODE_RAW_TEXT,
     DramaturgyFolderEntry,
@@ -32,11 +35,15 @@ from otio_app.services.voiceover_generation.dramaturgy_service import (
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
     save_folder_voiceover_settings,
 )
-from otio_app.services.without_voiceover_enhanced.models import EnhancedScriptDocument
+from otio_app.services.without_voiceover_enhanced.models import (
+    EnhancedScriptDocument,
+    ScriptSegment,
+)
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
     _chapter_dramaturgy_text,
     _film_context_text,
     generate_enhanced_script_for_folder,
+    revise_enhanced_script_for_folder,
 )
 from otio_app.services.without_voiceover_enhanced.script_chapter_link_guard import (
     detect_chapter_link_violations,
@@ -498,3 +505,121 @@ def test_style_hash_staleness_on_raw_change(tmp_path: Path) -> None:
         ),
     )
     assert compute_style_context_hash(project) != h1
+
+
+def _valid_dublin_text() -> str:
+    return (
+        "Dublin lies at the mouth of the River Liffey and has served as "
+        "Ireland’s political and cultural center for centuries."
+    )
+
+
+def test_generate_retries_once_on_invalid_json_after_llm(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _seed_two_chapters(project)
+    calls: list[str] = []
+    retries: list[str] = []
+
+    def llm_callable(*, prompt: str, model: str, max_output_tokens: int | None = None):
+        del model, max_output_tokens
+        calls.append(prompt)
+        if len(calls) == 1:
+            return "this is not json {"
+        return _ok_payload(_valid_dublin_text())
+
+    result = generate_enhanced_script_for_folder(
+        project, "Dublin", llm_callable=llm_callable, on_retry=retries.append
+    )
+    assert result.status == "PASS", result.error
+    assert len(calls) == 2
+    assert retries
+    assert "RETRY REQUIRED" in calls[1]
+
+
+def test_generate_retries_once_on_llm_exception_then_succeeds(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _seed_two_chapters(project)
+    calls = {"n": 0}
+
+    def llm_callable(*, prompt: str, model: str, max_output_tokens: int | None = None):
+        del prompt, model, max_output_tokens
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("529 overloaded")
+        return _ok_payload(_valid_dublin_text())
+
+    result = generate_enhanced_script_for_folder(
+        project, "Dublin", llm_callable=llm_callable
+    )
+    assert result.status == "PASS", result.error
+    assert calls["n"] == 2
+
+
+def test_generate_fails_after_two_invalid_json_replies(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _seed_two_chapters(project)
+    calls = {"n": 0}
+
+    def llm_callable(*, prompt: str, model: str, max_output_tokens: int | None = None):
+        del prompt, model, max_output_tokens
+        calls["n"] += 1
+        return "still not json"
+
+    result = generate_enhanced_script_for_folder(
+        project, "Dublin", llm_callable=llm_callable
+    )
+    assert result.status == "FAIL"
+    assert calls["n"] == 2
+    assert result.error
+
+
+def test_generate_does_not_retry_cancelled_llm(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _seed_two_chapters(project)
+    calls = {"n": 0}
+
+    def llm_callable(*, prompt: str, model: str, max_output_tokens: int | None = None):
+        del prompt, model, max_output_tokens
+        calls["n"] += 1
+        raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.")
+
+    with pytest.raises(PlanLlmCancelledError):
+        generate_enhanced_script_for_folder(project, "Dublin", llm_callable=llm_callable)
+    assert calls["n"] == 1
+
+
+def test_revise_retries_once_on_empty_llm_reply(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _seed_two_chapters(project)
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            segments=[
+                ScriptSegment(
+                    segment_id="d1",
+                    text=_valid_dublin_text(),
+                    sequence_index=1,
+                    folder_name="Dublin",
+                    folder_order_index=0,
+                )
+            ]
+        ),
+    )
+    calls: list[str] = []
+
+    def llm_callable(*, prompt: str, model: str, max_output_tokens: int | None = None):
+        del model, max_output_tokens
+        calls.append(prompt)
+        if len(calls) == 1:
+            return "   "
+        return "Dublin sits on the Liffey and grew as Ireland’s capital."
+
+    result = revise_enhanced_script_for_folder(
+        project,
+        "Dublin",
+        editor_instructions="tighten",
+        llm_callable=llm_callable,
+    )
+    assert result.status == "PASS", result.error
+    assert len(calls) == 2
+    assert "RETRY REQUIRED" in calls[1]

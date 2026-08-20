@@ -17,6 +17,7 @@ from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.plan_llm_client import (
     PlanImageAttachment,
     PlanLlmCancelledError,
+    PlanLlmNotConfiguredError,
     generate_plan_text_with_metadata,
     reraise_if_llm_cancelled,
 )
@@ -1777,8 +1778,8 @@ def _used_in_ledger_text(plans: list[Any]) -> str:
     return "\n".join(lines)
 
 
-# Parse-/Invariantenfehler (z. B. len(slots)≠len(boundaries)-1): 1 automatischer
-# Retry mit Repair-Hinweis — wie bei der Kapitel-Skript-Erzeugung.
+# Parse-/Invariantenfehler (z. B. len(slots)≠len(boundaries)-1) und Fehler
+# direkt nach dem LLM-Call: 1 automatischer Retry — wie bei der Skripterzeugung.
 UNIFIED_CUT_PARSE_ATTEMPTS = 2
 
 
@@ -1813,6 +1814,7 @@ def generate_unified_cut_for_folder(
     used_in_ledger_text: str = "",
     prior_usage_counts: dict[str, int] | None = None,
     prior_editorial_asset_ids: list[str] | None = None,
+    on_retry: Callable[[str], None] | None = None,
 ) -> FolderUnifiedCutResult:
     """Ein Unified-LLM-Call für genau ein Kapitel (mit Parse-Retry)."""
     from otio_app.services.voiceover_generation.model_settings_service import (
@@ -2109,27 +2111,40 @@ def generate_unified_cut_for_folder(
                 attempt_prompt = (
                     f"{prompt}\n\n{_unified_cut_parse_repair_instruction(last_parse_error)}"
                 )
-            if llm_callable is not None:
-                try:
-                    raw = llm_callable(
-                        prompt=attempt_prompt, model=model_id, images=images
+            try:
+                if llm_callable is not None:
+                    try:
+                        raw = llm_callable(
+                            prompt=attempt_prompt, model=model_id, images=images
+                        )
+                    except TypeError:
+                        raw = llm_callable(prompt=attempt_prompt, model=model_id)
+                    raw_text = (
+                        raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
                     )
-                except TypeError:
-                    raw = llm_callable(prompt=attempt_prompt, model=model_id)
-                raw_text = (
-                    raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
-                )
-            else:
-                # Thinking aus — sonst frisst Sonnet/Opus das Output-Budget.
-                # Intro nutzt dasselbe Ceiling wie Körper-Kapitel (100k).
-                max_out = None
-                raw_text = generate_plan_text_with_metadata(
-                    prompt=attempt_prompt,
-                    model=model_id,
-                    images=images or None,
-                    disable_thinking=True,
-                    max_output_tokens=max_out,
-                ).raw_text
+                else:
+                    # Thinking aus — sonst frisst Sonnet/Opus das Output-Budget.
+                    # Intro nutzt dasselbe Ceiling wie Körper-Kapitel (100k).
+                    max_out = None
+                    raw_text = generate_plan_text_with_metadata(
+                        prompt=attempt_prompt,
+                        model=model_id,
+                        images=images or None,
+                        disable_thinking=True,
+                        max_output_tokens=max_out,
+                    ).raw_text
+            except PlanLlmCancelledError:
+                raise
+            except PlanLlmNotConfiguredError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                reraise_if_llm_cancelled(exc)
+                last_parse_error = ""
+                if attempt + 1 >= UNIFIED_CUT_PARSE_ATTEMPTS:
+                    raise
+                if on_retry is not None:
+                    on_retry(str(exc))
+                continue
 
             try:
                 plan = parse_unified_cut_response(
@@ -2149,6 +2164,8 @@ def generate_unified_cut_for_folder(
                 last_parse_error = str(exc)
                 if attempt + 1 >= UNIFIED_CUT_PARSE_ATTEMPTS:
                     raise
+                if on_retry is not None:
+                    on_retry(str(exc))
                 continue
 
         assert plan is not None

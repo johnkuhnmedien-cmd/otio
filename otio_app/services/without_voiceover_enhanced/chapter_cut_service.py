@@ -579,6 +579,7 @@ def generate_chapter_unified_cut(
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
     refresh_merged: bool = True,
+    on_retry: Callable[[str], None] | None = None,
 ) -> ChapterCutGenerateResult:
     """Ein Körper-Kapitel: Unified-LLM → ``cut/chapters/{slug}/unified_cut_plan.json``."""
     assert_enhanced_work_root(project)
@@ -595,6 +596,7 @@ def generate_chapter_unified_cut(
         model=model,
         llm_callable=llm_callable,
         used_in_ledger_text=ledger,
+        on_retry=on_retry,
     )
     if result.status != "PASS" or result.plan is None:
         raise ChapterCutError(
