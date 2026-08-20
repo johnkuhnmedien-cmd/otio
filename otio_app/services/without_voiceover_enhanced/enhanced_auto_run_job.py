@@ -14,6 +14,7 @@ from otio_app.services.analysis_cancel import (
     make_should_cancel,
     request_cancel_flag,
 )
+from otio_app.services.plan_llm_client import abort_registered_llm_http
 from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
     AUTO_RUN_STEPS,
     AUTO_RUN_STOP_AFTER_YOUTUBE,
@@ -108,10 +109,11 @@ class EnhancedAutoRunJobManager:
             if event is not None:
                 event.set()
             job.cancel_requested = True
-            job.message = "Stop angefordert…"
+            job.message = "Stop angefordert — laufender LLM-Call wird abgebrochen…"
         project = get_project_by_id(project_id)
         if project is not None:
             request_cancel_flag(project, JOB_KIND)
+        abort_registered_llm_http()
         return True
 
     def thread_alive(self, project_id: str) -> bool | None:
@@ -133,6 +135,7 @@ class EnhancedAutoRunJobManager:
                 job.error = job.error or "Manuell zurückgesetzt"
             self._cancel_events.pop(project_id, None)
             self._threads.pop(project_id, None)
+        abort_registered_llm_http()
         project = get_project_by_id(project_id)
         if project is not None:
             clear_cancel_flag(project, JOB_KIND)

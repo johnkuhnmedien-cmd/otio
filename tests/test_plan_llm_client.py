@@ -686,3 +686,47 @@ def test_is_plan_model_configured_checks_xai_and_openrouter_keys(
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
     assert is_plan_model_configured("openrouter:x-ai/grok-4.5") is True
+
+
+def test_generate_plan_text_stops_mid_stream_when_cancel_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from otio_app.services.plan_llm_client import (
+        PlanLlmCancelledError,
+        bind_llm_cancel,
+    )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    stop = {"on": False}
+
+    def events():
+        yield _openai_stream_events("partial")[0]
+        stop["on"] = True
+        yield _openai_stream_events(" more")[0]
+        yield _openai_stream_events("", finish_reason="stop")[1]
+
+    with patch("openai.OpenAI") as mock_openai:
+        mock_openai.return_value.chat.completions.create.return_value = events()
+        with bind_llm_cancel(lambda: stop["on"]):
+            with pytest.raises(PlanLlmCancelledError, match="abgebrochen"):
+                generate_plan_text(prompt="Plan this folder", model="openai:gpt-5.5")
+
+
+def test_abort_registered_llm_http_closes_active_client() -> None:
+    from otio_app.services.plan_llm_client import (
+        abort_registered_llm_http,
+        bind_llm_cancel,
+        cancellable_httpx_client,
+    )
+
+    fake = MagicMock()
+
+    def factory(**_kwargs):
+        return fake
+
+    with bind_llm_cancel(lambda: False):
+        with cancellable_httpx_client(factory=factory) as client:
+            assert client is fake
+            abort_registered_llm_http()
+    fake.close.assert_called()
+

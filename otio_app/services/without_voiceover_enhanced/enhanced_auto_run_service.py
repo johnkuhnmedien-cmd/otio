@@ -29,7 +29,11 @@ from otio_app.project_layout import (
     get_voiceover_style_references_path,
     get_youtube_metadata_path,
 )
-from otio_app.services.plan_llm_client import DEFAULT_MAX_OUTPUT_TOKENS
+from otio_app.services.plan_llm_client import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    PlanLlmCancelledError,
+    bind_llm_cancel,
+)
 from otio_app.services.voiceover_generation.dramaturgy_defaults_service import (
     auto_run_dramaturgy_planning_mode,
 )
@@ -501,6 +505,8 @@ def run_enhanced_auto_pipeline(
         else:
             report.completed.append(step_id)
 
+    cancel_scope = bind_llm_cancel(should_cancel)
+    cancel_scope.__enter__()
     try:
         models = load_model_settings(project)
         cut_provider, cut_model = llm_cut_provider_model(project)
@@ -657,16 +663,27 @@ def run_enhanced_auto_pipeline(
         return report
     except EnhancedAutoRunCancelled:
         raise
+    except PlanLlmCancelledError:
+        report.stopped = True
+        raise EnhancedAutoRunCancelled("Auto-Lauf gestoppt.")
     except EnhancedAutoRunError as exc:
+        if cancelled():
+            report.stopped = True
+            raise EnhancedAutoRunCancelled("Auto-Lauf gestoppt.") from exc
         raise EnhancedAutoRunError(
             format_auto_run_failure_message(str(exc), last_step_label, last_item_label)
         ) from exc
     except Exception as exc:
+        if cancelled():
+            report.stopped = True
+            raise EnhancedAutoRunCancelled("Auto-Lauf gestoppt.") from exc
         raise EnhancedAutoRunError(
             format_auto_run_failure_message(
                 str(exc) or type(exc).__name__, last_step_label, last_item_label
             )
         ) from exc
+    finally:
+        cancel_scope.__exit__(None, None, None)
 
 
 def _run_brief(
@@ -1115,6 +1132,8 @@ def _run_chapter_cuts(
                 refresh_merged=False,
             )
             generated += 1
+        except PlanLlmCancelledError:
+            raise
         except ChapterCutError as exc:
             errors.append(f"{name}: {exc}")
             break
@@ -1405,7 +1424,7 @@ def _run_stock_and_funnel(
     checkpoint("funnel")
     emit("funnel", f"Alle offenen Gaps auflösen ({len(open_ids)})…")
     try:
-        run_supplement_funnel_for_gaps(
+        funnel_report = run_supplement_funnel_for_gaps(
             project,
             gap_ids=open_ids,
             skip_filled=True,
@@ -1415,9 +1434,16 @@ def _run_stock_and_funnel(
     except EnhancedAutoRunCancelled:
         raise
     except SupplementFunnelError as exc:
+        if cancelled():
+            raise EnhancedAutoRunCancelled("Auto-Lauf gestoppt.") from exc
         raise EnhancedAutoRunError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
+        if cancelled():
+            raise EnhancedAutoRunCancelled("Auto-Lauf gestoppt.") from exc
         raise EnhancedAutoRunError(f"Funnel fehlgeschlagen: {exc}") from exc
+
+    if cancelled() or getattr(funnel_report, "stopped", False):
+        raise EnhancedAutoRunCancelled("Auto-Lauf gestoppt.")
 
     still_open = list_open_funnel_gap_ids(project)
     if still_open:

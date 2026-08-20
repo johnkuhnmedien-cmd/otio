@@ -35,6 +35,7 @@ from otio_app.project_layout import get_intro_hook_candidates_path, get_intro_ho
 from otio_app.services.gemini_client import _extract_json
 from otio_app.services.plan_llm_client import (
     generate_plan_text_with_metadata,
+    reraise_if_llm_cancelled,
 )
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.intro_hook_settings_service import (
@@ -616,6 +617,7 @@ def build_intro_hook_candidates(
     except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
         # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
         # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).
+        reraise_if_llm_cancelled(exc)
         write_llm_raw_response(run_dir, raw_text=f"ERROR: {exc}", provider=provider, model=model)
         write_llm_parsed_response(run_dir, {"parse_error": str(exc)})
         write_llm_manifest(
@@ -866,6 +868,7 @@ def revise_intro_hook_candidate(
             hook_text=revised,
         )
     except Exception as exc:  # noqa: BLE001
+        reraise_if_llm_cancelled(exc)
         return IntroHookRevisionResult(
             hook_id=hook_id,
             status=STATUS_FAIL,

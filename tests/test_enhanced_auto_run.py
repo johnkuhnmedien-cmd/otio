@@ -1223,6 +1223,66 @@ def test_auto_run_cancel_between_steps(
         )
 
 
+def test_auto_run_in_flight_llm_cancel_is_stopped_not_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.plan_llm_client import PlanLlmCancelledError
+
+    project = _project(tmp_path)
+    _seed_brief(project, title="")
+    _seed_raw_style(project)
+
+    def fake_title(*_a, **_k):
+        raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.")
+
+    monkeypatch.setattr(auto_run, "generate_video_title", fake_title)
+
+    with pytest.raises(EnhancedAutoRunCancelled):
+        run_enhanced_auto_pipeline(project, skip_done=True)
+
+
+def test_auto_run_job_cancel_closes_llm_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    manager = get_enhanced_auto_run_job_manager()
+    aborted = {"n": 0}
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_pipeline(*_a, **_k):
+        started.set()
+        release.wait(timeout=2)
+        return auto_run.EnhancedAutoRunReport(stopped=True, log_lines=["stop"])
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job.get_project_by_id",
+        lambda _pid: project,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job.run_enhanced_auto_pipeline",
+        fake_pipeline,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job.abort_registered_llm_http",
+        lambda: aborted.__setitem__("n", aborted["n"] + 1),
+    )
+    assert manager.start(project) is True
+    assert started.wait(timeout=2)
+    assert manager.request_cancel(project.id) is True
+    release.set()
+    for _ in range(80):
+        state = manager.get_state(project.id)
+        if state is not None and state.status != JobStatus.RUNNING:
+            break
+        time.sleep(0.05)
+    state = manager.get_state(project.id)
+    assert state is not None
+    assert aborted["n"] >= 1
+    assert state.status == JobStatus.CANCELLED
+    manager.dismiss(project.id)
+
+
 def test_format_auto_run_failure_message_prefixes_step_and_item() -> None:
     truncated = (
         "Die Antwort wurde nach 16384 von max_tokens=16384 Output-Tokens "
