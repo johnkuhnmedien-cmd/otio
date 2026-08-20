@@ -14,6 +14,7 @@ from otio_app.services.voiceover_generation.models import (
     DramaturgyPlan,
 )
 from otio_app.services.without_voiceover_enhanced.maps.auto_run_maps import (
+    format_maps_auto_run_status,
     maps_complete,
     run_maps_for_auto_run,
 )
@@ -100,6 +101,27 @@ class _FakeRenderer:
         }
 
 
+def test_format_maps_auto_run_status_shows_remaining_of_plan() -> None:
+    assert format_maps_auto_run_status(
+        plan_count=27,
+        render_count=16,
+        done_count=11,
+        blocked_count=0,
+    ) == "Karten: 16 zu rendern von 27 · 11 schon da"
+    assert format_maps_auto_run_status(
+        plan_count=27,
+        render_count=16,
+        done_count=8,
+        blocked_count=3,
+    ) == "Karten: 16 zu rendern von 27 · 8 schon da · 3 ohne Koordinaten"
+    assert format_maps_auto_run_status(
+        plan_count=27,
+        render_count=0,
+        done_count=24,
+        blocked_count=3,
+    ) == "Keine Karten zu rendern — 24 schon da, 3 ohne Koordinaten."
+
+
 def test_auto_run_maps_confirms_geocode_and_renders(tmp_path: Path) -> None:
     folders = ["Karpathos", "Symi"]
     project = _project(tmp_path, folders)
@@ -139,6 +161,93 @@ def test_auto_run_maps_confirms_geocode_and_renders(tmp_path: Path) -> None:
     assert maps_complete(project) is True
     assert any("Koordinaten prüfen" in line for line in messages)
     assert any("Koordinaten bestätigen" in line for line in messages)
+    assert any("2 zu rendern von 2" in line for line in messages)
+    assert any("Karte 1/2 von 2: Karpathos" in line for line in messages)
+    assert any("Karte 2/2 von 2: Symi" in line for line in messages)
+
+
+def test_auto_run_maps_counts_already_done_against_plan_total(tmp_path: Path) -> None:
+    folders = ["Karpathos", "Symi"]
+    project = _project(tmp_path, folders)
+    _confirm(project, folders)
+
+    def fake_geocode(place: str, country: str) -> dict:
+        coords = {
+            "Karpathos": (35.507, 27.213),
+            "Symi": (36.614, 27.838),
+        }
+        lat, lon = coords[place]
+        return {
+            "latitude": lat,
+            "longitude": lon,
+            "confidence": 0.9,
+            "original_label": place,
+            "display_label": place,
+        }
+
+    first = run_maps_for_auto_run(
+        project,
+        geocode_fn=fake_geocode,
+        renderer=_FakeRenderer(),
+    )
+    missing = next(item for item in first["plan"].maps if item.chapter_id == "Symi")
+    Path(missing.output_path).unlink()
+
+    events: list[dict] = []
+
+    def on_message(message: str, **kwargs) -> None:
+        events.append({"message": message, **kwargs})
+
+    second = run_maps_for_auto_run(
+        project,
+        on_message=on_message,
+        geocode_fn=fake_geocode,
+        renderer=_FakeRenderer(),
+    )
+    messages = [event["message"] for event in events]
+    assert second["already_done"] == ["Karpathos"]
+    assert second["rendered"] == ["Symi"]
+    assert any("1 zu rendern von 2" in line for line in messages)
+    assert any("1 schon da" in line for line in messages)
+    assert any(line.startswith("Karte 1/1 von 2: Symi") for line in messages)
+    render_event = next(
+        event for event in events if event["message"].startswith("Karte 1/1 von 2:")
+    )
+    assert render_event["item_index"] == 1
+    assert render_event["item_total"] == 1
+    assert render_event["item_label"] == "Symi"
+
+
+def test_auto_run_maps_blocked_chapter_still_counts_in_plan_total(
+    tmp_path: Path,
+) -> None:
+    folders = ["Karpathos", "UnknownCave"]
+    project = _project(tmp_path, folders)
+    _confirm(project, folders)
+
+    def fake_geocode(place: str, country: str):
+        if place == "UnknownCave":
+            return None
+        return {
+            "latitude": 35.507,
+            "longitude": 27.213,
+            "confidence": 0.9,
+            "original_label": place,
+            "display_label": place,
+        }
+
+    messages: list[str] = []
+    result = run_maps_for_auto_run(
+        project,
+        on_message=messages.append,
+        geocode_fn=fake_geocode,
+        renderer=_FakeRenderer(),
+    )
+    assert result["rendered"] == ["Karpathos"]
+    assert result["blocked"] == ["UnknownCave"]
+    assert any("1 zu rendern von 2" in line for line in messages)
+    assert any("1 ohne Koordinaten" in line for line in messages)
+    assert any("Karte 1/1 von 2: Karpathos" in line for line in messages)
 
 
 def test_maps_complete_false_when_saved_plan_hash_is_stale(tmp_path: Path) -> None:
