@@ -193,6 +193,41 @@ def test_weak_closes_only_after_merge_decision(tmp_path: Path) -> None:
     assert set(status.filled_gap_ids) == {"gap_weak", "gap_none"}
 
 
+def test_summarize_gap_status_tolerates_concatenated_merge_report(
+    tmp_path: Path,
+) -> None:
+    """Paralleles Python-Timing kann Extra data hinter das erste JSON schreiben."""
+    import json
+
+    project = _project(tmp_path)
+    plan = _plan()
+    write_json(unified_cut_plan_path(project), plan)
+    _rough, coverage = unified_to_rough(plan)
+    write_json(coverage_gaps_path(project), coverage)
+    path = gap_merge_report_path(project)
+    write_json(
+        path,
+        GapMergeReport(
+            script_version="script-v1",
+            cut_plan_run_id=coverage.cut_plan_run_id,
+            slots=[
+                GapMergeSlotResult(
+                    shot_id="A_slot_none",
+                    coverage_gap_id="gap_none",
+                    status="merged",
+                )
+            ],
+        ),
+    )
+    path.write_text(
+        path.read_text(encoding="utf-8") + json.dumps({"message": "dup"}) + "\n",
+        encoding="utf-8",
+    )
+    status = summarize_gap_status(project)
+    assert "gap_none" in status.filled_gap_ids
+    assert "gap_weak" in status.open_gap_ids
+
+
 def test_stale_funnel_without_accepted_does_not_count_as_filled(
     tmp_path: Path,
 ) -> None:
