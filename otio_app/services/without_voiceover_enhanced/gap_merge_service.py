@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Mapping
 
 from otio_app.models import Project
-from otio_app.services.media_utils import is_image_media, probe_duration_seconds
+from otio_app.services.media_utils import (
+    is_image_media,
+    lock_for_path,
+    probe_duration_seconds,
+)
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
 )
@@ -612,9 +616,11 @@ def merge_gap_merge_reports(
 
 def _persist_gap_merge_report(project: Project, report: GapMergeReport) -> None:
     """Schreibt Gap-Merge-Report — bei Kapitel-Läufen mit bestehendem Report mergen."""
-    existing = load_model(gap_merge_report_path(project), GapMergeReport)
-    merged = merge_gap_merge_reports(existing, report)
-    write_json(gap_merge_report_path(project), merged)
+    path = gap_merge_report_path(project)
+    with lock_for_path(path):
+        existing = load_model(path, GapMergeReport)
+        merged = merge_gap_merge_reports(existing, report)
+        write_json(path, merged)
 
 
 def _write_merge_rejection_to_funnel(
