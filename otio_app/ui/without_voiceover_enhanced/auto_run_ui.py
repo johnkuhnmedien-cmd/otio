@@ -81,7 +81,7 @@ def render_enhanced_auto_run_page() -> None:
         "Kapitel-Skripte zuerst komplett, danach "
         "Freitext-Nachbearbeitung, erst dann Script Lock. **⓪ Clean Media**, "
         "**① Analysen** und **SFX** bleiben manuell. Danach: Stocksuche (Wikimedia, Openverse, "
-        "Archive.org) → alle offenen Gaps → Karten (Plan, Koordinaten, Rendern) → "
+        "Archive.org) → alle offenen Gaps → Karten (Plan, Koordinaten, Rendern, HD max. 4 parallel) → "
         "(optional) Python Timing (Kapitel parallel) → "
         "ElevenLabs Music → OTIO → YouTube-Metadaten. Quiz bleibt manuell unter Final Output."
     )
@@ -199,7 +199,7 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
         "→ Script Lock → Intro (erste gültige Variante) → TTS → Intro-Cut → "
         "alle Kapitel-Cuts → Stocksuche (Wikimedia/Openverse/Archive.org) → "
         "alle offenen Gaps. **bis Funnel** stoppt dort; **bis YouTube** macht "
-        "weiter mit Python Timing (Kapitel parallel, max. 8) → ElevenLabs Music → "
+        "weiter mit Karten (HD max. 4 parallel) → Python Timing (Kapitel parallel, max. 8) → ElevenLabs Music → "
         "OTIO-Export → YouTube-Metadaten. Quiz bleibt manuell unter Final Output. "
         "LLM-/TTS-Calls bleiben einzeln. Offene Gaps nach dem Funnel gelten als Fehler. "
         "Fertige Schritte werden übersprungen."

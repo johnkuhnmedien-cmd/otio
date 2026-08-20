@@ -1460,7 +1460,8 @@ def test_auto_run_ui_exports_page_and_banner() -> None:
     assert "bis YouTube" in source
     assert "Auto-Lauf fehlgeschlagen —" in source
     assert "Quiz bleibt manuell" in source
-    assert "Karten (Plan, Koordinaten, Rendern)" in source
+    assert "Karten (Plan, Koordinaten, Rendern, HD max. 4 parallel)" in source
+    assert "HD max. 4 parallel" in source
     assert "Metadaten + Quiz" not in source
     assert "any_job_running(project.id, reconcile=False)" in source
     routing = Path("otio_app/ui/routing.py").read_text(encoding="utf-8")

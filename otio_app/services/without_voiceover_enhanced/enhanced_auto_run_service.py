@@ -9,7 +9,7 @@ dann Script Lock. Der Aufruf über den Auto-Lauf-Button gilt als explizite
 Bestätigung für Dramaturgie, Script Lock und Intro (erste gültige Variante).
 Clean Media, Analysen und SFX bleiben manuell. Offene Coverage-Gaps nach
 dem Funnel sind ein Fehler (die Sprachen-Queue macht mit der nächsten
-Sprache weiter). Karten (Plan, Geocode, Bestätigen, Rendern) laufen vor
+Sprache weiter). Karten (Plan, Geocode, Bestätigen, Rendern parallel — HD max. 4) laufen vor
 Python Timing, damit der Cut die MP4s findet.
 """
 

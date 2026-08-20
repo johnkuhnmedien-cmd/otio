@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
@@ -162,8 +164,9 @@ def test_auto_run_maps_confirms_geocode_and_renders(tmp_path: Path) -> None:
     assert any("Koordinaten prüfen" in line for line in messages)
     assert any("Koordinaten bestätigen" in line for line in messages)
     assert any("2 zu rendern von 2" in line for line in messages)
-    assert any("Karte 1/2 von 2: Karpathos" in line for line in messages)
-    assert any("Karte 2/2 von 2: Symi" in line for line in messages)
+    assert any("Karten parallel (max. 4)" in line for line in messages)
+    assert any("von 2: Karpathos" in line for line in messages)
+    assert any("von 2: Symi" in line for line in messages)
 
 
 def test_auto_run_maps_counts_already_done_against_plan_total(tmp_path: Path) -> None:
@@ -248,6 +251,52 @@ def test_auto_run_maps_blocked_chapter_still_counts_in_plan_total(
     assert any("1 zu rendern von 2" in line for line in messages)
     assert any("1 ohne Koordinaten" in line for line in messages)
     assert any("Karte 1/1 von 2: Karpathos" in line for line in messages)
+
+
+def test_auto_run_maps_renders_up_to_four_in_parallel(tmp_path: Path) -> None:
+    folders = ["One", "Two", "Three", "Four", "Five"]
+    project = _project(tmp_path, folders)
+    _confirm(project, folders)
+
+    def fake_geocode(place: str, country: str) -> dict:
+        return {
+            "latitude": 47.0,
+            "longitude": 19.0,
+            "confidence": 0.9,
+            "original_label": place,
+            "display_label": place,
+        }
+
+    class _CountingRenderer(_FakeRenderer):
+        def __init__(self) -> None:
+            self.current = 0
+            self.max_seen = 0
+            self._lock = threading.Lock()
+
+        def render_item(self, project: Project, item, **kwargs) -> dict:
+            with self._lock:
+                self.current += 1
+                self.max_seen = max(self.max_seen, self.current)
+            time.sleep(0.12)
+            try:
+                return super().render_item(project, item, **kwargs)
+            finally:
+                with self._lock:
+                    self.current -= 1
+
+    renderer = _CountingRenderer()
+    messages: list[str] = []
+    result = run_maps_for_auto_run(
+        project,
+        on_message=messages.append,
+        geocode_fn=fake_geocode,
+        renderer=renderer,
+    )
+    assert result["failed"] == []
+    assert set(result["rendered"]) == set(folders)
+    assert renderer.max_seen <= 4
+    assert renderer.max_seen >= 2
+    assert any("Karten parallel (max. 4)" in line for line in messages)
 
 
 def test_maps_complete_false_when_saved_plan_hash_is_stale(tmp_path: Path) -> None:
