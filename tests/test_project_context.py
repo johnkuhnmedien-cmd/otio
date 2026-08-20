@@ -71,3 +71,5 @@ def test_enhanced_output_status_includes_auto_run_overview() -> None:
     assert "_render_enhanced_output_status" in source
     assert "list_auto_run_step_statuses" in source
     assert "Statusübersicht" in source
+    assert "format_auto_run_status_caption" in source
+    assert "st.metric(item.short_label" not in source

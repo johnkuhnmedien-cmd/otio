@@ -19,6 +19,7 @@ from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_job import (
     get_enhanced_auto_run_job_manager,
 )
 from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+    format_auto_run_status_caption,
     list_auto_run_step_statuses,
 )
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY
@@ -243,15 +244,9 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
 
 
 def _render_auto_run_status_overview(project: Project) -> None:
-    """✓/— je Auto-Lauf-Schritt, inkl. Stock, Funnel, Timing, Music, OTIO, YouTube."""
-    st.markdown("**Statusübersicht**")
+    """Kompakte ✓/—-Zeile je Auto-Lauf-Schritt."""
+    st.caption("**Statusübersicht**")
     rows = list_auto_run_step_statuses(project)
     if not rows:
         return
-    chunk_size = 5
-    for start in range(0, len(rows), chunk_size):
-        chunk = rows[start : start + chunk_size]
-        columns = st.columns(chunk_size)
-        for column, item in zip(columns, chunk):
-            with column:
-                st.metric(item.short_label, "✓" if item.done else "—")
+    st.caption(format_auto_run_status_caption(rows))
