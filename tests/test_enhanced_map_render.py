@@ -213,6 +213,29 @@ def test_country_label_follows_project_language() -> None:
     assert country_label("hellas", "FR") == "Grèce"
     assert country_label("USA", "DE") == "USA"
     assert country_label("Atlantis", "EN") == "Atlantis"
+    assert country_label("Griechenland", "JP") == "ギリシャ"
+    assert country_label("Greece", "KR") == "그리스"
+    assert country_label("Greece", "ja") == "ギリシャ"
+
+
+def test_every_map_country_has_jp_and_kr_labels() -> None:
+    from otio_app.defaults import BRIEF_LANGUAGE_CHOICES
+    from otio_app.services.without_voiceover_enhanced.maps.models import (
+        MAP_HEADING_BY_LANGUAGE,
+    )
+    from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
+        _COUNTRIES,
+        _LABEL_LANGS,
+    )
+
+    assert "JP" in BRIEF_LANGUAGE_CHOICES
+    assert "KR" in BRIEF_LANGUAGE_CHOICES
+    assert set(_LABEL_LANGS) == set(BRIEF_LANGUAGE_CHOICES)
+    for lang in BRIEF_LANGUAGE_CHOICES:
+        assert lang in MAP_HEADING_BY_LANGUAGE
+    for key, meta in _COUNTRIES.items():
+        assert meta.labels.get("JP"), key
+        assert meta.labels.get("KR"), key
 
 
 def test_remotion_payload_localizes_german_video_place_for_english(tmp_path: Path) -> None:

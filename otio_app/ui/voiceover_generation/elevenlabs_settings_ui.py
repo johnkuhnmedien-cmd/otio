@@ -51,6 +51,8 @@ _SAMPLE_TEXTS = {
     "ES": "Esta es una breve prueba de voz.",
     "PT": "Este é um breve teste de voz.",
     "IT": "Questo è un breve test vocale.",
+    "JP": "これは短い音声テストです。",
+    "KR": "이것은 짧은 음성 테스트입니다.",
 }
 
 

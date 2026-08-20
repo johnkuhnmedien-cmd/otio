@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from otio_app.defaults import BRIEF_LANGUAGE_CHOICES
 from otio_app.models import ProjectCreate, ProjectMode
 from otio_app.project_repository import create_project, find_projects_by_root
 from otio_app.services.language_sibling_project import (
@@ -89,8 +90,15 @@ def test_clone_shares_root_assets_and_opens_new_language_scope(
     assert cloned.language_work_dir_path.name == "PT"
     assert source.language_work_dir_path.name == "DE"
     assert cloned.language_work_dir_path.is_dir()
+    japan = clone_project_for_language(source, "JP", db_path=temp_db_path)
+    assert japan.language == "jp"
+    assert japan.name == "JP_Test Automatic"
+    assert japan.language_work_dir_path.name == "JP"
+    korea = clone_project_for_language(source, "ko", db_path=temp_db_path)
+    assert korea.language == "kr"
+    assert korea.language_work_dir_path.name == "KR"
     siblings = find_projects_by_root(source.project_root, db_path=temp_db_path)
-    assert {item.language for item in siblings} == {"de", "pt"}
+    assert {item.language for item in siblings} == {"de", "pt", "jp", "kr"}
 
 
 def test_clone_rejects_duplicate_language(
@@ -192,7 +200,9 @@ def test_open_languages_includes_missing_and_incomplete(
     assert "PT" in open_langs
     assert "EN" in open_langs
     assert "FR" in open_langs
-    assert open_langs == ["EN", "FR", "ES", "PT", "IT"]
+    assert "JP" in open_langs
+    assert "KR" in open_langs
+    assert open_langs == [lang for lang in BRIEF_LANGUAGE_CHOICES if lang != "DE"]
 
 
 def test_open_languages_skips_complete_sibling(
