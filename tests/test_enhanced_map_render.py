@@ -218,6 +218,20 @@ def test_country_label_follows_project_language() -> None:
     assert country_label("Greece", "ja") == "ギリシャ"
 
 
+def test_country_iso2_from_german_video_place() -> None:
+    from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
+        _COUNTRIES,
+        country_iso2,
+    )
+
+    assert country_iso2("Ungarn") == "hu"
+    assert country_iso2("Griechenland") == "gr"
+    assert country_iso2("Greece") == "gr"
+    assert country_iso2("Atlantis") == ""
+    for canonical in _COUNTRIES:
+        assert country_iso2(canonical), canonical
+
+
 def test_every_map_country_has_jp_and_kr_labels() -> None:
     from otio_app.defaults import BRIEF_LANGUAGE_CHOICES
     from otio_app.services.without_voiceover_enhanced.maps.models import (

@@ -489,6 +489,57 @@ def country_numeric_id(country: str) -> str:
     return "000"
 
 
+_ISO2_BY_CANONICAL: dict[str, str] = {
+    "albania": "al",
+    "austria": "at",
+    "belgium": "be",
+    "bulgaria": "bg",
+    "croatia": "hr",
+    "cyprus": "cy",
+    "czechia": "cz",
+    "denmark": "dk",
+    "egypt": "eg",
+    "finland": "fi",
+    "france": "fr",
+    "germany": "de",
+    "greece": "gr",
+    "hungary": "hu",
+    "iceland": "is",
+    "ireland": "ie",
+    "italy": "it",
+    "malta": "mt",
+    "montenegro": "me",
+    "morocco": "ma",
+    "netherlands": "nl",
+    "norway": "no",
+    "poland": "pl",
+    "portugal": "pt",
+    "romania": "ro",
+    "slovenia": "si",
+    "spain": "es",
+    "sweden": "se",
+    "switzerland": "ch",
+    "turkey": "tr",
+    "united kingdom": "gb",
+    "united states": "us",
+}
+
+
+def country_iso2(country: str) -> str:
+    """ISO 3166-1 alpha-2 for Nominatim/Photon, or empty if unknown."""
+    canonical = canonical_country_key(country)
+    if canonical is None:
+        numeric = country_numeric_id(country)
+        if numeric != "000":
+            for key, meta in _COUNTRIES.items():
+                if meta.numeric == numeric:
+                    canonical = key
+                    break
+    if not canonical:
+        return ""
+    return _ISO2_BY_CANONICAL.get(canonical, "")
+
+
 def country_label(country: str, language: str = "DE") -> str:
     raw = str(country or "").strip() or "Map"
     canonical = canonical_country_key(raw)

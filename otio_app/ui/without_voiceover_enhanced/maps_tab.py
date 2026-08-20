@@ -393,6 +393,7 @@ def render_enhanced_maps_page() -> None:
                 plan=plan,
                 coordinates=coordinates,
                 on_progress=on_progress,
+                llm_rewrite=True,
             )
             save_map_plan(project, rebuilt)
             found = sum(1 for item in seen if item.endswith(": gefunden"))
