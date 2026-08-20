@@ -3,14 +3,17 @@
 Geocoding never runs on project open. Tests inject ``geocode_fn`` so the
 default Nominatim client is not required in CI.
 
-Nominatim usage: one request per second, identifying User-Agent, local cache,
-skip places that already have coordinates, retry HTTP 429 with increasing
-pauses. A failure for one place never aborts the remaining search.
+Nominatim: English country name first (Ungarn → Hungary), ISO countrycodes,
+query variants, local cache, 1 req/s, retry HTTP 429. If Nominatim has no
+hit: Photon, then Wikipedia. Auto-Lauf and the maps page can ask the
+Brief-LLM for a better place name after that — never the Cut models.
+A failure for one place never aborts the remaining search.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -34,12 +37,18 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     load_map_settings,
     unique_chapter_places,
 )
+from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
+    country_iso2,
+    country_label,
+)
 
 GeocodeFn = Callable[[str, str], GeocodeHit | tuple[float, float, float] | None]
 GeocodeWaitFn = Callable[[float, str], None]
 GeocodeProgressFn = Callable[["GeocodeProgress"], None]
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+PHOTON_URL = "https://photon.komoot.io/api/"
+WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 NOMINATIM_USER_AGENT = (
     "OTIO-Schnittplaner/0.1 "
     "(https://github.com/johnkuhnmedien-cmd/otio; maps-geocode)"
@@ -49,6 +58,14 @@ NOMINATIM_MIN_INTERVAL_SEC = 1.0
 NOMINATIM_MAX_429_RETRIES = 5
 NOMINATIM_429_BASE_PAUSE_SEC = 1.0
 NOMINATIM_429_MAX_PAUSE_SEC = 30.0
+WIKIPEDIA_TIMEOUT_SEC = 20.0
+PHOTON_TIMEOUT_SEC = 20.0
+
+_LEADING_INDEX_RE = re.compile(r"^\s*\d+[\).\s:\-–—]+")
+_LEADING_ARTICLE_RE = re.compile(
+    r"^(the|el|la|le|les|der|die|das|il|lo|los|las)\s+",
+    re.IGNORECASE,
+)
 
 _rate_lock = threading.Lock()
 _cache_lock = threading.Lock()
@@ -63,6 +80,10 @@ class GeocodeError(RuntimeError):
 
 class GeocodeRateLimited(GeocodeError):
     """Nominatim answered HTTP 429 after retries."""
+
+
+class GeocodeCancelled(GeocodeError):
+    """Stop during coordinate lookup."""
 
 
 @dataclass(frozen=True)
@@ -139,6 +160,50 @@ def reset_nominatim_client_for_tests() -> None:
 
 def _cache_key(place: str, country_hint: str) -> str:
     return f"{str(country_hint or '').strip().lower()}|{str(place or '').strip().lower()}"
+
+
+def geocode_query_variants(place: str, country: str = "") -> list[str]:
+    """Nominatim-Queries: englischer Ländername zuerst, dann Original, dann ohne Land."""
+    place = " ".join(str(place or "").split())
+    if not place:
+        return []
+    original = str(country or "").strip()
+    english = country_label(original, "EN") if original else ""
+    if english.casefold() == "map":
+        english = original
+    names = [place]
+    stripped = _LEADING_INDEX_RE.sub("", place).strip()
+    if stripped and stripped.casefold() != place.casefold():
+        names.append(stripped)
+    no_article = _LEADING_ARTICLE_RE.sub("", names[-1]).strip()
+    if no_article and all(no_article.casefold() != item.casefold() for item in names):
+        names.append(no_article)
+    if ":" in place:
+        tail = place.split(":")[-1].strip()
+        if tail and all(tail.casefold() != item.casefold() for item in names):
+            names.append(tail)
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        cleaned = " ".join(value.split())
+        key = cleaned.casefold()
+        if not cleaned or key in seen:
+            return
+        seen.add(key)
+        variants.append(cleaned)
+
+    for name in names:
+        if english and english.casefold() not in name.casefold():
+            add(f"{name}, {english}")
+        if (
+            original
+            and original.casefold() != english.casefold()
+            and original.casefold() not in name.casefold()
+        ):
+            add(f"{name}, {original}")
+        add(name)
+    return variants
 
 
 def _load_cache(path: Path) -> dict[str, Any]:
@@ -248,10 +313,13 @@ def friendly_geocode_error(place: str, exc: BaseException) -> str:
     return "Suche fehlgeschlagen"
 
 
-def _parse_nominatim_payload(payload: Any, place: str) -> GeocodeHit:
-    if not isinstance(payload, list) or not payload:
+def _parse_nominatim_payload(
+    payload: Any, place: str, *, iso2: str = "", country_en: str = ""
+) -> GeocodeHit:
+    rows = _preferred_nominatim_rows(payload, iso2=iso2, country_en=country_en)
+    if not rows:
         raise GeocodeError(f"no Nominatim hit for {place!r}")
-    hit = payload[0]
+    hit = rows[0]
     try:
         lat = float(hit["lat"])
         lon = float(hit["lon"])
@@ -263,55 +331,85 @@ def _parse_nominatim_payload(payload: Any, place: str) -> GeocodeHit:
         confidence = 0.55
     confidence = max(0.0, min(1.0, confidence))
     ambiguous = False
-    if len(payload) > 1:
+    if len(rows) > 1:
         try:
-            second = float(payload[1].get("importance", 0.0) or 0.0)
+            second = float(rows[1].get("importance", 0.0) or 0.0)
         except (TypeError, ValueError):
             second = 0.0
         if second >= max(0.4, confidence * 0.85):
             ambiguous = True
             confidence = min(confidence, 0.6)
+    display = str(hit.get("name") or "").strip() or place
     return {
         "latitude": lat,
         "longitude": lon,
         "confidence": confidence,
         "ambiguous": ambiguous,
         "original_label": place,
-        "display_label": place,
+        "display_label": display,
         "source": "nominatim",
     }
 
 
-def nominatim_geocode(
+def _preferred_nominatim_rows(
+    payload: Any, *, iso2: str = "", country_en: str = ""
+) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        return []
+    rows = [row for row in payload if isinstance(row, dict)]
+    if not rows:
+        return []
+    iso = str(iso2 or "").strip().lower()
+    english = str(country_en or "").strip()
+    if not iso and not english:
+        return rows
+    preferred: list[dict[str, Any]] = []
+    for row in rows:
+        address = row.get("address") if isinstance(row.get("address"), dict) else {}
+        code = str(address.get("country_code") or "").strip().lower()
+        name = str(address.get("country") or "")
+        if iso and code == iso:
+            preferred.append(row)
+        elif english and english.casefold() in name.casefold():
+            preferred.append(row)
+    return preferred or rows
+
+
+def _nominatim_request(
+    query: str,
     place: str,
-    country_hint: str = "",
     *,
+    iso2: str = "",
+    country_en: str = "",
     on_wait: GeocodeWaitFn | None = None,
 ) -> GeocodeHit:
-    """Resolve ``place`` via Nominatim. Raises ``GeocodeError`` on failure."""
-    query = str(place or "").strip()
-    if not query:
-        raise GeocodeError("empty place name")
-    hint = str(country_hint or "").strip()
-    if hint:
-        query = f"{query}, {hint}"
     last_error: BaseException | None = None
     for attempt in range(NOMINATIM_MAX_429_RETRIES + 1):
         _wait_for_nominatim_slot(on_wait)
+        params: dict[str, Any] = {
+            "q": query,
+            "format": "json",
+            "limit": 5,
+            "addressdetails": 1,
+        }
+        if iso2:
+            params["countrycodes"] = iso2
         try:
             response = requests.get(
                 NOMINATIM_URL,
-                params={"q": query, "format": "json", "limit": 2},
+                params=params,
                 headers={
                     "User-Agent": NOMINATIM_USER_AGENT,
-                    "Accept-Language": "en",
+                    "Accept-Language": "en,de;q=0.8",
                 },
                 timeout=NOMINATIM_TIMEOUT_SEC,
             )
         except requests.Timeout as exc:
             raise GeocodeError(f"Nominatim request failed for {place!r}: timeout") from exc
         except requests.RequestException as exc:
-            raise GeocodeError(f"Nominatim request failed for {place!r}: {type(exc).__name__}") from exc
+            raise GeocodeError(
+                f"Nominatim request failed for {place!r}: {type(exc).__name__}"
+            ) from exc
         if getattr(response, "status_code", 200) == 429:
             pause = _retry_after_seconds(response, attempt)
             last_error = GeocodeRateLimited(f"Nominatim rate-limited for {place!r}")
@@ -329,12 +427,308 @@ def nominatim_geocode(
             raise GeocodeError(
                 f"Nominatim request failed for {place!r}: {type(exc).__name__}"
             ) from exc
-        hit = _parse_nominatim_payload(payload, place)
-        hit["country_hint"] = hint
-        return hit
+        return _parse_nominatim_payload(
+            payload, place, iso2=iso2, country_en=country_en
+        )
     if last_error is not None:
         raise last_error
     raise GeocodeError(f"Nominatim request failed for {place!r}")
+
+
+def nominatim_geocode(
+    place: str,
+    country_hint: str = "",
+    *,
+    on_wait: GeocodeWaitFn | None = None,
+) -> GeocodeHit:
+    """Resolve ``place`` via Nominatim. Raises ``GeocodeError`` on failure."""
+    query = str(place or "").strip()
+    if not query:
+        raise GeocodeError("empty place name")
+    hint = str(country_hint or "").strip()
+    iso2 = country_iso2(hint)
+    country_en = country_label(hint, "EN") if hint else ""
+    if country_en.casefold() == "map":
+        country_en = hint
+    last_miss: BaseException | None = None
+    variants = geocode_query_variants(query, hint)
+    for variant in variants:
+        try:
+            hit = _nominatim_request(
+                variant,
+                place,
+                iso2=iso2,
+                country_en=country_en,
+                on_wait=on_wait,
+            )
+        except GeocodeError as exc:
+            message = str(exc or "")
+            if "no Nominatim hit" in message:
+                last_miss = exc
+                continue
+            raise
+        hit["country_hint"] = hint
+        hit["query"] = variant
+        if not str(hit.get("original_label") or "").strip():
+            hit["original_label"] = place
+        return hit
+    if iso2:
+        try:
+            hit = _nominatim_request(
+                variants[0] if variants else query,
+                place,
+                iso2="",
+                country_en=country_en,
+                on_wait=on_wait,
+            )
+        except GeocodeError as exc:
+            last_miss = exc
+        else:
+            hit["country_hint"] = hint
+            hit["query"] = variants[0] if variants else query
+            return hit
+    if last_miss is not None:
+        raise last_miss
+    raise GeocodeError(f"no Nominatim hit for {place!r}")
+
+
+def photon_geocode(place: str, country_hint: str = "") -> GeocodeHit | None:
+    """Fuzzy OSM search via Photon. None if nothing usable."""
+    variants = geocode_query_variants(place, country_hint)
+    query = variants[0] if variants else str(place or "").strip()
+    if not query:
+        return None
+    iso2 = country_iso2(country_hint)
+    try:
+        response = requests.get(
+            PHOTON_URL,
+            params={"q": query, "limit": 5, "lang": "en"},
+            headers={"User-Agent": NOMINATIM_USER_AGENT},
+            timeout=PHOTON_TIMEOUT_SEC,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        return None
+    features = payload.get("features") if isinstance(payload, dict) else None
+    if not isinstance(features, list):
+        return None
+    preferred: list[dict[str, Any]] = []
+    rest: list[dict[str, Any]] = []
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        properties = (
+            feature.get("properties")
+            if isinstance(feature.get("properties"), dict)
+            else {}
+        )
+        geometry = (
+            feature.get("geometry") if isinstance(feature.get("geometry"), dict) else {}
+        )
+        coords = geometry.get("coordinates")
+        if not isinstance(coords, list) or len(coords) < 2:
+            continue
+        code = str(properties.get("countrycode") or "").strip().lower()
+        row = {"properties": properties, "coords": coords}
+        if iso2 and code == iso2:
+            preferred.append(row)
+        else:
+            rest.append(row)
+    chosen = preferred or rest
+    if not chosen:
+        return None
+    row = chosen[0]
+    try:
+        lon = float(row["coords"][0])
+        lat = float(row["coords"][1])
+    except (TypeError, ValueError, KeyError):
+        return None
+    name = str(row["properties"].get("name") or "").strip() or place
+    return {
+        "latitude": lat,
+        "longitude": lon,
+        "confidence": 0.82,
+        "ambiguous": len(chosen) > 1,
+        "original_label": place,
+        "display_label": name,
+        "source": "photon",
+        "country_hint": country_hint,
+    }
+
+
+def wikipedia_geocode(place: str, country_hint: str = "") -> GeocodeHit | None:
+    """Landmark coordinates from Wikipedia search. None if the page has no point."""
+    variants = geocode_query_variants(place, country_hint)
+    query = variants[0] if variants else str(place or "").strip()
+    if not query:
+        return None
+    try:
+        response = requests.get(
+            WIKIPEDIA_API_URL,
+            params={
+                "action": "query",
+                "generator": "search",
+                "gsrsearch": query,
+                "gsrlimit": 5,
+                "prop": "coordinates",
+                "colimit": 5,
+                "format": "json",
+            },
+            headers={"User-Agent": NOMINATIM_USER_AGENT},
+            timeout=WIKIPEDIA_TIMEOUT_SEC,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    query_block = payload.get("query")
+    pages = query_block.get("pages") if isinstance(query_block, dict) else None
+    if not isinstance(pages, dict):
+        return None
+    for page in pages.values():
+        if not isinstance(page, dict):
+            continue
+        coords = page.get("coordinates")
+        if not isinstance(coords, list) or not coords:
+            continue
+        point = coords[0] if isinstance(coords[0], dict) else None
+        if point is None:
+            continue
+        try:
+            lat = float(point["lat"])
+            lon = float(point["lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        title = str(page.get("title") or "").strip() or place
+        return {
+            "latitude": lat,
+            "longitude": lon,
+            "confidence": 0.8,
+            "ambiguous": False,
+            "original_label": place,
+            "display_label": title,
+            "source": "wikipedia",
+            "country_hint": country_hint,
+        }
+    return None
+
+
+def resolve_place_coordinates(
+    place: str,
+    country_hint: str = "",
+    *,
+    on_wait: GeocodeWaitFn | None = None,
+    geocode_fn: GeocodeFn | None = None,
+) -> GeocodeHit:
+    """Nominatim, then Photon, then Wikipedia. ``geocode_fn`` skips fallbacks (tests)."""
+    if geocode_fn is not None:
+        raw = geocode_fn(place, country_hint)
+        hit = _normalize_hit(raw, original_label=place, display_label=place)
+        if hit is None:
+            raise GeocodeError(f"no Nominatim hit for {place!r}")
+        return hit
+    last_error: BaseException | None = None
+    try:
+        return nominatim_geocode(place, country_hint, on_wait=on_wait)
+    except GeocodeCancelled:
+        raise
+    except GeocodeError as exc:
+        last_error = exc
+    photon = photon_geocode(place, country_hint)
+    if photon is not None:
+        return photon
+    wiki = wikipedia_geocode(place, country_hint)
+    if wiki is not None:
+        return wiki
+    if last_error is not None:
+        raise last_error
+    raise GeocodeError(f"no Nominatim hit for {place!r}")
+
+
+def _chapter_narration_excerpt(project: Project, chapter_id: str) -> str:
+    try:
+        from otio_app.services.without_voiceover_enhanced.script_author_service import (
+            chapter_narration_text,
+        )
+        from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+            load_locked_script,
+            load_script_draft,
+        )
+
+        document = load_locked_script(project) or load_script_draft(project)
+        if document is None:
+            return ""
+        return " ".join((chapter_narration_text(document, chapter_id) or "").split())[:700]
+    except Exception:
+        return ""
+
+
+def rewrite_geocode_queries_with_llm(
+    project: Project,
+    places: list[tuple[str, str]],
+    country: str,
+) -> dict[str, str]:
+    """Kapitel-Titel → geocodierbarer Ortsname. Nutzt Brief-Modell, nie Cut-Modelle."""
+    if not places:
+        return {}
+    from otio_app.services.gemini_client import _extract_json
+    from otio_app.services.plan_llm_client import generate_plan_text
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        load_model_settings,
+        resolve_llm_model_id,
+    )
+
+    rows = [
+        {
+            "id": chapter_id,
+            "title": original,
+            "narration": _chapter_narration_excerpt(project, chapter_id),
+        }
+        for chapter_id, original in places
+    ]
+    country_en = country_label(country, "EN") if country else country
+    prompt = (
+        "Find a geocodable place name for each travel-video chapter.\n"
+        f"Country/region: {country_en or country or 'unknown'}\n"
+        "Return JSON only of the form "
+        '{"places": [{"id": "chapter id", "query": "Baradla Cave"}]}.\n'
+        "query must be a real place that Nominatim can find in that country. "
+        "If unknown, use an empty query. Do not invent coordinates.\n"
+        f"{json.dumps(rows, ensure_ascii=False)}\n"
+    )
+    try:
+        settings = load_model_settings(project)
+        role = settings.project_brief
+        model = resolve_llm_model_id(role.provider, role.model)
+        raw = generate_plan_text(
+            prompt=prompt,
+            model=model,
+            max_output_tokens=800,
+            disable_thinking=True,
+        )
+        payload = _extract_json(raw)
+    except Exception:
+        return {}
+    items = payload.get("places") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return {}
+    mapping: dict[str, str] = {}
+    known = {chapter_id: original for chapter_id, original in places}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        chapter_id = str(item.get("id") or "").strip()
+        query = " ".join(str(item.get("query") or "").split())
+        if chapter_id not in known or not query:
+            continue
+        original = known[chapter_id]
+        if query.casefold() in {chapter_id.casefold(), original.casefold()}:
+            continue
+        mapping[chapter_id] = query
+    return mapping
 
 
 def _normalize_hit(
@@ -398,13 +792,18 @@ def lookup_missing_coordinates(
     geocode_fn: GeocodeFn | None = None,
     on_progress: GeocodeProgressFn | None = None,
     cache_path: Path | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    llm_rewrite: bool = False,
+    rewrite_queries_fn: Callable[[list[tuple[str, str]], str], dict[str, str]] | None = None,
 ) -> tuple[MapCoordinatesDocument, MapPlanDocument, list[str]]:
     """Resolve chapters that still lack coordinates. Does not render.
 
     Returns ``(coordinates, rebuilt_plan, errors)``. Successful hits are saved
     to the project coordinate store. Uncertain hits stay stored but keep the
     affected maps blocked until confidence is high enough or the user confirms.
-    One failed place never aborts the rest.
+    One failed place never aborts the remaining search. ``llm_rewrite`` asks
+    the Brief-Modell for a better place name after Nominatim/Photon/Wikipedia
+    miss — never the Cut-Modelle.
     """
     resolved_settings = settings or load_map_settings(project)
     current_plan = plan or load_map_plan(project)
@@ -430,6 +829,20 @@ def lookup_missing_coordinates(
         if on_progress is not None:
             on_progress(event)
 
+    def cancelled() -> bool:
+        return bool(should_cancel and should_cancel())
+
+    def store_hit(chapter_id: str, original: str, display: str, hit: GeocodeHit) -> None:
+        hit = dict(hit)
+        hit["original_label"] = original
+        if display and not str(hit.get("display_label") or "").strip():
+            hit["display_label"] = display
+        hits[chapter_id] = hit
+        query_hits[_cache_key(original, current_plan.country)] = hit
+        if use_nominatim:
+            _cache_put(cache_file, original, current_plan.country, hit)
+        report.found += 1
+
     if total == 0:
         emit(GeocodeProgress(place="", index=0, total=0, kind="skipped"))
         rebuilt = build_map_plan(
@@ -440,7 +853,10 @@ def lookup_missing_coordinates(
         )
         return coords, rebuilt, report.errors
 
+    missed: list[tuple[str, str, str, str]] = []
     for index, (chapter_id, original, display) in enumerate(pending, start=1):
+        if cancelled():
+            raise GeocodeCancelled("Auto-Lauf gestoppt.")
         emit(
             GeocodeProgress(
                 place=original, index=index, total=total, kind="checking"
@@ -454,9 +870,7 @@ def lookup_missing_coordinates(
         if reused is not None:
             hit = _normalize_hit(reused, original_label=original, display_label=display)
             if hit is not None:
-                hits[chapter_id] = hit
-                query_hits[_cache_key(original, current_plan.country)] = hit
-                report.found += 1
+                store_hit(chapter_id, original, display, hit)
                 emit(
                     GeocodeProgress(
                         place=original, index=index, total=total, kind="skipped"
@@ -477,48 +891,96 @@ def lookup_missing_coordinates(
             )
 
         try:
-            if use_nominatim:
-                raw = nominatim_geocode(
-                    original, current_plan.country, on_wait=on_wait
-                )
-            else:
-                assert geocode_fn is not None
-                raw = geocode_fn(original, current_plan.country)
+            raw = resolve_place_coordinates(
+                original,
+                current_plan.country,
+                on_wait=on_wait,
+                geocode_fn=geocode_fn,
+            )
             hit = _normalize_hit(raw, original_label=original, display_label=display)
+        except GeocodeCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001 — Ort überspringen, Rest weiter
             reason = friendly_geocode_error(original, exc)
-            report.failed += 1
-            report.errors.append(f"{original}: {reason}")
-            emit(
-                GeocodeProgress(
-                    place=original,
-                    index=index,
-                    total=total,
-                    kind="error",
-                    detail=reason,
-                )
-            )
+            missed.append((chapter_id, original, display, reason))
             continue
         if hit is None:
-            reason = "kein Treffer"
-            report.failed += 1
-            report.errors.append(f"{original}: {reason}")
-            emit(
-                GeocodeProgress(
-                    place=original, index=index, total=total, kind="missing"
-                )
-            )
+            missed.append((chapter_id, original, display, "kein Treffer"))
             continue
-        hits[chapter_id] = hit
-        query_hits[_cache_key(original, current_plan.country)] = hit
-        if use_nominatim:
-            _cache_put(cache_file, original, current_plan.country, hit)
-        report.found += 1
+        store_hit(chapter_id, original, display, hit)
         emit(
             GeocodeProgress(
                 place=original, index=index, total=total, kind="found"
             )
         )
+
+    if missed and llm_rewrite and use_nominatim:
+        rewriter = rewrite_queries_fn or (
+            lambda rows, country: rewrite_geocode_queries_with_llm(project, rows, country)
+        )
+        try:
+            mapping = rewriter(
+                [(chapter_id, original) for chapter_id, original, _display, _reason in missed],
+                current_plan.country,
+            )
+        except GeocodeCancelled:
+            raise
+        except Exception:
+            mapping = {}
+        still: list[tuple[str, str, str, str]] = []
+        for chapter_id, original, display, reason in missed:
+            if cancelled():
+                raise GeocodeCancelled("Auto-Lauf gestoppt.")
+            query = str((mapping or {}).get(chapter_id) or "").strip()
+            if not query:
+                still.append((chapter_id, original, display, reason))
+                continue
+            emit(
+                GeocodeProgress(
+                    place=original, index=total, total=total, kind="checking"
+                )
+            )
+            try:
+                raw = resolve_place_coordinates(
+                    query,
+                    current_plan.country,
+                    geocode_fn=None,
+                )
+                hit = _normalize_hit(
+                    raw, original_label=original, display_label=display
+                )
+            except GeocodeCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                still.append(
+                    (
+                        chapter_id,
+                        original,
+                        display,
+                        friendly_geocode_error(original, exc),
+                    )
+                )
+                continue
+            if hit is None:
+                still.append((chapter_id, original, display, "kein Treffer"))
+                continue
+            store_hit(chapter_id, original, display, hit)
+            emit(
+                GeocodeProgress(
+                    place=original, index=total, total=total, kind="found"
+                )
+            )
+        missed = still
+
+    for chapter_id, original, display, reason in missed:
+        report.failed += 1
+        report.errors.append(f"{original}: {reason}")
+        emit(
+            GeocodeProgress(
+                place=original, index=total, total=total, kind="error", detail=reason
+            )
+        )
+
     if hits:
         coords = apply_geocode_hits(project, hits)
     rebuilt = build_map_plan(
