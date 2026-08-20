@@ -76,6 +76,13 @@ from otio_app.services.without_voiceover_enhanced.script_chapter_text import (
 from otio_app.services.without_voiceover_enhanced.script_chapter_link_guard import (
     detect_chapter_link_violations,
 )
+from otio_app.services.without_voiceover_enhanced.script_series_bridge import (
+    SERIES_BRIDGE_CTA_REPAIR_INSTRUCTION,
+    SERIES_BRIDGE_LINK_REPAIR_INSTRUCTION,
+    build_series_bridge_prompt_block,
+    detect_series_bridge_cta_violations,
+    series_bridge_from_brief,
+)
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
     build_enhanced_folder_script_prompt,
     build_enhanced_script_revision_prompt,
@@ -119,6 +126,11 @@ _BRIEF_PROMPT_EXCLUDE = frozenset(
         "generated_at",
         # Title-LLM inspiration only — not needed for chapter narration.
         "title_references",
+        # Last-chapter series bridge is injected as its own prompt block.
+        "series_bridge_enabled",
+        "series_bridge_destination",
+        "series_bridge_hook_facts",
+        "series_bridge_angle",
     }
 )
 
@@ -611,6 +623,29 @@ Preserve the factual content and target length.
 Return the complete required JSON again.
 """
 
+
+def _compose_script_repair_instruction(
+    *,
+    link_errors: list[str],
+    style_errors: list[str],
+    cta_errors: list[str],
+    series_bridge_active: bool,
+    style_repair: str,
+) -> str:
+    parts: list[str] = []
+    if cta_errors:
+        parts.append(SERIES_BRIDGE_CTA_REPAIR_INSTRUCTION)
+    if link_errors:
+        parts.append(
+            SERIES_BRIDGE_LINK_REPAIR_INSTRUCTION
+            if series_bridge_active
+            else CHAPTER_LINK_REPAIR_INSTRUCTION
+        )
+    if style_errors and style_repair:
+        parts.append(style_repair)
+    return "\n\n".join(part.strip() for part in parts if part.strip())
+
+
 RAW_STYLE_REPAIR_INSTRUCTION = """\
 RAW STYLE REPAIR REQUIRED
 
@@ -900,6 +935,16 @@ def generate_enhanced_script_for_folder(
             prepare_raw_chapter_reference(refs.raw_reference_text or "")
         )
 
+    brief = load_project_brief(project)
+    series_bridge = series_bridge_from_brief(brief)
+    is_last_chapter = bool(entries) and entries[-1].folder_name == folder_name
+    series_bridge_text = build_series_bridge_prompt_block(
+        series_bridge,
+        this_place=project.video_place or "",
+        is_last_chapter=is_last_chapter,
+    )
+    series_bridge_active = bool(series_bridge_text)
+
     (
         chapter_order_text,
         film_wide_editorial_links_text,
@@ -941,6 +986,7 @@ def generate_enhanced_script_for_folder(
                 editorial_neighbor_craft_text=editorial_neighbor_craft_text,
                 rhetoric_ledger_text=rhetoric_ledger_text,
                 opening_inventory_text=opening_inventory_text,
+                series_bridge_text=series_bridge_text,
                 language=project.language,
                 transition_from_previous=allow_from,
                 transition_to_next=allow_to,
@@ -1029,6 +1075,11 @@ def generate_enhanced_script_for_folder(
                     allow_callback=allow_callback,
                 )
             )
+            cta_errors: list[str] = []
+            if series_bridge_active:
+                cta_errors = detect_series_bridge_cta_violations(
+                    partial.narration_full
+                )
             style_errors: list[str] = []
             if style_is_raw:
                 style_errors = detect_raw_chapter_style_violations(
@@ -1038,8 +1089,8 @@ def generate_enhanced_script_for_folder(
                     segments=partial.segments,
                 )
 
-            if link_errors or style_errors:
-                last_error = " ".join(link_errors + style_errors)
+            if link_errors or style_errors or cta_errors:
+                last_error = " ".join(link_errors + style_errors + cta_errors)
                 if attempt == 0:
                     pause_errs = [
                         err
@@ -1060,16 +1111,13 @@ def generate_enhanced_script_for_folder(
                         )
                     else:
                         style_repair = RAW_STYLE_REPAIR_INSTRUCTION
-                    if link_errors and style_errors:
-                        repair_instruction = (
-                            CHAPTER_LINK_REPAIR_INSTRUCTION
-                            + "\n\n"
-                            + style_repair
-                        )
-                    elif link_errors:
-                        repair_instruction = CHAPTER_LINK_REPAIR_INSTRUCTION
-                    else:
-                        repair_instruction = style_repair
+                    repair_instruction = _compose_script_repair_instruction(
+                        link_errors=link_errors,
+                        style_errors=style_errors,
+                        cta_errors=cta_errors,
+                        series_bridge_active=series_bridge_active,
+                        style_repair=style_repair if style_errors else "",
+                    )
                     continue
                 return FolderScriptBuildResult(
                     folder_name=folder_name,

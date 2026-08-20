@@ -118,6 +118,16 @@ def _apply_brief_to_session(project_id: str, brief: ProjectBrief) -> None:
     st.session_state[_key(project_id, "forbidden_phrases")] = "\n".join(brief.forbidden_phrases)
     st.session_state[_key(project_id, "negative_rules_freetext")] = brief.negative_rules_freetext
     st.session_state[_key(project_id, "global_extra_prompt")] = brief.global_extra_prompt
+    st.session_state[_key(project_id, "series_bridge_enabled")] = bool(
+        brief.series_bridge_enabled
+    )
+    st.session_state[_key(project_id, "series_bridge_destination")] = (
+        brief.series_bridge_destination
+    )
+    st.session_state[_key(project_id, "series_bridge_angle")] = brief.series_bridge_angle
+    st.session_state[_key(project_id, "series_bridge_hook_facts")] = (
+        brief.series_bridge_hook_facts
+    )
     for index, text in enumerate(title_references_for_ui(brief.title_references)):
         st.session_state[_ref_key(project_id, index)] = text
 
@@ -133,6 +143,10 @@ def _brief_from_widgets(
     negative_rules_freetext: str,
     global_extra_prompt: str,
     title_references: list[str],
+    series_bridge_enabled: bool = False,
+    series_bridge_destination: str = "",
+    series_bridge_hook_facts: str = "",
+    series_bridge_angle: str = "",
 ) -> ProjectBrief:
     return ProjectBrief(
         project_id=project.id,
@@ -144,6 +158,10 @@ def _brief_from_widgets(
         forbidden_phrases=parse_forbidden_phrases_text(forbidden_phrases_text),
         global_extra_prompt=global_extra_prompt,
         title_references=normalize_title_references(title_references),
+        series_bridge_enabled=bool(series_bridge_enabled),
+        series_bridge_destination=series_bridge_destination.strip(),
+        series_bridge_hook_facts=series_bridge_hook_facts.strip(),
+        series_bridge_angle=series_bridge_angle.strip(),
     )
 
 
@@ -292,6 +310,42 @@ def render_project_brief_page() -> None:
         "Erzählperspektive, Schwerpunktsetzung, redaktioneller Stil).",
     )
 
+    st.subheader("Abschluss-Überleitung zu einem anderen Video")
+    st.caption(
+        "Nur das **letzte Kapitel** bekommt 1–3 Sätze am Ende, die vom hiesigen Ort "
+        "aus neugierig auf einen **anderen Film der Serie** machen — dokumentarisch, "
+        "kein „schau dir jetzt mein Video an“."
+    )
+    series_bridge_enabled = st.checkbox(
+        "Letztes Skript mit Serie-Brücke schließen",
+        key=_key(project.id, "series_bridge_enabled"),
+        help="Wirkt erst, wenn das letzte Kapitel neu erzeugt wird (Auto-Lauf Skript "
+        "oder einzelnes Kapitel neu generieren).",
+    )
+    series_bridge_destination = st.text_input(
+        "Land / Region des anderen Videos",
+        key=_key(project.id, "series_bridge_destination"),
+        placeholder="z. B. Griechenland",
+        disabled=not series_bridge_enabled,
+    )
+    series_bridge_angle = st.text_input(
+        "Redaktioneller Winkel (optional, wird nicht vorgelesen)",
+        key=_key(project.id, "series_bridge_angle"),
+        placeholder="z. B. Adria als Schwelle — gleiches Meer, anderes Licht",
+        disabled=not series_bridge_enabled,
+    )
+    series_bridge_hook_facts = st.text_area(
+        "Belegte Fakten / Bilder für die Neugier (nur diese darf das LLM über das andere Land sagen)",
+        key=_key(project.id, "series_bridge_hook_facts"),
+        height=120,
+        disabled=not series_bridge_enabled,
+        help="Ohne Fakten nennt das Modell nur den Ortsnamen und erfindet nichts. "
+        "Beispiel: Die Adria verbindet beide Küsten. In Griechenland stehen antike "
+        "Theater noch im Alltag. Olympia liegt eine Seereise südlich.",
+    )
+    if series_bridge_enabled and not (series_bridge_destination or "").strip():
+        st.warning("Bitte das Land/die Region des anderen Videos eintragen — sonst bleibt die Brücke aus.")
+
     col_save, col_lang, col_reload, col_reset = st.columns(4)
     with col_save:
         save_clicked = st.button(
@@ -346,6 +400,10 @@ def render_project_brief_page() -> None:
         negative_rules_freetext=negative_rules_freetext,
         global_extra_prompt=global_extra_prompt,
         title_references=title_references,
+        series_bridge_enabled=series_bridge_enabled,
+        series_bridge_destination=series_bridge_destination,
+        series_bridge_hook_facts=series_bridge_hook_facts,
+        series_bridge_angle=series_bridge_angle,
     )
 
     if save_clicked:

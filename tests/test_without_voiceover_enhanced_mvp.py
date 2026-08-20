@@ -1677,11 +1677,15 @@ def test_brief_text_omits_title_references_and_empty_fields(tmp_path: Path) -> N
             language="DE",
             title_references=["Die Wunder von Italien", "The Wonders of Japan"],
             global_extra_prompt="Nur belegte Fakten.",
+            series_bridge_enabled=True,
+            series_bridge_destination="Griechenland",
         ),
     )
     text = _brief_text(project)
     assert "title_references" not in text
     assert "Die Wunder von Italien" not in text
+    assert "series_bridge" not in text
+    assert "Griechenland" not in text
     assert "Ungarn" in text
     assert "Nur belegte Fakten." in text
     assert "generated_at" not in text

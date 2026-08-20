@@ -394,6 +394,7 @@ def build_enhanced_folder_script_prompt(
     editorial_neighbor_craft_text: str = "",
     rhetoric_ledger_text: str = "",
     opening_inventory_text: str = "",
+    series_bridge_text: str = "",
     language: str = "de",
     transition_from_previous: bool = False,
     transition_to_next: bool = False,
@@ -450,6 +451,7 @@ def build_enhanced_folder_script_prompt(
     editorial_neighbor_block = _optional_block(editorial_neighbor_craft_text)
     rhetoric_ledger_block = _optional_block(rhetoric_ledger_text)
     opening_inventory_block = _optional_block(opening_inventory_text)
+    series_bridge_block = _optional_block(series_bridge_text)
     repair_block = _optional_block(repair_instruction)
 
     style_label = (
@@ -501,7 +503,7 @@ THIS CHAPTER ONLY
 - Use ID prefixes starting with "{id_prefix}" (e.g. {id_prefix}segment_001).
 
 {permissions_block}
-{repair_block}{chapter_order_block}{film_wide_block}{opening_inventory_block}{rhetoric_ledger_block}{neighbor_excerpts_block}{editorial_neighbor_block}
+{series_bridge_block}{repair_block}{chapter_order_block}{film_wide_block}{opening_inventory_block}{rhetoric_ledger_block}{neighbor_excerpts_block}{editorial_neighbor_block}
 {_json_schema_block(id_prefix=id_prefix).replace("EXACT_FOLDER_NAME", folder_name)}
 
 PROJECT BRIEF:
