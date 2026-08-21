@@ -460,13 +460,15 @@ def test_auto_run_helper_uses_prefix_model_for_intro_and_first_chapter(
 
 
 def test_cut_plan_ui_has_single_llm_cut_model_selectbox() -> None:
-    source = (
+    path = (
         Path(__file__).resolve().parents[1]
         / "otio_app"
         / "ui"
         / "without_voiceover_enhanced"
         / "cut_plan_tab.py"
-    ).read_text(encoding="utf-8")
+    )
+    source = path.read_text(encoding="utf-8")
+    compile(source, str(path), "exec")
     assert source.count("enh_opt_llm_cut_model_") == 1
     assert source.count("enh_opt_llm_cut_prefix_model_") == 1
     assert source.count("enh_opt_llm_cut_prefix_count_") == 1

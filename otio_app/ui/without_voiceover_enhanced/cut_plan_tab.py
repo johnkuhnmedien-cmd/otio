@@ -649,15 +649,12 @@ def _cut_plan_settings_success_text(saved: CutPlanOptions) -> str:
     else:
         style_note = " · Rhythmus"
     style_note += f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
+    style_note += f" · LLM Cut={saved.llm_cut_model or '—'}"
+    prefix_count = int(saved.llm_cut_prefix_count or 0)
+    prefix_model = str(saved.llm_cut_prefix_model or "").strip()
+    if prefix_count > 0 and prefix_model:
+        style_note += f" · erste {prefix_count}={prefix_model}"
     style_note += (
-        f" · LLM Cut={saved.llm_cut_model or '—'}"
-        + (
-            f" · erste {saved.llm_cut_prefix_count}="
-            f"{saved.llm_cut_prefix_model or '—'}"
-            if int(saved.llm_cut_prefix_count or 0) > 0
-            and str(saved.llm_cut_prefix_model or "").strip()
-            else ""
-        )
         f" · SFX planner={saved.sfx_planner_model} "
         f"· max SFX={saved.max_sfx_per_chapter}"
         f" · Music={saved.elevenlabs_music_count}"
