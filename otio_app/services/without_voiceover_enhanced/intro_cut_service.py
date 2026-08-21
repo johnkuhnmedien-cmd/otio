@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from otio_app.models import Project
+from otio_app.services.media_utils import IMAGE_EXTENSIONS
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     DEFAULT_INTRO_VOICEOVER_POSTROLL_MAX_SEC,
     DEFAULT_INTRO_VOICEOVER_POSTROLL_MIN_SEC,
@@ -59,6 +61,11 @@ INTRO_CLOSING_HOLD_MAX_SEC = DEFAULT_INTRO_VOICEOVER_POSTROLL_MAX_SEC
 INTRO_BUNDLED_INVENTORY_FILENAME = "intro_bundled_inventory.json"
 INTRO_RESOLVED_TIMELINE_FILENAME = "intro_resolved_timeline.json"
 INTRO_CUT_PLAN_FILENAME = "intro_unified_cut_plan.json"
+
+# Wie Stock-Video: |w/h − 16/9| ≤ 0.03 gilt als 16:9 (1920×1080, 3840×2160, …).
+INTRO_PHOTO_16_9_TOLERANCE = 0.03
+_INTRO_PHOTO_MEDIA_TYPES = frozenset({"photo", "image", "still"})
+_INTRO_RESOLUTION_SUFFIX_RE = re.compile(r"_(\d{3,5})x(\d{3,5})$", re.IGNORECASE)
 
 
 class IntroCutError(RuntimeError):
@@ -114,11 +121,14 @@ def build_bundled_inventory_for_intro(
     for folder in list(project.selected_asset_subdirs or []):
         if not folder or is_intro_folder_name(folder):
             continue
-        assets = _local_assets_payload(
-            project,
-            folder_name=folder,
-            include_middle_frames=include_middle_frames,
-        )
+        assets = [
+            _enrich_intro_photo_aspect(project, row)
+            for row in _local_assets_payload(
+                project,
+                folder_name=folder,
+                include_middle_frames=include_middle_frames,
+            )
+        ]
         chapters[folder] = assets
         all_assets.extend(assets)
     return {
@@ -156,6 +166,87 @@ def _intro_limited_strings(values: Any, *, limit: int) -> list[str]:
     return out
 
 
+def _intro_row_is_photo(row: dict[str, Any]) -> bool:
+    media = str(row.get("media_type") or "").strip().lower()
+    if media in _INTRO_PHOTO_MEDIA_TYPES:
+        return True
+    suffix = Path(str(row.get("file") or "")).suffix.lower()
+    return suffix in IMAGE_EXTENSIONS
+
+
+def _wh_is_16_9(width: int, height: int, *, tolerance: float = INTRO_PHOTO_16_9_TOLERANCE) -> bool:
+    if width <= 0 or height <= 0:
+        return False
+    return abs((width / height) - (16 / 9)) <= float(tolerance)
+
+
+def _filename_resolution(file_name: str) -> tuple[int, int] | None:
+    match = _INTRO_RESOLUTION_SUFFIX_RE.search(Path(str(file_name or "")).stem)
+    if match is None:
+        return None
+    width, height = int(match.group(1)), int(match.group(2))
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def _intro_asset_media_path(project: Project, row: dict[str, Any]) -> Path | None:
+    file_name = str(row.get("file") or "").strip()
+    if not file_name:
+        return None
+    root = Path(str(project.project_root or "")).expanduser()
+    folder = str(row.get("folder") or "").strip()
+    candidates: list[Path] = []
+    if folder:
+        candidates.append(root / folder / file_name)
+    candidates.append(root / file_name)
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def intro_photo_is_16_9(
+    row: dict[str, Any],
+    *,
+    media_path: Path | None = None,
+    tolerance: float = INTRO_PHOTO_16_9_TOLERANCE,
+) -> bool:
+    """True nur wenn das Foto nachweislich Landscape-16:9 ist."""
+    if not _intro_row_is_photo(row):
+        return False
+    file_wh = _filename_resolution(str(row.get("file") or ""))
+    if file_wh is not None:
+        return _wh_is_16_9(*file_wh, tolerance=tolerance)
+    try:
+        aspect = float(row.get("aspect_ratio") or 0.0)
+    except (TypeError, ValueError):
+        aspect = 0.0
+    if aspect > 0:
+        return abs(aspect - (16 / 9)) <= float(tolerance)
+    if row.get("is_16_9") is True:
+        return True
+    if media_path is not None:
+        from otio_app.services.without_voiceover_enhanced.media_hold import (
+            probe_image_aspect_ratio,
+        )
+
+        probed = probe_image_aspect_ratio(media_path)
+        if probed is not None:
+            return abs(probed - (16 / 9)) <= float(tolerance)
+    return False
+
+
+def _enrich_intro_photo_aspect(project: Project, row: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(row, dict) or not _intro_row_is_photo(row):
+        return row
+    updated = dict(row)
+    updated["is_16_9"] = intro_photo_is_16_9(
+        row, media_path=_intro_asset_media_path(project, row)
+    )
+    return updated
+
+
 def _slim_intro_asset_row(row: dict[str, Any]) -> dict[str, Any]:
     """Minimale Asset-Zeile für Intro-LLM (Kosten-/Disconnect-Schutz)."""
     asset_id = str(row.get("local_asset_id") or row.get("asset_id") or "").strip()
@@ -165,6 +256,8 @@ def _slim_intro_asset_row(row: dict[str, Any]) -> dict[str, Any]:
         "file": row.get("file") or "",
         "media_type": row.get("media_type") or "",
     }
+    if _intro_row_is_photo(row):
+        out["is_16_9"] = intro_photo_is_16_9(row)
     if row.get("duration_seconds") is not None:
         out["duration_seconds"] = row.get("duration_seconds")
     desc = " ".join(str(row.get("description") or "").split())
