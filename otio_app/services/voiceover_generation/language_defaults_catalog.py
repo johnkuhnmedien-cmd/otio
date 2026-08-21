@@ -139,7 +139,8 @@ def list_language_standard_files() -> list[LanguageStandardFile]:
             filename=CUT_PLAN_OPTIONS_DEFAULTS_FILENAME,
             path=get_cut_plan_options_defaults_path(),
             stores=(
-                "Modus, Unified-Stil, LLM-Cut-Modell, Shot-Min/Max, Reuse, "
+                "Modus, Unified-Stil, LLM-Cut-Modell (Standard + optionales "
+                "Prefix für die ersten N inkl. Intro), Shot-Min/Max, Reuse, "
                 "Vor-/Nachlauf, Intro-Hüllen, Still/Pan, Titel, Music-Anzahl, "
                 "SFX-Planner-Modell, SFX-Maximum"
             ),

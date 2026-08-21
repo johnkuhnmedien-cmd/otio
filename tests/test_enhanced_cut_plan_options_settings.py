@@ -84,7 +84,8 @@ def test_options_roundtrip_new_fields(tmp_path: Path) -> None:
     assert not is_keyword_sync_unified_style(defaults)
     assert defaults.elevenlabs_music_count == 4
     assert defaults.llm_cut_model == ""
-    assert defaults.llm_cut_model == ""
+    assert defaults.llm_cut_prefix_count == 0
+    assert defaults.llm_cut_prefix_model == ""
     saved = save_cut_plan_options(
         project,
         CutPlanOptions(
@@ -150,6 +151,8 @@ def test_legacy_options_json_still_loads(tmp_path: Path) -> None:
     assert loaded.include_middle_frames is True
     assert loaded.max_middle_frames_per_chapter == 12
     assert loaded.llm_cut_model == ""
+    assert loaded.llm_cut_prefix_count == 0
+    assert loaded.llm_cut_prefix_model == ""
     assert loaded.max_candidates_per_gap == 10
     assert loaded.shot_max_sec == 8.0
     assert loaded.elevenlabs_music_count == 4
@@ -170,6 +173,27 @@ def test_elevenlabs_music_count_roundtrip_and_clamp(tmp_path: Path) -> None:
     assert loaded.schema_version == "1.12"
     assert _normalize_payload({"elevenlabs_music_count": 99}).elevenlabs_music_count == 40
     assert _normalize_payload({"elevenlabs_music_count": 0}).elevenlabs_music_count == 1
+
+
+def test_llm_cut_prefix_count_roundtrip_and_clamp(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        _normalize_payload,
+    )
+
+    project = _project(tmp_path)
+    saved = save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            llm_cut_prefix_count=2,
+            llm_cut_prefix_model="openai:gpt-5.6-sol",
+        ),
+    )
+    assert saved.llm_cut_prefix_count == 2
+    loaded = load_cut_plan_options(project)
+    assert loaded.llm_cut_prefix_count == 2
+    assert loaded.llm_cut_prefix_model == "openai:gpt-5.6-sol"
+    assert _normalize_payload({"llm_cut_prefix_count": 99}).llm_cut_prefix_count == 40
+    assert _normalize_payload({"llm_cut_prefix_count": -3}).llm_cut_prefix_count == 0
 
 
 def test_prompt_constraints_in_rough_and_final() -> None:

@@ -1,8 +1,9 @@
 """Globale Enhanced-Cut-Plan-Settings pro Sprache (unter ``data/``).
 
 Projektspezifisch bleibt ``cut_plan_options.json`` plus erzeugte Cuts,
-Timing, Funnel und OTIO. Die Cut Plan Settings (Modus, Stil, LLM-Cut-Modell,
-Shot-Längen, Reuse, Vor-/Nachlauf, Still, Music/SFX-Anzahl, …) können pro
+Timing, Funnel und OTIO. Die Cut Plan Settings (Modus, Stil, LLM-Cut-Modell
+inkl. optionalem Prefix für die ersten N Cuts, Shot-Längen, Reuse,
+Vor-/Nachlauf, Still, Music/SFX-Anzahl, …) können pro
 Sprache als Standard liegen — analog zu Brief, Style, Dramaturgie und Intro.
 """
 

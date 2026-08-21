@@ -39,6 +39,8 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     DEFAULT_SFX_PLANNER_MODEL,
     ELEVENLABS_MUSIC_COUNT_MAX,
     ELEVENLABS_MUSIC_COUNT_MIN,
+    LLM_CUT_PREFIX_COUNT_MAX,
+    LLM_CUT_PREFIX_COUNT_MIN,
     MAX_SFX_PER_CHAPTER_MAX,
     MAX_SFX_PER_CHAPTER_MIN,
     STILL_BACKGROUND_CHOICES,
@@ -356,13 +358,55 @@ def _render_cost_caption(
     )
 
 
-def _live_llm_cut_model_id(project, options: CutPlanOptions | None = None) -> str:
+def _live_llm_cut_model_id(
+    project,
+    options: CutPlanOptions | None = None,
+    *,
+    folder_name: str | None = None,
+    is_intro: bool = False,
+) -> str:
     """Live-Wert aus den Cut Plan Settings, sonst persistierter Sprach-/Projektwert."""
-    if options is not None:
-        configured = str(options.llm_cut_model or "").strip()
-        if configured:
-            return configured
-    return resolve_llm_cut_model_id(project)
+    return resolve_llm_cut_model_id(
+        project,
+        folder_name=folder_name,
+        is_intro=is_intro,
+        options=options,
+    )
+
+
+def _live_llm_cut_provider_model(
+    project,
+    options: CutPlanOptions | None = None,
+    *,
+    folder_name: str | None = None,
+    is_intro: bool = False,
+) -> tuple[str, str]:
+    return split_llm_model_id(
+        _live_llm_cut_model_id(
+            project,
+            options,
+            folder_name=folder_name,
+            is_intro=is_intro,
+        )
+    )
+
+
+def _llm_cut_prefix_caption(project, options: CutPlanOptions | None) -> str:
+    opts = options or load_cut_plan_options(project)
+    try:
+        count = int(opts.llm_cut_prefix_count or 0)
+    except (TypeError, ValueError):
+        count = 0
+    prefix = str(opts.llm_cut_prefix_model or "").strip()
+    if count <= 0 or not prefix:
+        return ""
+    standard = _live_llm_cut_model_id(project, opts)
+    prefix_label = ENHANCED_CUT_LLM_MODEL_LABELS.get(prefix, prefix)
+    std_label = ENHANCED_CUT_LLM_MODEL_LABELS.get(standard, standard)
+    return (
+        f"Prefix aktiv: erste {count} Cuts (Intro zählt als 1) mit "
+        f"**{prefix_label}**, der Rest mit **{std_label}**."
+    )
 
 
 def _render_enhanced_cut_model(
@@ -607,6 +651,13 @@ def _cut_plan_settings_success_text(saved: CutPlanOptions) -> str:
     style_note += f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
     style_note += (
         f" · LLM Cut={saved.llm_cut_model or '—'}"
+        + (
+            f" · erste {saved.llm_cut_prefix_count}="
+            f"{saved.llm_cut_prefix_model or '—'}"
+            if int(saved.llm_cut_prefix_count or 0) > 0
+            and str(saved.llm_cut_prefix_model or "").strip()
+            else ""
+        )
         f" · SFX planner={saved.sfx_planner_model} "
         f"· max SFX={saved.max_sfx_per_chapter}"
         f" · Music={saved.elevenlabs_music_count}"
@@ -762,15 +813,52 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         if current_llm_cut_model not in cut_model_options:
             cut_model_options = [current_llm_cut_model, *cut_model_options]
         llm_cut_model = st.selectbox(
-            "Modell (Unified Cut / Auto-Lauf)",
+            "Standard-Modell (Unified Cut / Auto-Lauf)",
             options=cut_model_options,
             index=cut_model_options.index(current_llm_cut_model),
             format_func=lambda m: ENHANCED_CUT_LLM_MODEL_LABELS.get(m, m),
             key=f"enh_opt_llm_cut_model_{project.id}",
             help=(
-                "Ein Modell für Unified Cut, Intro-Cut, Körper-Kapitel und Auto-Lauf. "
-                "Nur hier wählen — nicht noch einmal im Cut-Bereich. "
-                "Wird mit „Als Standard für die Sprache speichern“ übernommen."
+                "Standard für Intro, Körper-Kapitel und Auto-Lauf, sofern unten "
+                "kein Prefix greift. Nur hier wählen — nicht noch einmal im "
+                "Cut-Bereich. Wird mit „Als Standard für die Sprache speichern“ "
+                "übernommen."
+            ),
+        )
+        llm_cut_prefix_count = st.number_input(
+            "Erste N Cuts mit anderem Modell (inkl. Intro)",
+            min_value=LLM_CUT_PREFIX_COUNT_MIN,
+            max_value=LLM_CUT_PREFIX_COUNT_MAX,
+            value=int(current.llm_cut_prefix_count or 0),
+            step=1,
+            key=f"enh_opt_llm_cut_prefix_count_{project.id}",
+            help=(
+                "Optional. Intro zählt als erstes, danach die Körper-Kapitel in "
+                "Filmreihenfolge. 2 = Intro + erstes Kapitel mit dem Prefix-Modell, "
+                "der Rest mit dem Standard-Modell. 0 = aus."
+            ),
+        )
+        prefix_model_options = [""] + list(cut_model_options)
+        current_prefix_model = str(current.llm_cut_prefix_model or "").strip()
+        if current_prefix_model and current_prefix_model not in prefix_model_options:
+            prefix_model_options = ["", current_prefix_model, *cut_model_options]
+        llm_cut_prefix_model = st.selectbox(
+            "Modell für die ersten N",
+            options=prefix_model_options,
+            index=(
+                prefix_model_options.index(current_prefix_model)
+                if current_prefix_model in prefix_model_options
+                else 0
+            ),
+            format_func=lambda m: (
+                "— aus (nur Standard-Modell)"
+                if not m
+                else ENHANCED_CUT_LLM_MODEL_LABELS.get(m, m)
+            ),
+            key=f"enh_opt_llm_cut_prefix_model_{project.id}",
+            help=(
+                "Leer = Prefix aus. Beispiel: N=2 und GPT-5.6 Sol → Intro und "
+                "erstes Kapitel mit Sol, alle weiteren mit dem Standard-Modell."
             ),
         )
         st.markdown("##### Sound Effects (MVP)")
@@ -1219,6 +1307,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             enable_unified_mini_repair=bool(enable_unified_mini_repair),
             unified_mini_repair_threshold=float(unified_mini_repair_threshold),
             llm_cut_model=str(llm_cut_model),
+            llm_cut_prefix_count=int(llm_cut_prefix_count),
+            llm_cut_prefix_model=str(llm_cut_prefix_model or "").strip(),
             sfx_planner_model=str(sfx_planner_model),
             max_sfx_per_chapter=int(max_sfx_per_chapter),
             elevenlabs_music_count=int(elevenlabs_music_count),
@@ -1276,7 +1366,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 f"Als Standard für {lang_key} speichern",
                 key=f"enh_opt_save_lang_{project.id}",
                 help=(
-                    f"Cut Plan Settings inkl. LLM-Cut-Modell global für {lang_key}. "
+                    f"Cut Plan Settings inkl. Standard- und Prefix-LLM-Cut-Modell "
+                    f"global für {lang_key}. "
                     "Erzeugte Cuts, Timing und Funnel bleiben projektspezifisch."
                 ),
             ):
@@ -1420,16 +1511,21 @@ def _sfx_button_label(ui_status: dict) -> str:
 def _render_intro_cut_section(
     project,
     *,
-    provider: str,
-    model: str,
+    options: CutPlanOptions | None = None,
     output_ceiling: int = 100_000,
 ) -> None:
     """Separater Intro-Pfad vor den Kapitel-Unified-Buttons."""
+    provider, model = _live_llm_cut_provider_model(
+        project, options, is_intro=True
+    )
+    intro_pretty = ENHANCED_CUT_LLM_MODEL_LABELS.get(
+        f"{provider}:{model}", f"{provider}:{model}"
+    )
     st.markdown("##### 0. Intro Cut (separat)")
     st.caption(
         "Nur Intro: gebündelte Inventare · strong-only · Opening 4s / Closing 5–8s · "
         "ohne Cut-Plan shot_min. "
-        "Modell wie der Unified Cut (Cut Plan Settings). "
+        f"LLM-Modell: **{intro_pretty}** (Cut Plan Settings, Intro zählt als 1). "
         "**Intro: Python Timing** rechnet nur das Intro neu (Gesamt-Timeline bleibt). "
         "**Intro-OTIO** exportiert ausschließlich Intro (auch mit Lücken)."
     )
@@ -1736,8 +1832,7 @@ def _inject_chapter_done_button_css(done_keys: list[str]) -> None:
 def _render_chapter_cut_rows(
     project,
     *,
-    provider: str,
-    model: str,
+    options: CutPlanOptions | None = None,
 ) -> None:
     """Pro Körper-Kapitel: Name | LLM Cut | Python Timing | ElevenLabs Music | OTIO."""
     statuses = list_chapter_cut_statuses(project)
@@ -1855,12 +1950,15 @@ def _render_chapter_cut_rows(
 
         if run_llm:
             try:
+                chapter_provider, chapter_model = _live_llm_cut_provider_model(
+                    project, options, folder_name=folder
+                )
                 with st.spinner(f"LLM Cut · „{folder}“…"):
                     result = generate_chapter_unified_cut(
                         project,
                         folder,
-                        provider=provider,
-                        model=model,
+                        provider=chapter_provider,
+                        model=chapter_model,
                     )
                 st.success(
                     f"„{folder}“: {result.slot_count} Slots · "
@@ -2024,6 +2122,13 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         body_chapters = []
     chapter_count = max(1, len(body_chapters))
     model_id = _live_llm_cut_model_id(project, options)
+    prefix_note = _llm_cut_prefix_caption(project, options)
+    cost_note = (
+        "Ceiling für alle Körper-Kapitel-Calls — nicht der Intro-Call. "
+        "Intro hat eine eigene Schätzung darunter."
+    )
+    if prefix_note:
+        cost_note = f"{cost_note} {prefix_note} Kosten oben nutzen das Standard-Modell."
     rough_provider, rough_model, rough_max = _render_enhanced_cut_model(
         project,
         label="Unified Cut",
@@ -2033,16 +2138,14 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         default_output_tokens=_ROUGH_CUT_OUTPUT_DEFAULT,
         chapter_count=chapter_count,
         cost_scope_label="Körper-Kapitel (Batch/Zeilen, ohne Intro)",
-        cost_note=(
-            "Ceiling für alle Körper-Kapitel-Calls — nicht der Intro-Call. "
-            "Intro hat eine eigene Schätzung darunter."
-        ),
+        cost_note=cost_note,
         model_id=model_id,
     )
+    if prefix_note:
+        st.caption(prefix_note)
     _render_intro_cut_section(
         project,
-        provider=rough_provider,
-        model=rough_model,
+        options=options,
         output_ceiling=rough_max,
     )
 
@@ -2203,14 +2306,16 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
     def _run_llm_batch(*, only_open: bool) -> None:
         progress = st.empty()
         label = "Offene" if only_open else "Alle"
-        model_id = resolve_llm_model_id(rough_provider, rough_model)
 
         def _unified_progress(folder_name: str, index: int, total: int) -> None:
             # Strikt 1 Call — Anzeige bleibt auf diesem Kapitel, bis der Call
             # fertig ist (oft mehrere Minuten; Timeout bis 10 Min.).
+            chapter_model_id = _live_llm_cut_model_id(
+                project, cut_options, folder_name=folder_name
+            )
             progress.info(
                 f"Unified LLM ({label}) · Kapitel {index}/{total}: „{folder_name}“ "
-                f"({model_id}) — SEQUENZIELL, nur dieser eine Call läuft…"
+                f"({chapter_model_id}) — SEQUENZIELL, nur dieser eine Call läuft…"
             )
 
         try:
@@ -2224,6 +2329,7 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
                     model=rough_model,
                     progress_callback=_unified_progress,
                     only_open=only_open,
+                    options=cut_options,
                 )
             total_slots = sum(r.slot_count for r in results)
             total_gaps = sum(r.gap_count for r in results)
@@ -2388,11 +2494,7 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         finally:
             progress.empty()
 
-    _render_chapter_cut_rows(
-        project,
-        provider=rough_provider,
-        model=rough_model,
-    )
+    _render_chapter_cut_rows(project, options=cut_options)
 
     st.divider()
     st.markdown("##### Gesamt (Merge / Funnel)")

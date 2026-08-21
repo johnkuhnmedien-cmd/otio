@@ -881,13 +881,125 @@ def test_auto_run_timing_failure_triggers_llm_cut_then_retries(
         checkpoint=lambda _step: None,
         finish=lambda *_a, **_k: None,
         cancelled=lambda: False,
-        cut_provider="openai",
-        cut_model="gpt-5.6-terra",
         funnel_model="funnel-model",
     )
     assert cuts == ["Győr"]
     assert retried == ["Győr"]
     assert stock_calls["n"] == 0
+
+
+def test_auto_run_llm_cuts_use_prefix_and_standard_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+        save_cut_plan_options,
+    )
+
+    project = _project(tmp_path)
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            llm_cut_model="openai:gpt-5.6-terra",
+            llm_cut_prefix_count=2,
+            llm_cut_prefix_model="openai:gpt-5.6-sol",
+        ),
+    )
+    intro: list[tuple[str, str]] = []
+    chapters: list[tuple[str, str, str]] = []
+
+    def fake_intro(_project, **kwargs):
+        intro.append((kwargs["provider"], kwargs["model"]))
+        return MagicMock(slot_count=1, gap_count=0)
+
+    def fake_chapter(_project, folder_name, **kwargs):
+        chapters.append((folder_name, kwargs["provider"], kwargs["model"]))
+        return MagicMock()
+
+    monkeypatch.setattr(auto_run, "generate_intro_unified_cut", fake_intro)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", fake_chapter)
+    monkeypatch.setattr(
+        auto_run, "list_chapters_needing_unified_cut", lambda _p: ["Athens", "Győr"]
+    )
+    monkeypatch.setattr(auto_run, "refresh_merged_unified_cut_plan", lambda _p: None)
+
+    auto_run._run_intro_cut(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        finish=lambda *_a, **_k: None,
+    )
+    auto_run._run_chapter_cuts(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        checkpoint=lambda _step: None,
+        finish=lambda *_a, **_k: None,
+    )
+    assert intro == [("openai", "gpt-5.6-sol")]
+    assert chapters == [
+        ("Athens", "openai", "gpt-5.6-sol"),
+        ("Győr", "openai", "gpt-5.6-terra"),
+    ]
+
+
+def test_auto_run_timing_recovery_uses_chapter_prefix_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+        save_cut_plan_options,
+    )
+
+    project = _project(tmp_path)
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            llm_cut_model="openai:gpt-5.6-terra",
+            llm_cut_prefix_count=2,
+            llm_cut_prefix_model="openai:gpt-5.6-sol",
+        ),
+    )
+    needing = {"v": ["Athens"]}
+    cuts: list[tuple[str, str, str]] = []
+
+    def fake_needing(_p):
+        return list(needing["v"])
+
+    def fake_resolve_all(_project, *, chapter_names, **_k):
+        needing["v"] = ["Athens"]
+        raise auto_run.ChapterCutError("Athens: Timing passt nicht")
+
+    def fake_cut(_project, folder_name, **kwargs):
+        cuts.append((folder_name, kwargs["provider"], kwargs["model"]))
+        return MagicMock(slot_count=6, gap_count=0)
+
+    def fake_retry(_project, folder_name):
+        needing["v"] = []
+        return MagicMock()
+
+    monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
+    monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", fake_needing)
+    monkeypatch.setattr(auto_run, "resolve_all_chapter_timelines", fake_resolve_all)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", fake_cut)
+    monkeypatch.setattr(auto_run, "chapter_open_gap_ids", lambda *_a, **_k: [])
+    monkeypatch.setattr(auto_run, "resolve_chapter_timeline", fake_retry)
+    monkeypatch.setattr(
+        auto_run,
+        "_run_stock_and_funnel",
+        lambda *_a, **_k: None,
+    )
+
+    auto_run._run_timing(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        checkpoint=lambda _step: None,
+        finish=lambda *_a, **_k: None,
+        cancelled=lambda: False,
+        funnel_model="funnel-model",
+    )
+    assert cuts == [("Athens", "openai", "gpt-5.6-sol")]
 
 
 def test_auto_run_timing_recut_with_new_gaps_runs_stock_and_funnel(
@@ -947,8 +1059,6 @@ def test_auto_run_timing_recut_with_new_gaps_runs_stock_and_funnel(
         checkpoint=lambda _step: None,
         finish=lambda *_a, **_k: None,
         cancelled=lambda: False,
-        cut_provider="openai",
-        cut_model="gpt-5.6-terra",
         funnel_model="funnel-model",
     )
     assert cuts == ["Athens"]
@@ -997,8 +1107,6 @@ def test_auto_run_timing_second_attempt_failure_stops(
             checkpoint=lambda _step: None,
             finish=lambda *_a, **_k: None,
             cancelled=lambda: False,
-            cut_provider="openai",
-            cut_model="gpt-5.6-terra",
         )
     assert cuts == ["Athens"]
 
