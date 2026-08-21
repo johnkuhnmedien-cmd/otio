@@ -144,6 +144,53 @@ def test_slim_intro_asset_row_keeps_compact_v2_subset() -> None:
     assert "motion_intensity" not in out
     assert "analysis_confidence" not in out
     assert "confidence" not in out
+    assert "is_16_9" not in out
+
+
+def test_slim_intro_photo_row_sets_is_16_9_from_filename() -> None:
+    wide = _slim_intro_asset_row(
+        {
+            "local_asset_id": "photo_wide",
+            "file": "cave_1920x1080.jpg",
+            "media_type": "photo",
+            "folder": "Cliffs",
+        }
+    )
+    square = _slim_intro_asset_row(
+        {
+            "local_asset_id": "photo_sq",
+            "file": "portrait.jpg",
+            "media_type": "image",
+            "folder": "Cliffs",
+        }
+    )
+    four_three = _slim_intro_asset_row(
+        {
+            "local_asset_id": "photo_43",
+            "file": "wall_1440x1080.jpg",
+            "media_type": "photo",
+            "folder": "Cliffs",
+        }
+    )
+    assert wide["is_16_9"] is True
+    assert square["is_16_9"] is False
+    assert four_three["is_16_9"] is False
+
+
+def test_intro_photo_is_16_9_probes_image_file(tmp_path) -> None:
+    from PIL import Image
+
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        intro_photo_is_16_9,
+    )
+
+    wide = tmp_path / "hold.jpg"
+    Image.new("RGB", (1920, 1080), color=(10, 20, 30)).save(wide, "JPEG")
+    tall = tmp_path / "tower.jpg"
+    Image.new("RGB", (800, 1200), color=(10, 20, 30)).save(tall, "JPEG")
+    row = {"file": "hold.jpg", "media_type": "photo"}
+    assert intro_photo_is_16_9(row, media_path=wide) is True
+    assert intro_photo_is_16_9(row, media_path=tall) is False
 
 
 def test_intro_bundled_prompt_stays_compact_for_many_chapters() -> None:
@@ -272,6 +319,11 @@ def test_intro_prompt_rules() -> None:
     assert "hero and appeal help opener/closing" in prompt.lower() or (
         "Intro / closing note" in prompt
     )
+    assert "PHOTOS / STILLS (CRITICAL)" in prompt
+    assert "is_16_9" in prompt
+    assert "landscape 16:9" in prompt
+    assert "photo only if is_16_9" in prompt
+    assert "Photos/stills only if is_16_9 is true" in prompt
 
 
 def test_intro_prompt_uses_configured_hold_timings() -> None:

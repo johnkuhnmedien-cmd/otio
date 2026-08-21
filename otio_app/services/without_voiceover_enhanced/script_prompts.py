@@ -1746,6 +1746,15 @@ INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
 - Prefix every cut_id, slot_id and coverage_gap_id with \"{slug}_\".
 - Use only segment_ids / sentence_ids from the Intro inputs.
 - Use only local_asset_id values that exist in BUNDLED INVENTORY.
+- PHOTOS / STILLS (CRITICAL): Do not choose a photo/still unless it is
+  landscape 16:9. In BUNDLED INVENTORY, photos have is_16_9. Assign a photo
+  only when is_16_9 is true (~1.78, e.g. 1920×1080). Portrait, square, 4:3,
+  ultrawide, and photos without is_16_9=true are forbidden — treat them as
+  unavailable. Prefer video. A 16:9 photo is allowed only when no suitable
+  video covers that beat. This applies to VO slots AND intro_opener_asset_id,
+  intro_closing_asset_id, closing_fallback_asset_id. If only non-16:9 photos
+  remain, set asset_fit \"none\" and open a coverage_gap
+  (preferred_media_type \"video\").
 
 KEYWORD / CONTEXT CUTS (CRITICAL — understand the whole Intro first):
 
@@ -1842,6 +1851,7 @@ SLOT / ASSET RULES:
 - narrative_function for first/last may be chapter_open / chapter_close
 - The last slot is the closing picture: it must span from its start boundary
   through the full remaining VO to the last boundary (VO end).
+- Photos/stills: only if is_16_9 is true; otherwise video or a coverage_gap.
 
 {CUT_ASSET_SELECTION_GUIDANCE}
 RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
@@ -1894,7 +1904,7 @@ OUTPUT SCHEMA:
       "must_avoid": ["..."],
       "desired_motion": "static|pan|tilt|tracking|drone|handheld|zoom|unknown",
       "desired_framing": "close|medium|wide|aerial|pov",
-      "preferred_media_type": "video|photo|either",
+      "preferred_media_type": "video|photo|either (photo only if is_16_9)",
       "fact_check_required": false,
       "covered_sentence_ids": ["Intro_segment_001__s001"]
     }}
@@ -1921,6 +1931,7 @@ FINAL VALIDATION:
 - asset_fit is only strong or none
 - Opening/closing assets differ when both assigned
 - All local_asset_id values exist in BUNDLED INVENTORY (or null)
+- Photos/stills only if is_16_9 is true; otherwise video or coverage_gap
 - Justified keyword/list picture cuts use mid_sentence + words[].offset_seconds
   when words[] is present (else text-proportion offset_seconds)
 - No place/list picture starts before its spoken keyword (except slot-1 preroll)
@@ -1934,7 +1945,7 @@ LOCKED SCRIPT (Intro only):
 SEGMENT TIMINGS:
 {segment_timings_json}
 {sentence_block}
-BUNDLED INVENTORY (compact rows; description/tags + motion/framing/shot_scale + subset quality/look):
+BUNDLED INVENTORY (compact rows; photos include is_16_9; description/tags + motion/framing/shot_scale + subset quality/look):
 {bundled_inventory_json}
 
 STYLE PROFILE:
