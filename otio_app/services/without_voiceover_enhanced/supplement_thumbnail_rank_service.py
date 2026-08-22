@@ -749,11 +749,18 @@ def _generate_funnel_content(*, client: Any, model: str, contents: Any) -> Any:
                     f"(Modell {resolved}). Gap wird übersprungen."
                 )
             try:
-                return future.result(timeout=min(0.25, remaining))
+                response = future.result(timeout=min(0.25, remaining))
             except FuturesTimeout:
                 if llm_cancel_requested():
                     abort_registered_llm_http()
                     raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.")
+                continue
+            from otio_app.services.voiceover_generation.llm_cost_ledger import (
+                record_gemini_response_cost_safe,
+            )
+
+            record_gemini_response_cost_safe(response, model=resolved)
+            return response
     finally:
         # wait=False: sonst blockiert shutdown() weiter auf dem hängenden Call.
         executor.shutdown(wait=False, cancel_futures=True)

@@ -89,6 +89,41 @@ def estimate_tokens_from_text(text: str) -> int:
     return max(1, len(cleaned) // 4)
 
 
+@dataclass(frozen=True)
+class LlmActualCost:
+    input_tokens: int
+    output_tokens: int
+    input_cost_usd: float
+    output_cost_usd: float
+    total_usd: float
+    price: LlmPriceQuote
+    price_unknown: bool
+
+
+def actual_call_cost_usd(
+    *,
+    provider: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> LlmActualCost:
+    """Echte Kosten aus abgerechneten Tokens × interner Preisliste (kein Ceiling)."""
+    price = resolve_llm_price(provider, model)
+    inp = max(0, int(input_tokens))
+    out = max(0, int(output_tokens))
+    input_cost = (inp / 1_000_000.0) * price.input_usd_per_mtok
+    output_cost = (out / 1_000_000.0) * price.output_usd_per_mtok
+    return LlmActualCost(
+        input_tokens=inp,
+        output_tokens=out,
+        input_cost_usd=input_cost,
+        output_cost_usd=output_cost,
+        total_usd=input_cost + output_cost,
+        price=price,
+        price_unknown=price.label == _DEFAULT_LABEL,
+    )
+
+
 def estimate_call_cost_usd(
     *,
     provider: str,

@@ -54,6 +54,13 @@ def render_enhanced_saved_family(group: SavedProjectGroup) -> None:
         f"Gemeinsamer Ordner: `{representative.project_root}` · "
         f"Land/Region: {representative.video_place or '—'}"
     )
+    from otio_app.services.voiceover_generation.llm_cost_ledger import (
+        format_family_cost_line,
+    )
+
+    cost_line = format_family_cost_line(siblings)
+    if cost_line:
+        st.caption(f"LLM-Kosten: {cost_line}")
     _render_language_stage_table(siblings)
     _render_open_language_buttons(siblings, family_id=representative.id)
     render_language_sibling_actions(representative, siblings=siblings)

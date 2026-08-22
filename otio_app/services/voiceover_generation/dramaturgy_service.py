@@ -617,6 +617,8 @@ def build_dramaturgy_plan(
             model=model_id,
             max_output_tokens=max_output_tokens,
             disable_thinking=disable_thinking,
+            project=project,
+            stage=STAGE_DRAMATURGY,
         )
     except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
         # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu

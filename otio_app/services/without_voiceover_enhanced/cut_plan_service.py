@@ -1053,6 +1053,9 @@ def generate_rough_cut_for_folder(
                 prompt=prompt,
                 model=model_id,
                 images=images or None,
+                project=project,
+                stage="rough_cut",
+                folder_name=display_name,
             ).raw_text
         rough, coverage = parse_rough_cut_response(raw_text, locked.script_version)
         _validate_rough_chapter_scope(rough, context.segment_ids, folder_name)
@@ -1615,7 +1618,11 @@ def generate_final_cut_for_folder(
             )
         else:
             raw_text = generate_plan_text_with_metadata(
-                prompt=prompt, model=model_id
+                prompt=prompt,
+                model=model_id,
+                project=project,
+                stage="final_cut",
+                folder_name=display_name,
             ).raw_text
         final = parse_final_cut_response(raw_text, locked.script_version)
         _validate_final_chapter_scope(final, context.segment_ids, folder_name)
@@ -2132,6 +2139,9 @@ def generate_unified_cut_for_folder(
                         images=images or None,
                         disable_thinking=True,
                         max_output_tokens=max_out,
+                        project=project,
+                        stage="intro_cut" if is_intro else "llm_cut",
+                        folder_name=display_name,
                     ).raw_text
             except PlanLlmCancelledError:
                 raise
@@ -2528,7 +2538,11 @@ def mini_repair_unified_plan(
         raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
     else:
         raw_text = generate_plan_text_with_metadata(
-            prompt=prompt, model=model_id, images=None
+            prompt=prompt,
+            model=model_id,
+            images=None,
+            project=project,
+            stage="llm_cut_repair",
         ).raw_text
 
     repaired_fragment = parse_unified_cut_response(raw_text, plan.script_version)

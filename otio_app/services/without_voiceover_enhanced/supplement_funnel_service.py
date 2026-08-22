@@ -870,6 +870,49 @@ def run_supplement_funnel_for_gaps(
     ``DEFAULT_FUNNEL_MODEL``). Wird ignoriert, wenn ``text_llm`` /
     ``vision_llm`` explizit übergeben werden.
     """
+    from otio_app.services.voiceover_generation.llm_cost_ledger import (
+        STAGE_FUNNEL_GEMINI,
+        llm_cost_scope,
+    )
+
+    with llm_cost_scope(project, stage=STAGE_FUNNEL_GEMINI):
+        return _run_supplement_funnel_for_gaps_impl(
+            project,
+            max_candidates_per_gap=max_candidates_per_gap,
+            max_full_download_attempts=max_full_download_attempts,
+            gap_ids=gap_ids,
+            only_gap_ids=only_gap_ids,
+            skip_filled=skip_filled,
+            force_restart=force_restart,
+            progress_callback=progress_callback,
+            text_llm=text_llm,
+            vision_llm=vision_llm,
+            full_review_llm=full_review_llm,
+            preview_fetch=preview_fetch,
+            download_callable=download_callable,
+            should_stop=should_stop,
+            model=model,
+        )
+
+
+def _run_supplement_funnel_for_gaps_impl(
+    project: Project,
+    *,
+    max_candidates_per_gap: int | None = None,
+    max_full_download_attempts: int | None = None,
+    gap_ids: list[str] | None = None,
+    only_gap_ids: list[str] | None = None,
+    skip_filled: bool = True,
+    force_restart: bool = False,
+    progress_callback: ProgressCallback | None = None,
+    text_llm: TextLlm | None = None,
+    vision_llm: VisionLlm | None = None,
+    full_review_llm: FullReviewLlm | None = None,
+    preview_fetch: Callable[..., Any] | None = None,
+    download_callable: Callable[..., Path] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    model: str | None = None,
+) -> SupplementFunnelReport:
     del full_review_llm  # bewusst nicht verwendet (R2/R3)
 
     locked = require_locked_script(project)

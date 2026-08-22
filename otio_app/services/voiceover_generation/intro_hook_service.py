@@ -613,6 +613,8 @@ def build_intro_hook_candidates(
             prompt=prompt,
             model=model_id,
             max_output_tokens=max_output_tokens,
+            project=project,
+            stage=STAGE_INTRO_HOOK,
         )
     except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
         # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
@@ -840,6 +842,8 @@ def revise_intro_hook_candidate(
                 prompt=prompt,
                 model=model_id,
                 max_output_tokens=max_output_tokens,
+                project=project,
+                stage=STAGE_INTRO_HOOK,
             ).raw_text
         revised = _strip_plain_intro_response(raw_text)
         if not revised:
