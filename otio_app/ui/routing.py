@@ -44,6 +44,7 @@ from otio_app.ui.without_voiceover_enhanced.auto_run_ui import (
 from otio_app.ui.without_voiceover_enhanced.folder_voiceovers_tab import (
     render_enhanced_folder_voiceovers_page,
 )
+from otio_app.ui.without_voiceover_enhanced.costs_tab import render_enhanced_costs_page
 from otio_app.ui.without_voiceover_enhanced.maps_tab import render_enhanced_maps_page
 
 
@@ -306,6 +307,7 @@ def _build_without_voiceover_enhanced_pages(
         PAGE_AUDIO,
         PAGE_AUTO_RUN,
         PAGE_CLEAN_MEDIA,
+        PAGE_COSTS,
         PAGE_CUT_PLAN_ENHANCED,
         PAGE_DRAMATURGY,
         PAGE_FINAL_OUTPUT_ENHANCED,
@@ -407,6 +409,11 @@ def _build_without_voiceover_enhanced_pages(
             _wrap_page(PAGE_FINAL_OUTPUT_ENHANCED, render_enhanced_final_output_page),
             title=PAGE_FINAL_OUTPUT_ENHANCED,
             url_path="final-output",
+        ),
+        st.Page(
+            _wrap_page(PAGE_COSTS, render_enhanced_costs_page),
+            title=PAGE_COSTS,
+            url_path="kosten",
         ),
         st.Page(
             _wrap_page(PAGE_API_KEYS, render_api_keys_page, show_auto_run_panel=False),
@@ -521,6 +528,7 @@ def _run_legacy_pages(
         PAGE_AUDIO,
         PAGE_AUTO_RUN,
         PAGE_CLEAN_MEDIA,
+        PAGE_COSTS,
         PAGE_CUT_PLAN,
         PAGE_CUT_PLAN_ENHANCED,
         PAGE_DRAMATURGY,
@@ -631,6 +639,8 @@ def _run_legacy_pages(
         _wrap_page(PAGE_CUT_PLAN_ENHANCED, render_enhanced_cut_plan_page)()
     elif page == PAGE_FINAL_OUTPUT_ENHANCED:
         _wrap_page(PAGE_FINAL_OUTPUT_ENHANCED, render_enhanced_final_output_page)()
+    elif page == PAGE_COSTS:
+        _wrap_page(PAGE_COSTS, render_enhanced_costs_page)()
     elif page == PAGE_API_KEYS:
         _wrap_page(PAGE_API_KEYS, render_api_keys_page, show_auto_run_panel=False)()
     elif page == PAGE_STATUS:

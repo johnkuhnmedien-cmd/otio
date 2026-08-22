@@ -461,7 +461,16 @@ def run_sfx_planner(
     )
     call = llm_callable or generate_plan_text_with_metadata
     try:
-        response = call(prompt=bundle["prompt"], model=planner_model)
+        if llm_callable is None:
+            response = call(
+                prompt=bundle["prompt"],
+                model=planner_model,
+                project=project,
+                stage="sfx_planner",
+                folder_name=folder_name,
+            )
+        else:
+            response = call(prompt=bundle["prompt"], model=planner_model)
     except PlanLlmNotConfiguredError as exc:
         raise SfxPlannerError(f"SFX Planner Modell/API fehlt: {exc}") from exc
     except Exception as exc:  # noqa: BLE001

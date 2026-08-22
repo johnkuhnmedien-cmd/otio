@@ -104,7 +104,12 @@ def build_style_profile(
     model_id = resolve_llm_model_id(provider, model)
 
     try:
-        llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
+        llm_response = generate_plan_text_with_metadata(
+            prompt=prompt,
+            model=model_id,
+            project=project,
+            stage=STAGE_STYLE_PROFILE,
+        )
     except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
         # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
         # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).

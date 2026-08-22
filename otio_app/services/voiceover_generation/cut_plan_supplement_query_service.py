@@ -163,7 +163,12 @@ def generate_cut_plan_supplement_queries(
     write_llm_prompt(run_dir, prompt)
 
     try:
-        llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
+        llm_response = generate_plan_text_with_metadata(
+            prompt=prompt,
+            model=model_id,
+            project=project,
+            stage=STAGE_CUT_PLAN_SUPPLEMENT_QUERY,
+        )
     except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
         # kontrollierter FAIL-Status zurückkommen, damit der Aufrufer auf die
         # deterministische Query-Logik zurückfallen kann, statt die Suche

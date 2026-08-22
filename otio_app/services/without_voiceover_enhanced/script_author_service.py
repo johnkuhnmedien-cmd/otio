@@ -860,6 +860,9 @@ def revise_enhanced_script_for_folder(
                     prompt=attempt_prompt,
                     model=model_id,
                     max_output_tokens=max_output_tokens,
+                    project=project,
+                    stage="enhanced_script",
+                    folder_name=folder_name,
                 ).raw_text
             revised = _strip_plain_narration_response(raw_text)
             if not revised:
@@ -1070,6 +1073,9 @@ def generate_enhanced_script_for_folder(
                     prompt=prompt,
                     model=model_id,
                     max_output_tokens=max_output_tokens,
+                    project=project,
+                    stage="enhanced_script",
+                    folder_name=folder_name,
                 ).raw_text
             partial = parse_enhanced_script_response(
                 raw_text,

@@ -89,7 +89,12 @@ def generate_video_title(
     model_id = resolve_llm_model_id(provider, model)
 
     try:
-        llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
+        llm_response = generate_plan_text_with_metadata(
+            prompt=prompt,
+            model=model_id,
+            project=project,
+            stage=STAGE_PROJECT_BRIEF_TITLE,
+        )
     except Exception as exc:  # noqa: BLE001 — UI zeigt FAIL statt Crash
         reraise_if_llm_cancelled(exc)
         write_llm_raw_response(run_dir, raw_text=f"ERROR: {exc}", provider=provider, model=model)

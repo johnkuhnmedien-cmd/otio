@@ -1922,6 +1922,10 @@ def test_enhanced_navigation_includes_auto_run_page() -> None:
     assert PAGE_AUTO_RUN == "▶ Auto-Lauf"
     assert PAGE_AUTO_RUN in VOICEOVER_GEN_ENHANCED_NAVIGATION_OPTIONS
     assert PAGE_AUTO_RUN not in VOICEOVER_GEN_NAVIGATION_OPTIONS
+    from otio_app.ui.navigation import PAGE_COSTS
+
+    assert PAGE_COSTS in VOICEOVER_GEN_ENHANCED_NAVIGATION_OPTIONS
+    assert PAGE_COSTS not in VOICEOVER_GEN_NAVIGATION_OPTIONS
 
 
 def test_run_otio_emits_media_progress(

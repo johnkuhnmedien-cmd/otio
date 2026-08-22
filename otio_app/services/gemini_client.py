@@ -856,10 +856,16 @@ def describe_and_validate_supplement_asset(
     for frame_path in frame_paths:
         parts.append(types.Part.from_bytes(data=frame_path.read_bytes(), mime_type="image/jpeg"))
 
+    resolved_model = resolve_gemini_model(model)
     response = client.models.generate_content(
-        model=resolve_gemini_model(model),
+        model=resolved_model,
         contents=[types.Content(role="user", parts=parts)],
     )
+    from otio_app.services.voiceover_generation.llm_cost_ledger import (
+        record_gemini_response_cost_safe,
+    )
+
+    record_gemini_response_cost_safe(response, model=resolved_model)
     text = response.text or "{}"
     try:
         payload = _extract_json(text)

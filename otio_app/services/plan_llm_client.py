@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterator, Optional, Sequence
+from typing import Any, Callable, Iterator, Optional, Sequence
 
 from otio_app.config import get_gemini_model_from_env
 from otio_app.defaults import EDIT_PLAN_MODEL_CHOICES, EDIT_PLAN_MODEL_LABELS, GEMINI_MODEL_CHOICES
@@ -306,6 +306,9 @@ def generate_plan_text(
     max_output_tokens: int | None = None,
     disable_thinking: bool = False,
     images: Sequence[PlanImageAttachment] | None = None,
+    project: Any = None,
+    stage: str = "",
+    folder_name: str = "",
 ) -> str:
     """Sendet den Schnittplan-Prompt an das gewählte Text-LLM."""
     return generate_plan_text_with_metadata(
@@ -314,6 +317,9 @@ def generate_plan_text(
         max_output_tokens=max_output_tokens,
         disable_thinking=disable_thinking,
         images=images,
+        project=project,
+        stage=stage,
+        folder_name=folder_name,
     ).raw_text
 
 
@@ -324,6 +330,9 @@ def generate_plan_text_with_metadata(
     max_output_tokens: int | None = None,
     disable_thinking: bool = False,
     images: Sequence[PlanImageAttachment] | None = None,
+    project: Any = None,
+    stage: str = "",
+    folder_name: str = "",
 ) -> PlanLlmResponse:
     """Wie generate_plan_text, inkl. Latenz und Token-Nutzung für Diagnose-Runs.
 
@@ -347,7 +356,7 @@ def generate_plan_text_with_metadata(
     image_list = list(images or [])
 
     try:
-        return _dispatch_plan_text(
+        response = _dispatch_plan_text(
             provider=provider,
             api_model=api_model,
             resolved=resolved,
@@ -363,6 +372,38 @@ def generate_plan_text_with_metadata(
         if llm_cancel_requested():
             raise PlanLlmCancelledError("LLM-Aufruf abgebrochen.") from exc
         raise
+    _record_plan_llm_cost_safe(
+        project=project,
+        stage=stage,
+        folder_name=folder_name,
+        response=response,
+    )
+    return response
+
+
+def _record_plan_llm_cost_safe(
+    *,
+    project: Any,
+    stage: str,
+    folder_name: str,
+    response: PlanLlmResponse,
+) -> None:
+    try:
+        from otio_app.services.voiceover_generation.llm_cost_ledger import (
+            record_plan_llm_cost,
+        )
+
+        record_plan_llm_cost(
+            project=project,
+            stage=stage,
+            folder_name=folder_name,
+            provider=response.provider,
+            model=response.resolved_model_id or response.model,
+            token_usage=response.token_usage,
+            status="ok",
+        )
+    except Exception:
+        return
 
 
 def _dispatch_plan_text(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from otio_app.services.voiceover_generation.llm_pricing import (
+    actual_call_cost_usd,
     estimate_call_cost_usd,
     estimate_tokens_from_text,
     format_model_price_suffix,
@@ -56,3 +57,34 @@ def test_resolve_llm_price_gpt_5_6_terra_and_sol() -> None:
 def test_format_model_price_suffix_for_dropdown() -> None:
     suffix = format_model_price_suffix("openai", "gpt-5.6-terra")
     assert "~$2.5/$15 pro 1M Tok" in suffix or "~$2.50/$15 pro 1M Tok" in suffix
+
+
+def test_actual_call_cost_usd_terra_and_unknown() -> None:
+    terra = actual_call_cost_usd(
+        provider="openai",
+        model="gpt-5.6-terra",
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+    )
+    assert abs(terra.input_cost_usd - 2.5) < 1e-9
+    assert abs(terra.output_cost_usd - 15.0) < 1e-9
+    assert abs(terra.total_usd - 17.5) < 1e-9
+    assert terra.price_unknown is False
+
+    sol = actual_call_cost_usd(
+        provider="openai",
+        model="gpt-5.6-sol",
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+    )
+    assert abs(sol.total_usd - 35.0) < 1e-9
+    assert sol.price_unknown is False
+
+    unknown = actual_call_cost_usd(
+        provider="unknown-lab",
+        model="mystery-9",
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+    )
+    assert abs(unknown.total_usd - 18.0) < 1e-9
+    assert unknown.price_unknown is True

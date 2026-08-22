@@ -220,7 +220,13 @@ def run_asset_allocation_correction(
         write_llm_prompt(run_dir, prompt)
 
         try:
-            llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
+            llm_response = generate_plan_text_with_metadata(
+                prompt=prompt,
+                model=model_id,
+                project=project,
+                stage=STAGE_ASSET_ALLOCATION_CORRECTION,
+                folder_name=folder_name,
+            )
         except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
             # kontrollierter FAILED-Status zurückkommen statt die Streamlit-Seite crashen zu
             # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).

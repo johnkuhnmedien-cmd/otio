@@ -708,6 +708,8 @@ def rewrite_geocode_queries_with_llm(
             model=model,
             max_output_tokens=800,
             disable_thinking=True,
+            project=project,
+            stage="maps_geocode",
         )
         payload = _extract_json(raw)
     except Exception:

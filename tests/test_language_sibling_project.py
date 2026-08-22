@@ -357,6 +357,8 @@ def test_saved_projects_page_wires_language_buttons() -> None:
     ).read_text(encoding="utf-8")
     assert "Stand je Sprache" in ui
     assert "bis Funnel" in ui
+    assert "format_family_cost_line" in ui
+    assert "LLM-Kosten" in ui
     assert "bis YouTube" in ui
     assert "lang_queue_start_funnel_" in ui
     assert "lang_queue_start_youtube_" in ui
