@@ -142,8 +142,10 @@ def render_enhanced_maps_page() -> None:
     st.header("③½ Karten")
     st.caption(
         "Plant Eröffnungs- und Übergangskarten aus der bestätigten Dramaturgie. "
-        "Das Brief-LLM läuft nur bei „Fehlende Koordinaten prüfen“ "
-        "(und im Auto-Lauf bei Karten) — nicht beim Rendern. "
+        "Jede Koordinate wird bei „Fehlende Koordinaten prüfen“ "
+        "(und im Auto-Lauf) am Folder-Skript vom Brief-LLM geprüft. "
+        "Fehlt der Ort, gilt die nächstgrößere Stadt aus dem Skript. "
+        "Rendern allein ändert keine Koordinaten. "
         "Rendern startet hier per Klick oder im Auto-Lauf nach dem Funnel "
         "(Plan, Koordinaten prüfen/bestätigen, alle Karten rendern)."
     )
@@ -168,10 +170,9 @@ def render_enhanced_maps_page() -> None:
         has_scripts = False
     if not has_scripts:
         st.info(
-            "Noch kein Folder-Skript. Das Brief-LLM bekommt dann nur "
-            "Kapitelnamen und Videotitel — nach ④ Skripte nochmal "
-            "„Fehlende Koordinaten prüfen“ gibt bessere Orte "
-            "(Ropoto in Griechenland, nicht Deutschland)."
+            "Noch kein Folder-Skript. Das Brief-LLM braucht den Kapiteltext, "
+            "um den Ort zu verstehen. Nach ④ Skripte nochmal "
+            "„Fehlende Koordinaten prüfen“ — sonst nur Name und Videotitel."
         )
 
     stored_settings = load_map_settings(project)
@@ -301,11 +302,9 @@ def render_enhanced_maps_page() -> None:
 
     st.subheader("Koordinaten")
     st.caption(
-        "Vorhandene Werte aus dem Projekt werden bevorzugt. "
-        "„Fehlende Koordinaten prüfen“ sucht alle nicht manuellen Orte neu, "
-        "auch wenn die Felder noch Werte vom letzten Lauf zeigen. "
-        "„Koordinaten leeren“ nimmt die gespeicherten Werte aus der Datei "
-        "und leert die Felder. "
+        "Jede nicht manuelle Koordinate wird am Folder-Skript vom Brief-LLM geprüft. "
+        "Fehlt der Ort, gilt die nächstgrößere Stadt aus dem Skript. "
+        "„Koordinaten leeren“ nimmt die gespeicherten Werte aus der Datei. "
         "Unsichere Treffer rendern nicht automatisch — bitte mit "
         "„Koordinaten bestätigen“ oder „Koordinaten speichern“ freigeben."
     )
@@ -402,8 +401,9 @@ def render_enhanced_maps_page() -> None:
     st.caption(
         "Land/Region begrenzt die Suche: bei **Europa** nur europäische Treffer, "
         "kein „Granadilla, Europa“ (das landet in Costa Rica). "
-        "Das Brief-LLM liest das Folder-Skript und gibt Koordinaten vor — "
-        "Amuzgi landet im Nordkaukasus, nicht in Finnland. "
+        "Das Brief-LLM liest jedes Folder-Skript: Amuzgi im Nordkaukasus, "
+        "Ropoto in Griechenland, nicht ein Namesake. "
+        "Ohne exakten Treffer die nächstgrößere Stadt. "
         "Manuelle Koordinaten bleiben unangetastet."
     )
     save_c1, save_c2, save_c3 = st.columns(3)

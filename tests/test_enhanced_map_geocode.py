@@ -634,7 +634,8 @@ def test_geocode_coordinate_prompt_uses_folder_script(tmp_path: Path) -> None:
     assert "Ropoto" in prompt
     assert "Greece" in prompt
     assert "Germany" in prompt
-    assert "script is empty" in prompt
+    assert "next larger city" in prompt
+    assert "fallback" in prompt
     assert "do not write ', Europe'" in prompt.lower() or ", Europa" in prompt
 
 
@@ -873,3 +874,73 @@ def test_force_recheck_searches_confirmed_in_scope_place(tmp_path: Path) -> None
     assert errors == []
     assert queried == ["Amuzgi"]
     assert coords.places["Amuzgi"].latitude == pytest.approx(41.82)
+
+
+def test_lookup_uses_next_larger_city_when_village_is_wrong_country(
+    tmp_path: Path,
+) -> None:
+    folders = ["Ropoto"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    queried: list[str] = []
+
+    def fake_geocode(place: str, _country: str):
+        queried.append(place)
+        if "Trikala" in place:
+            return (39.555, 21.768, 0.9)
+        return (51.96, 7.63, 0.4)
+
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+        llm_rewrite=True,
+        suggest_coordinates_fn=lambda _rows, _country: {
+            "Ropoto": LlmPlaceSuggestion(
+                query="Ropoto",
+                country="Greece",
+                city="Trikala, Greece",
+                fallback="city",
+                latitude=39.56,
+                longitude=21.77,
+            )
+        },
+    )
+    assert errors == []
+    assert "Trikala, Greece" in queried
+    assert coords.places["Ropoto"].latitude == pytest.approx(39.555)
+    assert coords.places["Ropoto"].display_label == "Ropoto"
+
+
+def test_lookup_uses_llm_city_coords_when_nominatim_misses(tmp_path: Path) -> None:
+    folders = ["Ropoto"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+
+    def fake_geocode(_place: str, _country: str):
+        return None
+
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+        llm_rewrite=True,
+        suggest_coordinates_fn=lambda _rows, _country: {
+            "Ropoto": LlmPlaceSuggestion(
+                query="Ropoto, Trikala, Greece",
+                country="Greece",
+                city="Trikala",
+                fallback="city",
+                latitude=39.56,
+                longitude=21.77,
+            )
+        },
+    )
+    assert errors == []
+    assert coords.places["Ropoto"].latitude == pytest.approx(39.56)
+    assert coords.places["Ropoto"].source == "llm"
+    assert "city fallback" in coords.places["Ropoto"].note

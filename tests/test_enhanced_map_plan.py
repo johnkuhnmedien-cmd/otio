@@ -591,6 +591,6 @@ def test_maps_tab_render_buttons_are_clickable_without_rerun() -> None:
     assert "reset_auto_map_coordinates" in source
     assert "status_after_saving_coordinates" in source
     assert "force_recheck=True" in source
-    assert "Brief-LLM läuft nur" in source
+    assert "Folder-Skript vom Brief-LLM geprüft" in source
     render_section = source.split('st.subheader("Rendern")', 1)[1]
     assert "st.rerun()" not in render_section

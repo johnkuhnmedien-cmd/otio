@@ -8,7 +8,9 @@ query variants, local cache, 1 req/s, retry HTTP 429. Continent hints
 (Europa) are a search bbox/country list — never a Nominatim suffix.
 Hits outside Land/Region are discarded. If Nominatim has no hit: Photon,
 then Wikipedia. Auto-Lauf and the maps page ask the Brief-LLM for
-coordinates from each folder script — never the Cut models. LLM coords
+coordinates from each folder script — never the Cut models. Every
+non-manual pin is checked against its chapter script. If the village
+is missing, the next larger city from the script is used. LLM coords
 override a Nominatim namesake that is far from the scripted place
 (Amuzgi in Finland vs Dagestan). A failure for one place never aborts
 the remaining search.
@@ -161,10 +163,16 @@ class LlmPlaceSuggestion:
     country: str = ""
     latitude: float | None = None
     longitude: float | None = None
+    fallback: str = ""
+    city: str = ""
 
     @property
     def has_coordinates(self) -> bool:
         return self.latitude is not None and self.longitude is not None
+
+    @property
+    def is_city_fallback(self) -> bool:
+        return self.fallback == "city" or bool(self.city)
 
 
 def nominatim_cache_path() -> Path:
@@ -776,20 +784,32 @@ def _project_video_title(project: Project) -> str:
     return video_title
 
 
-def _chapter_narration_excerpt(project: Project, chapter_id: str) -> str:
+def _load_map_script_document(project: Project) -> Any:
     try:
-        from otio_app.services.without_voiceover_enhanced.script_author_service import (
-            chapter_narration_text,
-        )
         from otio_app.services.without_voiceover_enhanced.script_lock_service import (
             load_locked_script,
             load_script_draft,
         )
 
-        document = load_locked_script(project) or load_script_draft(project)
-        if document is None:
+        return load_locked_script(project) or load_script_draft(project)
+    except Exception:
+        return None
+
+
+def _chapter_narration_excerpt(
+    project: Project,
+    chapter_id: str,
+    document: Any = None,
+) -> str:
+    try:
+        from otio_app.services.without_voiceover_enhanced.script_author_service import (
+            chapter_narration_text,
+        )
+
+        script = document if document is not None else _load_map_script_document(project)
+        if script is None:
             return ""
-        return " ".join((chapter_narration_text(document, chapter_id) or "").split())[:2000]
+        return " ".join((chapter_narration_text(script, chapter_id) or "").split())[:5000]
     except Exception:
         return ""
 
@@ -816,11 +836,18 @@ def _coerce_suggestion(value: Any) -> LlmPlaceSuggestion:
     if latitude is None or longitude is None:
         latitude = None
         longitude = None
+    fallback_raw = str(value.get("fallback") or "").strip().casefold()
+    fallback = "city" if fallback_raw in {"city", "stadt", "larger_city"} else ""
+    city = " ".join(str(value.get("city") or "").split())
+    if city and not fallback:
+        fallback = "city"
     return LlmPlaceSuggestion(
         query=" ".join(str(value.get("query") or "").split()),
         country=" ".join(str(value.get("country") or "").split()),
         latitude=latitude,
         longitude=longitude,
+        fallback=fallback,
+        city=city,
     )
 
 
@@ -872,15 +899,22 @@ def _hit_from_suggestion(
     hint = str(suggestion.country or "").strip()
     if hint:
         country_code = resolve_geocode_scope(hint).iso2
+    city = str(suggestion.city or "").strip()
+    if suggestion.is_city_fallback:
+        note = f"LLM city fallback: {city or suggestion.query}"
+        confidence = 0.8
+    else:
+        note = "LLM from folder script"
+        confidence = 0.88
     return {
         "latitude": float(suggestion.latitude),
         "longitude": float(suggestion.longitude),
-        "confidence": 0.88,
+        "confidence": confidence,
         "original_label": original,
         "display_label": display or original,
         "source": "llm",
         "country_code": country_code,
-        "note": "LLM from folder script",
+        "note": note,
     }
 
 
@@ -925,29 +959,32 @@ def build_geocode_coordinate_prompt(
     neighbors = [str(item.get("title") or "").strip() for item in rows if item.get("title")]
     region = scope.label_en or country or "unknown"
     return (
-        "Read each travel-video chapter script and return map coordinates.\n"
+        "Read each travel-video chapter's folder script and return map coordinates.\n"
         f"Video title: {video_title or 'unknown'}\n"
         f"Geographic setting (Land/Region): {country or 'unknown'} "
         f"({region}).\n"
         f"Neighboring chapter places: {', '.join(neighbors) or 'none'}.\n"
-        "If a folder script (narration) is present, use it as primary evidence. "
-        "If the script is empty, still resolve the chapter title as a real "
-        "place using the video title and neighboring chapters. "
-        "Pick the place the travel video is about, not a namesake.\n"
+        "Each item has its own folder script in `narration`. "
+        "Understand that chapter's context: country, region, nearby towns. "
+        "If the script is empty, use the chapter title, video title, and neighbors.\n"
+        "If the exact village or place can be located, return those coordinates "
+        "and set fallback to \"exact\".\n"
+        "If the exact place cannot be located, return the next larger city "
+        "named or implied by the script (municipality or regional town), "
+        "set fallback to \"city\", and put that town in `city` and `query`.\n"
+        "Every real chapter MUST have latitude and longitude. "
+        "Never pick a namesake in the wrong country.\n"
         "Examples:\n"
-        "- Granadilla in a European abandoned-villages video is "
-        "Granadilla, Cáceres, Spain — not Urb. La Europa in Costa Rica.\n"
-        "- Amuzgi / Amusgi is Amuzgi, Dagestan, Russia "
-        "(approx. 41.82 N, 47.58 E) — not a namesake in Finland.\n"
-        "- Ropoto is the abandoned village Ropoto, Trikala, Greece "
-        "(approx. 39.47 N, 21.47 E) — not a namesake in Germany.\n"
+        "- Granadilla → Granadilla, Cáceres, Spain — not Costa Rica.\n"
+        "- Amuzgi → Amuzgi, Dagestan, Russia (41.82, 47.58) — not Finland.\n"
+        "- Ropoto → Ropoto, Trikala, Greece (39.47, 21.47) — not Germany. "
+        "If Ropoto itself is missing, use the next larger city Trikala.\n"
         "If the setting is a continent, put the specific country in `country` "
         "and `query`. Do not write ', Europe' or ', Europa' in the query.\n"
         "Return JSON only of the form "
         '{"places":[{"id":"chapter id","query":"Ropoto, Trikala, Greece",'
-        '"country":"Greece","latitude":39.47,"longitude":21.47}]}.\n'
-        "latitude and longitude must be decimal degrees. "
-        "Only omit coordinates when the title is not a real place.\n"
+        '"country":"Greece","fallback":"exact","city":"",'
+        '"latitude":39.47,"longitude":21.47}]}.\n'
         f"{json.dumps(rows, ensure_ascii=False)}\n"
     )
 
@@ -1010,14 +1047,43 @@ def rewrite_geocode_queries_with_llm(
     return mapping
 
 
-def suggest_coordinates_with_llm(
-    project: Project,
-    places: list[tuple[str, str]],
-    country: str,
+def _suggestions_from_payload(
+    payload: Any,
+    known: dict[str, str],
 ) -> dict[str, LlmPlaceSuggestion]:
-    """Folder-Skript → Query + lat/lon. Nutzt Brief-Modell, nie Cut-Modelle."""
-    if not places:
+    items = payload.get("places") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
         return {}
+    mapping: dict[str, LlmPlaceSuggestion] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        chapter_id = str(item.get("id") or "").strip()
+        if chapter_id not in known:
+            continue
+        suggestion = _coerce_suggestion(item)
+        query = suggestion.query
+        if not query and not suggestion.has_coordinates and not suggestion.city:
+            continue
+        mapping[chapter_id] = LlmPlaceSuggestion(
+            query=query or suggestion.city or known[chapter_id],
+            country=suggestion.country,
+            latitude=suggestion.latitude,
+            longitude=suggestion.longitude,
+            fallback=suggestion.fallback,
+            city=suggestion.city,
+        )
+    return mapping
+
+
+def _call_coordinate_llm(
+    project: Project,
+    country: str,
+    rows: list[dict[str, Any]],
+    *,
+    known: dict[str, str],
+    max_output_tokens: int,
+) -> dict[str, LlmPlaceSuggestion]:
     from otio_app.services.gemini_client import _extract_json
     from otio_app.services.plan_llm_client import generate_plan_text
     from otio_app.services.voiceover_generation.model_settings_service import (
@@ -1025,14 +1091,6 @@ def suggest_coordinates_with_llm(
         resolve_llm_model_id,
     )
 
-    rows = [
-        {
-            "id": chapter_id,
-            "title": original,
-            "narration": _chapter_narration_excerpt(project, chapter_id),
-        }
-        for chapter_id, original in places
-    ]
     prompt = build_geocode_coordinate_prompt(project, country, rows)
     try:
         settings = load_model_settings(project)
@@ -1041,7 +1099,7 @@ def suggest_coordinates_with_llm(
         raw = generate_plan_text(
             prompt=prompt,
             model=model,
-            max_output_tokens=2000,
+            max_output_tokens=max_output_tokens,
             disable_thinking=True,
             project=project,
             stage="maps_geocode",
@@ -1049,26 +1107,49 @@ def suggest_coordinates_with_llm(
         payload = _extract_json(raw)
     except Exception:
         return {}
-    items = payload.get("places") if isinstance(payload, dict) else payload
-    if not isinstance(items, list):
+    return _suggestions_from_payload(payload, known)
+
+
+def suggest_coordinates_with_llm(
+    project: Project,
+    places: list[tuple[str, str]],
+    country: str,
+) -> dict[str, LlmPlaceSuggestion]:
+    """Folder-Skript → Query + lat/lon. Nutzt Brief-Modell, nie Cut-Modelle."""
+    if not places:
         return {}
-    mapping: dict[str, LlmPlaceSuggestion] = {}
+    document = _load_map_script_document(project)
     known = {chapter_id: original for chapter_id, original in places}
-    for item in items:
-        suggestion = _coerce_suggestion(item)
-        if not isinstance(item, dict):
-            continue
-        chapter_id = str(item.get("id") or "").strip()
-        if chapter_id not in known:
-            continue
-        query = suggestion.query
-        if not query and not suggestion.has_coordinates:
-            continue
-        mapping[chapter_id] = LlmPlaceSuggestion(
-            query=query or known[chapter_id],
-            country=suggestion.country,
-            latitude=suggestion.latitude,
-            longitude=suggestion.longitude,
+
+    def rows_for(subset: list[tuple[str, str]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": chapter_id,
+                "title": original,
+                "narration": _chapter_narration_excerpt(
+                    project, chapter_id, document
+                ),
+            }
+            for chapter_id, original in subset
+        ]
+
+    mapping = _call_coordinate_llm(
+        project,
+        country,
+        rows_for(places),
+        known=known,
+        max_output_tokens=4000,
+    )
+    missing = [(chapter_id, original) for chapter_id, original in places if chapter_id not in mapping]
+    for chapter_id, original in missing:
+        mapping.update(
+            _call_coordinate_llm(
+                project,
+                country,
+                rows_for([(chapter_id, original)]),
+                known={chapter_id: original},
+                max_output_tokens=800,
+            )
         )
     return mapping
 
@@ -1151,7 +1232,9 @@ def lookup_missing_coordinates(
     the Brief-Modell for coordinates from each folder script — never the
     Cut-Modelle. A Nominatim namesake far from those coordinates is discarded.
     ``force_recheck`` searches every non-manual chapter again, even if the
-    form still shows the last run.
+    form still shows the last run. Production checks always ask the Brief-LLM
+    with each folder script; if the village is missing, the next larger city
+    from the script is used.
     """
     resolved_settings = settings or load_map_settings(project)
     current_plan = plan or load_map_plan(project)
@@ -1197,10 +1280,11 @@ def lookup_missing_coordinates(
             or coords.places[chapter_id].status != COORDINATE_STATUS_MANUAL
         )
     ]
-    if non_manual and (
-        suggest_coordinates_fn is not None
-        or (llm_rewrite and use_nominatim and rewrite_queries_fn is None)
-    ):
+    called_real_llm = (
+        llm_rewrite and use_nominatim and rewrite_queries_fn is None
+        and suggest_coordinates_fn is None
+    )
+    if non_manual and (suggest_coordinates_fn is not None or called_real_llm):
         if cancelled():
             raise GeocodeCancelled("Auto-Lauf gestoppt.")
         try:
@@ -1218,13 +1302,14 @@ def lookup_missing_coordinates(
         for chapter_id, value in dict(raw_map).items():
             suggestions[str(chapter_id)] = _coerce_suggestion(value)
 
+    always_recheck = force_recheck or called_real_llm
     pending: list[tuple[str, str, str]] = []
     for chapter_id, original, display in places:
         existing = coords.places.get(chapter_id)
         if existing is not None and existing.status == COORDINATE_STATUS_MANUAL:
             report.skipped += 1
             continue
-        if force_recheck or _place_needs_search(
+        if always_recheck or _place_needs_search(
             existing, suggestions.get(chapter_id), scope
         ):
             pending.append((chapter_id, original, display))
@@ -1253,7 +1338,7 @@ def lookup_missing_coordinates(
         )
         suggestion = suggestions.get(chapter_id)
         reused = None
-        if not force_recheck:
+        if not always_recheck:
             reused = _hit_from_existing(coords, original) or query_hits.get(
                 _cache_key(original, current_plan.country)
             )
@@ -1307,10 +1392,14 @@ def lookup_missing_coordinates(
         last_reason = "kein Treffer"
         resolved = False
         searches: list[tuple[str, str]] = []
-        if suggestion is not None and suggestion.query:
-            searches.append(
-                (suggestion.query, suggestion.country or current_plan.country)
-            )
+        if suggestion is not None:
+            hint = suggestion.country or current_plan.country
+            if suggestion.query:
+                searches.append((suggestion.query, hint))
+            if suggestion.city:
+                city_search = (suggestion.city, hint)
+                if city_search not in searches:
+                    searches.append(city_search)
         original_search = (original, current_plan.country)
         if original_search not in searches:
             searches.append(original_search)
