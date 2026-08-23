@@ -17,8 +17,13 @@ from otio_app.services.voiceover_generation.models import (
     DramaturgyPlan,
 )
 from otio_app.services.without_voiceover_enhanced.maps import geocode_service as geocode_mod
+from otio_app.services.without_voiceover_enhanced.maps.geo_scope import (
+    pin_display_label,
+    resolve_geocode_scope,
+)
 from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
     NOMINATIM_USER_AGENT,
+    build_geocode_rewrite_prompt,
     friendly_geocode_error,
     geocode_query_variants,
     lookup_missing_coordinates,
@@ -27,10 +32,13 @@ from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
 )
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     COORDINATE_STATUS_MANUAL,
+    COORDINATE_STATUS_RESOLVED,
+    MapCoordinateRecord,
     MapCoordinatesDocument,
 )
 from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     build_map_plan,
+    confirm_all_valid_map_coordinates,
     save_map_coordinates,
     update_coordinate_record,
 )
@@ -434,3 +442,154 @@ def test_lookup_llm_rewrite_retries_nominatim(
     assert errors == []
     assert coords.places["The Bat Colony"].has_coordinates is True
     assert coords.places["The Bat Colony"].latitude == pytest.approx(48.47)
+
+
+def test_europa_is_continent_scope_not_nominatim_suffix() -> None:
+    scope = resolve_geocode_scope("Europa")
+    assert scope.kind == "continent"
+    assert scope.query_suffix == ""
+    assert "es" in scope.countrycodes.split(",")
+    assert geocode_query_variants("Granadilla", "Europa") == ["Granadilla"]
+    assert "Granadilla, Europa" not in geocode_query_variants("Granadilla", "Europa")
+    extremadura = resolve_geocode_scope("Extremadura")
+    assert extremadura.iso2 == "es"
+    assert extremadura.query_suffix == "Spain"
+
+
+def test_pin_display_label_keeps_chapter_when_osm_is_unrelated() -> None:
+    assert pin_display_label("Granadilla", "Urb. La Europa") == "Granadilla"
+    assert pin_display_label("Granadilla", "Granadilla") == "Granadilla"
+    assert pin_display_label("Meteora", "Meteora Monasteries") == "Meteora Monasteries"
+
+
+def test_nominatim_prefers_spain_granadilla_when_video_is_europe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get(*_args, **kwargs):
+        params = kwargs.get("params") or {}
+        assert "es" in str(params.get("countrycodes") or "")
+        assert "Granadilla, Europa" not in str(params.get("q") or "")
+        return _JsonResp(
+            [
+                {
+                    "lat": "9.93",
+                    "lon": "-84.01",
+                    "importance": 0.36,
+                    "name": "Urb. La Europa",
+                    "address": {"country_code": "cr", "country": "Costa Rica"},
+                },
+                {
+                    "lat": "40.268",
+                    "lon": "-6.109",
+                    "importance": 0.29,
+                    "name": "Granadilla",
+                    "address": {"country_code": "es", "country": "España"},
+                },
+            ]
+        )
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    hit = nominatim_geocode("Granadilla", "Europa")
+    assert hit["latitude"] == pytest.approx(40.268)
+    assert hit["longitude"] == pytest.approx(-6.109)
+    assert hit["display_label"] == "Granadilla"
+    assert hit.get("country_code") == "es"
+
+
+def test_lookup_rechecks_out_of_region_coordinates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    folders = ["Granadilla"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    save_map_coordinates(
+        project,
+        MapCoordinatesDocument(
+            project_id=project.id,
+            country="Europa",
+            places={
+                "Granadilla": MapCoordinateRecord(
+                    chapter_id="Granadilla",
+                    original_label="Granadilla",
+                    display_label="Urb. La Europa",
+                    latitude=9.93,
+                    longitude=-84.01,
+                    confidence=0.9,
+                    status=COORDINATE_STATUS_RESOLVED,
+                    source="nominatim",
+                    country_context="Europa",
+                )
+            },
+        ),
+    )
+
+    def fake_get(*_args, **_kwargs):
+        return _JsonResp(
+            [
+                {
+                    "lat": "40.268",
+                    "lon": "-6.109",
+                    "importance": 0.8,
+                    "name": "Granadilla",
+                    "address": {"country_code": "es", "country": "España"},
+                }
+            ]
+        )
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+    )
+    assert errors == []
+    assert coords.places["Granadilla"].latitude == pytest.approx(40.268)
+    assert coords.places["Granadilla"].display_label == "Granadilla"
+
+
+def test_geocode_rewrite_prompt_includes_video_geography(tmp_path: Path) -> None:
+    project = _project(tmp_path, ["Granadilla"])
+    project = project.model_copy(update={"name": "verlassene Dörfer Europas"})
+    prompt = build_geocode_rewrite_prompt(
+        project,
+        "Europa",
+        [{"id": "Granadilla", "title": "Granadilla", "narration": "…"}],
+    )
+    assert "Europe" in prompt
+    assert "verlassene Dörfer Europas" in prompt
+    assert "Granadilla" in prompt
+    assert "Costa Rica" in prompt
+    assert "do not write ', Europe'" in prompt.lower() or ", Europa" in prompt
+
+
+def test_confirm_all_skips_coordinates_outside_region(tmp_path: Path) -> None:
+    folders = ["Granadilla"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    save_map_coordinates(
+        project,
+        MapCoordinatesDocument(
+            project_id=project.id,
+            country="Europa",
+            places={
+                "Granadilla": MapCoordinateRecord(
+                    chapter_id="Granadilla",
+                    original_label="Granadilla",
+                    display_label="Urb. La Europa",
+                    latitude=9.93,
+                    longitude=-84.01,
+                    confidence=0.9,
+                    status=COORDINATE_STATUS_RESOLVED,
+                    source="nominatim",
+                    country_context="Europa",
+                )
+            },
+        ),
+    )
+    coords, _plan = confirm_all_valid_map_coordinates(project)
+    assert coords.places["Granadilla"].status == COORDINATE_STATUS_RESOLVED
+    assert coords.places["Granadilla"].latitude == pytest.approx(9.93)

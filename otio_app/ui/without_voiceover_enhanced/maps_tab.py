@@ -329,6 +329,11 @@ def render_enhanced_maps_page() -> None:
                     )
                     st.rerun()
 
+    st.caption(
+        "Land/Region begrenzt die Suche: bei **Europa** nur europäische Treffer, "
+        "kein „Granadilla, Europa“ (das landet in Costa Rica). "
+        "Falsche Kontinente werden verworfen und erneut gesucht."
+    )
     save_c1, save_c2 = st.columns(2)
     with save_c1:
         if st.button("Koordinaten speichern", key=f"enh_map_save_coords_{project.id}"):
