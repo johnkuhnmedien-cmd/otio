@@ -142,6 +142,8 @@ def render_enhanced_maps_page() -> None:
     st.header("③½ Karten")
     st.caption(
         "Plant Eröffnungs- und Übergangskarten aus der bestätigten Dramaturgie. "
+        "Das Brief-LLM läuft nur bei „Fehlende Koordinaten prüfen“ "
+        "(und im Auto-Lauf bei Karten) — nicht beim Rendern. "
         "Rendern startet hier per Klick oder im Auto-Lauf nach dem Funnel "
         "(Plan, Koordinaten prüfen/bestätigen, alle Karten rendern)."
     )
@@ -153,6 +155,24 @@ def render_enhanced_maps_page() -> None:
     if confirmed is None:
         st.warning("Keine bestätigte Dramaturgie. Bitte zuerst ③ Dramaturgie bestätigen.")
         return
+    try:
+        from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+            load_locked_script,
+            load_script_draft,
+        )
+
+        has_scripts = (
+            load_locked_script(project) or load_script_draft(project)
+        ) is not None
+    except Exception:
+        has_scripts = False
+    if not has_scripts:
+        st.info(
+            "Noch kein Folder-Skript. Das Brief-LLM bekommt dann nur "
+            "Kapitelnamen und Videotitel — nach ④ Skripte nochmal "
+            "„Fehlende Koordinaten prüfen“ gibt bessere Orte "
+            "(Ropoto in Griechenland, nicht Deutschland)."
+        )
 
     stored_settings = load_map_settings(project)
     _init_settings_keys(project.id, stored_settings)
@@ -472,7 +492,7 @@ def render_enhanced_maps_page() -> None:
                 progress_bar.progress(event.fraction)
                 status_box.info(event.message)
 
-            _coords, rebuilt, errors =             lookup_missing_coordinates(
+            _coords, rebuilt, errors = lookup_missing_coordinates(
                 project,
                 settings=settings,
                 plan=plan,
@@ -497,7 +517,8 @@ def render_enhanced_maps_page() -> None:
                 else:
                     note = (
                         f"Koordinatenprüfung fertig: {found} gefunden"
-                        + (f", {skipped} aus dem Cache." if skipped else ".")
+                        + (f", {skipped} aus dem Cache" if skipped else "")
+                        + ". Brief-LLM wurde für die Koordinaten befragt."
                     )
                 st.session_state[geocode_note_key] = ("success", note)
             st.session_state.pop(f"enh_map_coord_fp_{project.id}", None)

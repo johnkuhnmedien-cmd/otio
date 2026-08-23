@@ -930,22 +930,24 @@ def build_geocode_coordinate_prompt(
         f"Geographic setting (Land/Region): {country or 'unknown'} "
         f"({region}).\n"
         f"Neighboring chapter places: {', '.join(neighbors) or 'none'}.\n"
-        "Use the folder script (narration) as the primary evidence. "
-        "Pick the real place the narrator is talking about, not a namesake.\n"
+        "If a folder script (narration) is present, use it as primary evidence. "
+        "If the script is empty, still resolve the chapter title as a real "
+        "place using the video title and neighboring chapters. "
+        "Pick the place the travel video is about, not a namesake.\n"
         "Examples:\n"
         "- Granadilla in a European abandoned-villages video is "
         "Granadilla, Cáceres, Spain — not Urb. La Europa in Costa Rica.\n"
-        "- Amuzgi / Amusgi in a North-Caucasus or abandoned-villages-of-Europe "
-        "video is Amuzgi, Dagestan, Russia (approx. 41.82 N, 47.58 E) — "
-        "not a namesake in Finland.\n"
+        "- Amuzgi / Amusgi is Amuzgi, Dagestan, Russia "
+        "(approx. 41.82 N, 47.58 E) — not a namesake in Finland.\n"
+        "- Ropoto is the abandoned village Ropoto, Trikala, Greece "
+        "(approx. 39.47 N, 21.47 E) — not a namesake in Germany.\n"
         "If the setting is a continent, put the specific country in `country` "
         "and `query`. Do not write ', Europe' or ', Europa' in the query.\n"
         "Return JSON only of the form "
-        '{"places":[{"id":"chapter id","query":"Amuzgi, Dagestan, Russia",'
-        '"country":"Russia","latitude":41.82,"longitude":47.58}]}.\n'
+        '{"places":[{"id":"chapter id","query":"Ropoto, Trikala, Greece",'
+        '"country":"Greece","latitude":39.47,"longitude":21.47}]}.\n'
         "latitude and longitude must be decimal degrees. "
-        "If the script does not identify the place, leave query empty and "
-        "omit coordinates. Do not invent a location.\n"
+        "Only omit coordinates when the title is not a real place.\n"
         f"{json.dumps(rows, ensure_ascii=False)}\n"
     )
 

@@ -103,6 +103,14 @@ class _FakeRenderer:
         }
 
 
+def test_auto_run_maps_force_rechecks_when_using_nominatim() -> None:
+    import inspect
+
+    source = inspect.getsource(run_maps_for_auto_run)
+    assert "force_recheck=geocode_fn is None" in source
+    assert "llm_rewrite=geocode_fn is None" in source
+
+
 def test_format_maps_auto_run_status_shows_remaining_of_plan() -> None:
     assert format_maps_auto_run_status(
         plan_count=27,

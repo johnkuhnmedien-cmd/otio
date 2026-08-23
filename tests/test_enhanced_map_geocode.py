@@ -631,6 +631,10 @@ def test_geocode_coordinate_prompt_uses_folder_script(tmp_path: Path) -> None:
     assert "Nordkaukasus" in prompt
     assert "Amuzgi" in prompt
     assert "Finland" in prompt
+    assert "Ropoto" in prompt
+    assert "Greece" in prompt
+    assert "Germany" in prompt
+    assert "script is empty" in prompt
     assert "do not write ', Europe'" in prompt.lower() or ", Europa" in prompt
 
 
