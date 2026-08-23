@@ -17,10 +17,6 @@ from otio_app.services.voiceover_generation.project_brief_defaults_service impor
     normalize_brief_language,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
-from otio_app.services.without_voiceover_enhanced.maps.geo_scope import (
-    coordinates_in_scope,
-    resolve_geocode_scope,
-)
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     CONFIDENCE_AUTO_RENDER_MIN,
     COORDINATE_STATUS_CONFIRMED,
@@ -557,13 +553,10 @@ def confirm_all_valid_map_coordinates(
 ) -> tuple[MapCoordinatesDocument, MapPlanDocument]:
     """Bestätigt alle Orte mit gültigen Koordinaten und gibt den Plan frei."""
     coords = load_map_coordinates(project)
-    scope = resolve_geocode_scope(project.video_place)
     changed = False
     next_places = dict(coords.places)
     for chapter_id, record in coords.places.items():
         if not record.has_coordinates:
-            continue
-        if not coordinates_in_scope(record.latitude, record.longitude, scope):
             continue
         if record.status in {COORDINATE_STATUS_CONFIRMED, COORDINATE_STATUS_MANUAL}:
             continue

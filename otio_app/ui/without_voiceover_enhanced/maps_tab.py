@@ -399,11 +399,9 @@ def render_enhanced_maps_page() -> None:
                     st.rerun()
 
     st.caption(
-        "Land/Region begrenzt die Suche: bei **Europa** nur europäische Treffer, "
-        "kein „Granadilla, Europa“ (das landet in Costa Rica). "
-        "Das Brief-LLM liest jedes Folder-Skript: Amuzgi im Nordkaukasus, "
-        "Ropoto in Griechenland, nicht ein Namesake. "
+        "Das Brief-LLM liest jedes Folder-Skript und setzt die Koordinaten. "
         "Ohne exakten Treffer die nächstgrößere Stadt. "
+        "Land/Region filtert die Treffer nicht. "
         "Manuelle Koordinaten bleiben unangetastet."
     )
     save_c1, save_c2, save_c3 = st.columns(3)

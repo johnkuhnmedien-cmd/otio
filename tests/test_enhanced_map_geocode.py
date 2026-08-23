@@ -467,39 +467,31 @@ def test_pin_display_label_keeps_chapter_when_osm_is_unrelated() -> None:
     assert pin_display_label("Meteora", "Meteora Monasteries") == "Meteora Monasteries"
 
 
-def test_nominatim_prefers_spain_granadilla_when_video_is_europe(
+def test_nominatim_europa_does_not_restrict_countrycodes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_get(*_args, **kwargs):
         params = kwargs.get("params") or {}
-        assert "es" in str(params.get("countrycodes") or "")
+        assert "countrycodes" not in params
         assert "Granadilla, Europa" not in str(params.get("q") or "")
         return _JsonResp(
             [
                 {
-                    "lat": "9.93",
-                    "lon": "-84.01",
-                    "importance": 0.36,
-                    "name": "Urb. La Europa",
-                    "address": {"country_code": "cr", "country": "Costa Rica"},
-                },
-                {
-                    "lat": "40.268",
-                    "lon": "-6.109",
-                    "importance": 0.29,
-                    "name": "Granadilla",
-                    "address": {"country_code": "es", "country": "España"},
-                },
+                    "lat": "78.656",
+                    "lon": "16.333",
+                    "importance": 0.5,
+                    "name": "Pyramiden",
+                    "address": {"country_code": "sj", "country": "Svalbard"},
+                }
             ]
         )
 
     monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
     monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
-    hit = nominatim_geocode("Granadilla", "Europa")
-    assert hit["latitude"] == pytest.approx(40.268)
-    assert hit["longitude"] == pytest.approx(-6.109)
-    assert hit["display_label"] == "Granadilla"
-    assert hit.get("country_code") == "es"
+    hit = nominatim_geocode("Pyramiden", "Europa")
+    assert hit["latitude"] == pytest.approx(78.656)
+    assert hit["longitude"] == pytest.approx(16.333)
+    assert hit.get("country_code") == "sj"
 
 
 def test_lookup_rechecks_out_of_region_coordinates(
@@ -549,6 +541,7 @@ def test_lookup_rechecks_out_of_region_coordinates(
         project,
         plan=build_map_plan(project),
         cache_path=tmp_path / "cache.json",
+        force_recheck=True,
     )
     assert errors == []
     assert coords.places["Granadilla"].latitude == pytest.approx(40.268)
@@ -570,8 +563,10 @@ def test_geocode_rewrite_prompt_includes_video_geography(tmp_path: Path) -> None
     assert "do not write ', Europe'" in prompt.lower() or ", Europa" in prompt
 
 
-def test_confirm_all_skips_coordinates_outside_region(tmp_path: Path) -> None:
-    folders = ["Granadilla"]
+def test_confirm_all_accepts_coordinates_outside_old_europe_box(
+    tmp_path: Path,
+) -> None:
+    folders = ["Pyramiden"]
     project = _project(tmp_path, folders)
     project = project.model_copy(update={"video_place": "Europa"})
     _confirm(project, folders)
@@ -581,23 +576,23 @@ def test_confirm_all_skips_coordinates_outside_region(tmp_path: Path) -> None:
             project_id=project.id,
             country="Europa",
             places={
-                "Granadilla": MapCoordinateRecord(
-                    chapter_id="Granadilla",
-                    original_label="Granadilla",
-                    display_label="Urb. La Europa",
-                    latitude=9.93,
-                    longitude=-84.01,
+                "Pyramiden": MapCoordinateRecord(
+                    chapter_id="Pyramiden",
+                    original_label="Pyramiden",
+                    display_label="Pyramiden",
+                    latitude=78.656,
+                    longitude=16.333,
                     confidence=0.9,
                     status=COORDINATE_STATUS_RESOLVED,
-                    source="nominatim",
+                    source="llm",
                     country_context="Europa",
                 )
             },
         ),
     )
     coords, _plan = confirm_all_valid_map_coordinates(project)
-    assert coords.places["Granadilla"].status == COORDINATE_STATUS_RESOLVED
-    assert coords.places["Granadilla"].latitude == pytest.approx(9.93)
+    assert coords.places["Pyramiden"].status == COORDINATE_STATUS_CONFIRMED
+    assert coords.places["Pyramiden"].latitude == pytest.approx(78.656)
 
 
 def test_europe_scope_includes_caucasus_and_russia() -> None:
@@ -912,6 +907,32 @@ def test_lookup_uses_next_larger_city_when_village_is_wrong_country(
     assert "Trikala, Greece" in queried
     assert coords.places["Ropoto"].latitude == pytest.approx(39.555)
     assert coords.places["Ropoto"].display_label == "Ropoto"
+
+
+def test_lookup_accepts_pyramiden_north_of_old_europe_box(tmp_path: Path) -> None:
+    folders = ["Pyramiden"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=lambda _place, _country: (78.656, 16.333, 0.9),
+        llm_rewrite=True,
+        suggest_coordinates_fn=lambda _rows, _country: {
+            "Pyramiden": LlmPlaceSuggestion(
+                query="Pyramiden, Svalbard",
+                country="Norway",
+                latitude=78.656,
+                longitude=16.333,
+            )
+        },
+    )
+    assert errors == []
+    assert coords.places["Pyramiden"].latitude == pytest.approx(78.656)
+    assert coords.places["Pyramiden"].longitude == pytest.approx(16.333)
 
 
 def test_lookup_uses_llm_city_coords_when_nominatim_misses(tmp_path: Path) -> None:
