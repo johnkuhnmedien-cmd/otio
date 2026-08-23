@@ -67,6 +67,49 @@ def _parse_optional_float(value: object) -> float | None:
         return None
 
 
+def _coord_form_fingerprint(
+    project_id: str,
+    places: list[tuple[str, str, str]],
+    coordinates: MapCoordinatesDocument,
+) -> str:
+    parts = [project_id, coordinates.updated_at.isoformat()]
+    for chapter_id, _original, display in places:
+        rec = coordinates.places.get(chapter_id)
+        if rec is None:
+            parts.append(f"{chapter_id}:::{display}")
+            continue
+        lat = "" if rec.latitude is None else f"{rec.latitude:.6f}"
+        lon = "" if rec.longitude is None else f"{rec.longitude:.6f}"
+        parts.append(
+            f"{chapter_id}:{lat}:{lon}:{rec.status}:{rec.display_label or display}"
+        )
+    return "|".join(parts)
+
+
+def _sync_coord_form_fields(
+    project_id: str,
+    places: list[tuple[str, str, str]],
+    coordinates: MapCoordinatesDocument,
+) -> None:
+    """Streamlit keeps the last run in the widgets — overwrite after file changes."""
+    fp_key = f"enh_map_coord_fp_{project_id}"
+    fingerprint = _coord_form_fingerprint(project_id, places, coordinates)
+    if st.session_state.get(fp_key) == fingerprint:
+        return
+    st.session_state[fp_key] = fingerprint
+    for chapter_id, _original, display in places:
+        rec = coordinates.places.get(chapter_id)
+        st.session_state[f"enh_map_disp_{project_id}_{chapter_id}"] = (
+            (rec.display_label if rec is not None else "") or display
+        )
+        st.session_state[f"enh_map_lat_{project_id}_{chapter_id}"] = (
+            "" if rec is None or rec.latitude is None else f"{rec.latitude:.6f}"
+        )
+        st.session_state[f"enh_map_lon_{project_id}_{chapter_id}"] = (
+            "" if rec is None or rec.longitude is None else f"{rec.longitude:.6f}"
+        )
+
+
 def _init_settings_keys(project_id: str, stored: MapRenderSettings) -> None:
     res_key = f"enh_map_resolution_{project_id}"
     par_key = f"enh_map_parallel_{project_id}"
@@ -239,10 +282,10 @@ def render_enhanced_maps_page() -> None:
     st.subheader("Koordinaten")
     st.caption(
         "Vorhandene Werte aus dem Projekt werden bevorzugt. "
-        "„Fehlende Koordinaten prüfen“ überspringt schon gesetzte Treffer, "
-        "außer das Brief-LLM widerspricht. "
-        "„Koordinaten leeren“ nimmt alle nicht manuellen Werte raus, "
-        "danach alle neu prüfen. "
+        "„Fehlende Koordinaten prüfen“ sucht alle nicht manuellen Orte neu, "
+        "auch wenn die Felder noch Werte vom letzten Lauf zeigen. "
+        "„Koordinaten leeren“ nimmt die gespeicherten Werte aus der Datei "
+        "und leert die Felder. "
         "Unsichere Treffer rendern nicht automatisch — bitte mit "
         "„Koordinaten bestätigen“ oder „Koordinaten speichern“ freigeben."
     )
@@ -255,6 +298,7 @@ def render_enhanced_maps_page() -> None:
         else:
             st.warning(text)
     places = unique_chapter_places(plan)
+    _sync_coord_form_fields(project.id, places, coordinates)
     for chapter_id, original, display in places:
         rec = coordinates.places.get(chapter_id) or MapCoordinateRecord(
             chapter_id=chapter_id,
@@ -328,6 +372,7 @@ def render_enhanced_maps_page() -> None:
                     st.session_state.pop(lat_key, None)
                     st.session_state.pop(lon_key, None)
                     st.session_state.pop(display_key, None)
+                    st.session_state.pop(f"enh_map_coord_fp_{project.id}", None)
                     st.session_state[geocode_note_key] = (
                         "success",
                         f"„{original}“ bestätigt. Kartenplan aktualisiert.",
@@ -383,6 +428,7 @@ def render_enhanced_maps_page() -> None:
                 coordinates=next_coords,
                 previous=plan,
             )
+            st.session_state.pop(f"enh_map_coord_fp_{project.id}", None)
             st.session_state[geocode_note_key] = (
                 "success",
                 "Koordinaten gespeichert und bestätigt. Kartenplan aktualisiert.",
@@ -402,6 +448,7 @@ def render_enhanced_maps_page() -> None:
                 st.session_state.pop(f"enh_map_lat_{project.id}_{chapter_id}", None)
                 st.session_state.pop(f"enh_map_lon_{project.id}_{chapter_id}", None)
                 st.session_state.pop(f"enh_map_disp_{project.id}_{chapter_id}", None)
+            st.session_state.pop(f"enh_map_coord_fp_{project.id}", None)
             if cleared:
                 st.session_state[geocode_note_key] = (
                     "success",
@@ -425,13 +472,14 @@ def render_enhanced_maps_page() -> None:
                 progress_bar.progress(event.fraction)
                 status_box.info(event.message)
 
-            _coords, rebuilt, errors = lookup_missing_coordinates(
+            _coords, rebuilt, errors =             lookup_missing_coordinates(
                 project,
                 settings=settings,
                 plan=plan,
                 coordinates=coordinates,
                 on_progress=on_progress,
                 llm_rewrite=True,
+                force_recheck=True,
             )
             save_map_plan(project, rebuilt)
             found = sum(1 for item in seen if item.endswith(": gefunden"))
@@ -452,10 +500,8 @@ def render_enhanced_maps_page() -> None:
                         + (f", {skipped} aus dem Cache." if skipped else ".")
                     )
                 st.session_state[geocode_note_key] = ("success", note)
+            st.session_state.pop(f"enh_map_coord_fp_{project.id}", None)
             for chapter_id, _original, _display in places:
-                rec = _coords.places.get(chapter_id)
-                if rec is None or not rec.has_coordinates:
-                    continue
                 st.session_state.pop(f"enh_map_lat_{project.id}_{chapter_id}", None)
                 st.session_state.pop(f"enh_map_lon_{project.id}_{chapter_id}", None)
                 st.session_state.pop(f"enh_map_disp_{project.id}_{chapter_id}", None)

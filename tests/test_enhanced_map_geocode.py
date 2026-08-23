@@ -35,6 +35,7 @@ from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
     reset_nominatim_client_for_tests,
 )
 from otio_app.services.without_voiceover_enhanced.maps.models import (
+    COORDINATE_STATUS_CONFIRMED,
     COORDINATE_STATUS_MANUAL,
     COORDINATE_STATUS_RESOLVED,
     MapCoordinateRecord,
@@ -811,6 +812,59 @@ def test_lookup_after_reset_searches_previously_saved_place(tmp_path: Path) -> N
         coordinates=cleared,
         cache_path=tmp_path / "cache.json",
         geocode_fn=fake_geocode,
+    )
+    assert errors == []
+    assert queried == ["Amuzgi"]
+    assert coords.places["Amuzgi"].latitude == pytest.approx(41.82)
+
+
+def test_force_recheck_searches_confirmed_in_scope_place(tmp_path: Path) -> None:
+    folders = ["Amuzgi"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    save_map_coordinates(
+        project,
+        MapCoordinatesDocument(
+            project_id=project.id,
+            country="Europa",
+            places={
+                "Amuzgi": MapCoordinateRecord(
+                    chapter_id="Amuzgi",
+                    original_label="Amuzgi",
+                    display_label="Amuzgi",
+                    latitude=61.500276,
+                    longitude=23.740640,
+                    confidence=1.0,
+                    status=COORDINATE_STATUS_CONFIRMED,
+                    source="manual",
+                    country_context="Europa",
+                )
+            },
+        ),
+    )
+    queried: list[str] = []
+
+    def fake_geocode(place: str, _country: str):
+        queried.append(place)
+        return (41.82, 47.58, 0.9)
+
+    skipped, _plan, _errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+    )
+    assert queried == []
+    assert skipped.places["Amuzgi"].latitude == pytest.approx(61.500276)
+
+    coords, _rebuilt, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        coordinates=skipped,
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+        force_recheck=True,
     )
     assert errors == []
     assert queried == ["Amuzgi"]

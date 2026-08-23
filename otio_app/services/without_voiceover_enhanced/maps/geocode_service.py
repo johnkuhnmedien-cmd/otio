@@ -1138,6 +1138,7 @@ def lookup_missing_coordinates(
     suggest_coordinates_fn: (
         Callable[[list[tuple[str, str]], str], dict[str, LlmPlaceSuggestion]] | None
     ) = None,
+    force_recheck: bool = False,
 ) -> tuple[MapCoordinatesDocument, MapPlanDocument, list[str]]:
     """Resolve chapters that still lack coordinates. Does not render.
 
@@ -1147,6 +1148,8 @@ def lookup_missing_coordinates(
     One failed place never aborts the remaining search. ``llm_rewrite`` asks
     the Brief-Modell for coordinates from each folder script — never the
     Cut-Modelle. A Nominatim namesake far from those coordinates is discarded.
+    ``force_recheck`` searches every non-manual chapter again, even if the
+    form still shows the last run.
     """
     resolved_settings = settings or load_map_settings(project)
     current_plan = plan or load_map_plan(project)
@@ -1216,10 +1219,15 @@ def lookup_missing_coordinates(
     pending: list[tuple[str, str, str]] = []
     for chapter_id, original, display in places:
         existing = coords.places.get(chapter_id)
-        if not _place_needs_search(existing, suggestions.get(chapter_id), scope):
+        if existing is not None and existing.status == COORDINATE_STATUS_MANUAL:
             report.skipped += 1
             continue
-        pending.append((chapter_id, original, display))
+        if force_recheck or _place_needs_search(
+            existing, suggestions.get(chapter_id), scope
+        ):
+            pending.append((chapter_id, original, display))
+            continue
+        report.skipped += 1
 
     total = len(pending)
     if total == 0:
@@ -1242,11 +1250,13 @@ def lookup_missing_coordinates(
             )
         )
         suggestion = suggestions.get(chapter_id)
-        reused = _hit_from_existing(coords, original) or query_hits.get(
-            _cache_key(original, current_plan.country)
-        )
-        if reused is None and use_nominatim:
-            reused = _cache_get(cache_file, original, current_plan.country)
+        reused = None
+        if not force_recheck:
+            reused = _hit_from_existing(coords, original) or query_hits.get(
+                _cache_key(original, current_plan.country)
+            )
+            if reused is None and use_nominatim:
+                reused = _cache_get(cache_file, original, current_plan.country)
         if reused is not None:
             hit = _normalize_hit(reused, original_label=original, display_label=display)
             if (
