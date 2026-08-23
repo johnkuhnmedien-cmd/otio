@@ -26,6 +26,7 @@ from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     COORDINATE_STATUS_CONFIRMED,
     COORDINATE_STATUS_MANUAL,
+    COORDINATE_STATUS_MISSING,
     COORDINATE_STATUS_NEEDS_REVIEW,
     COORDINATE_STATUS_RESOLVED,
     MAP_ANIMATION_OPENING,
@@ -53,6 +54,7 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     map_output_filename,
     rebuild_saved_map_plan,
     refresh_stale_map_plan,
+    reset_auto_map_coordinates,
     save_map_coordinates,
     save_map_plan,
     status_after_saving_coordinates,
@@ -400,6 +402,32 @@ def test_confirming_review_coordinates_unblocks_map_render(tmp_path: Path) -> No
     assert all(item.render_status == RENDER_STATUS_IDLE for item in rebuilt.maps)
 
 
+def test_reset_auto_map_coordinates_clears_saved_keeps_manual(tmp_path: Path) -> None:
+    folders = ["Amuzgi", "Granadilla"]
+    project = _project(tmp_path, folders, video_place="Europa")
+    _confirm(project, folders)
+    saved = save_map_coordinates(
+        project,
+        _coords(
+            project,
+            {
+                "Amuzgi": (64.0, 25.5, COORDINATE_STATUS_CONFIRMED, 1.0),
+                "Granadilla": (40.27, -6.11, COORDINATE_STATUS_MANUAL, 1.0),
+            },
+        ),
+    )
+    plan = build_map_plan(project, coordinates=saved)
+    coords, rebuilt, cleared = reset_auto_map_coordinates(
+        project, previous=plan
+    )
+    assert cleared == 1
+    assert coords.places["Amuzgi"].has_coordinates is False
+    assert coords.places["Amuzgi"].status == COORDINATE_STATUS_MISSING
+    assert coords.places["Granadilla"].latitude == pytest.approx(40.27)
+    assert coords.places["Granadilla"].status == COORDINATE_STATUS_MANUAL
+    assert any(item.blocked_reason for item in rebuilt.maps)
+
+
 def test_identical_plan_hash_reuses_completed_output(tmp_path: Path) -> None:
     folders = ["Mount Athos"]
     project = _project(tmp_path, folders)
@@ -558,7 +586,11 @@ def test_maps_tab_render_buttons_are_clickable_without_rerun() -> None:
     assert "disabled=True" not in source
     assert "poll_while_running" in source
     assert "Koordinaten bestätigen" in source
+    assert "Koordinaten leeren" in source
     assert "confirm_map_place_coordinates" in source
+    assert "reset_auto_map_coordinates" in source
     assert "status_after_saving_coordinates" in source
+    assert "force_recheck=True" in source
+    assert "Folder-Skript vom Brief-LLM geprüft" in source
     render_section = source.split('st.subheader("Rendern")', 1)[1]
     assert "st.rerun()" not in render_section

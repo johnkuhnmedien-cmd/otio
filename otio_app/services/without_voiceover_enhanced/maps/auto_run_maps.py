@@ -344,6 +344,7 @@ def run_maps_for_auto_run(
             on_progress=on_geocode,
             should_cancel=cancelled,
             llm_rewrite=geocode_fn is None,
+            force_recheck=geocode_fn is None,
         )
     except GeocodeCancelled as exc:
         raise MapRenderCancelled(str(exc) or "Auto-Lauf gestoppt.") from exc

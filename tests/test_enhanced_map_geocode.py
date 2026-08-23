@@ -17,8 +17,17 @@ from otio_app.services.voiceover_generation.models import (
     DramaturgyPlan,
 )
 from otio_app.services.without_voiceover_enhanced.maps import geocode_service as geocode_mod
+from otio_app.services.without_voiceover_enhanced.maps.geo_scope import (
+    coordinates_disagree,
+    coordinates_in_scope,
+    pin_display_label,
+    resolve_geocode_scope,
+)
 from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
     NOMINATIM_USER_AGENT,
+    LlmPlaceSuggestion,
+    build_geocode_coordinate_prompt,
+    build_geocode_rewrite_prompt,
     friendly_geocode_error,
     geocode_query_variants,
     lookup_missing_coordinates,
@@ -26,11 +35,15 @@ from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
     reset_nominatim_client_for_tests,
 )
 from otio_app.services.without_voiceover_enhanced.maps.models import (
+    COORDINATE_STATUS_CONFIRMED,
     COORDINATE_STATUS_MANUAL,
+    COORDINATE_STATUS_RESOLVED,
+    MapCoordinateRecord,
     MapCoordinatesDocument,
 )
 from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     build_map_plan,
+    confirm_all_valid_map_coordinates,
     save_map_coordinates,
     update_coordinate_record,
 )
@@ -434,3 +447,521 @@ def test_lookup_llm_rewrite_retries_nominatim(
     assert errors == []
     assert coords.places["The Bat Colony"].has_coordinates is True
     assert coords.places["The Bat Colony"].latitude == pytest.approx(48.47)
+
+
+def test_europa_is_continent_scope_not_nominatim_suffix() -> None:
+    scope = resolve_geocode_scope("Europa")
+    assert scope.kind == "continent"
+    assert scope.query_suffix == ""
+    assert "es" in scope.countrycodes.split(",")
+    assert geocode_query_variants("Granadilla", "Europa") == ["Granadilla"]
+    assert "Granadilla, Europa" not in geocode_query_variants("Granadilla", "Europa")
+    extremadura = resolve_geocode_scope("Extremadura")
+    assert extremadura.iso2 == "es"
+    assert extremadura.query_suffix == "Spain"
+
+
+def test_pin_display_label_keeps_chapter_when_osm_is_unrelated() -> None:
+    assert pin_display_label("Granadilla", "Urb. La Europa") == "Granadilla"
+    assert pin_display_label("Granadilla", "Granadilla") == "Granadilla"
+    assert pin_display_label("Meteora", "Meteora Monasteries") == "Meteora Monasteries"
+
+
+def test_nominatim_europa_does_not_restrict_countrycodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get(*_args, **kwargs):
+        params = kwargs.get("params") or {}
+        assert "countrycodes" not in params
+        assert "Granadilla, Europa" not in str(params.get("q") or "")
+        return _JsonResp(
+            [
+                {
+                    "lat": "78.656",
+                    "lon": "16.333",
+                    "importance": 0.5,
+                    "name": "Pyramiden",
+                    "address": {"country_code": "sj", "country": "Svalbard"},
+                }
+            ]
+        )
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    hit = nominatim_geocode("Pyramiden", "Europa")
+    assert hit["latitude"] == pytest.approx(78.656)
+    assert hit["longitude"] == pytest.approx(16.333)
+    assert hit.get("country_code") == "sj"
+
+
+def test_lookup_rechecks_out_of_region_coordinates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    folders = ["Granadilla"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    save_map_coordinates(
+        project,
+        MapCoordinatesDocument(
+            project_id=project.id,
+            country="Europa",
+            places={
+                "Granadilla": MapCoordinateRecord(
+                    chapter_id="Granadilla",
+                    original_label="Granadilla",
+                    display_label="Urb. La Europa",
+                    latitude=9.93,
+                    longitude=-84.01,
+                    confidence=0.9,
+                    status=COORDINATE_STATUS_RESOLVED,
+                    source="nominatim",
+                    country_context="Europa",
+                )
+            },
+        ),
+    )
+
+    def fake_get(*_args, **_kwargs):
+        return _JsonResp(
+            [
+                {
+                    "lat": "40.268",
+                    "lon": "-6.109",
+                    "importance": 0.8,
+                    "name": "Granadilla",
+                    "address": {"country_code": "es", "country": "España"},
+                }
+            ]
+        )
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        force_recheck=True,
+    )
+    assert errors == []
+    assert coords.places["Granadilla"].latitude == pytest.approx(40.268)
+    assert coords.places["Granadilla"].display_label == "Granadilla"
+
+
+def test_geocode_rewrite_prompt_includes_video_geography(tmp_path: Path) -> None:
+    project = _project(tmp_path, ["Granadilla"])
+    project = project.model_copy(update={"name": "verlassene Dörfer Europas"})
+    prompt = build_geocode_rewrite_prompt(
+        project,
+        "Europa",
+        [{"id": "Granadilla", "title": "Granadilla", "narration": "…"}],
+    )
+    assert "Europe" in prompt
+    assert "verlassene Dörfer Europas" in prompt
+    assert "Granadilla" in prompt
+    assert "Costa Rica" in prompt
+    assert "do not write ', Europe'" in prompt.lower() or ", Europa" in prompt
+
+
+def test_confirm_all_accepts_coordinates_outside_old_europe_box(
+    tmp_path: Path,
+) -> None:
+    folders = ["Pyramiden"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    save_map_coordinates(
+        project,
+        MapCoordinatesDocument(
+            project_id=project.id,
+            country="Europa",
+            places={
+                "Pyramiden": MapCoordinateRecord(
+                    chapter_id="Pyramiden",
+                    original_label="Pyramiden",
+                    display_label="Pyramiden",
+                    latitude=78.656,
+                    longitude=16.333,
+                    confidence=0.9,
+                    status=COORDINATE_STATUS_RESOLVED,
+                    source="llm",
+                    country_context="Europa",
+                )
+            },
+        ),
+    )
+    coords, _plan = confirm_all_valid_map_coordinates(project)
+    assert coords.places["Pyramiden"].status == COORDINATE_STATUS_CONFIRMED
+    assert coords.places["Pyramiden"].latitude == pytest.approx(78.656)
+
+
+def test_europe_scope_includes_caucasus_and_russia() -> None:
+    scope = resolve_geocode_scope("Europa")
+    assert "ru" in scope.countrycodes.split(",")
+    assert "ge" in scope.countrycodes.split(",")
+    assert coordinates_in_scope(41.82, 47.58, scope) is True
+    assert coordinates_in_scope(64.0, 25.5, scope) is True
+    russia = resolve_geocode_scope("Russland")
+    assert russia.iso2 == "ru"
+    assert russia.query_suffix == "Russia"
+    assert coordinates_disagree(64.0, 25.5, 41.82, 47.58) is True
+    assert coordinates_disagree(41.82, 47.58, 41.90, 47.60) is False
+
+
+def test_geocode_coordinate_prompt_uses_folder_script(tmp_path: Path) -> None:
+    project = _project(tmp_path, ["Amuzgi"])
+    project = project.model_copy(update={"name": "verlassene Dörfer Europas"})
+    prompt = build_geocode_coordinate_prompt(
+        project,
+        "Europa",
+        [
+            {
+                "id": "Amuzgi",
+                "title": "Amuzgi",
+                "narration": "Im Nordkaukasus liegt das verlassene Dorf Amuzgi in Dagestan.",
+            }
+        ],
+    )
+    assert "verlassene Dörfer Europas" in prompt
+    assert "Nordkaukasus" in prompt
+    assert "Amuzgi" in prompt
+    assert "Finland" in prompt
+    assert "Ropoto" in prompt
+    assert "Greece" in prompt
+    assert "Germany" in prompt
+    assert "next larger city" in prompt
+    assert "fallback" in prompt
+    assert "do not write ', Europe'" in prompt.lower() or ", Europa" in prompt
+
+
+def test_lookup_llm_overrides_finland_namesake_for_amuzgi(tmp_path: Path) -> None:
+    folders = ["Amuzgi"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    save_map_coordinates(
+        project,
+        MapCoordinatesDocument(
+            project_id=project.id,
+            country="Europa",
+            places={
+                "Amuzgi": MapCoordinateRecord(
+                    chapter_id="Amuzgi",
+                    original_label="Amuzgi",
+                    display_label="Amuzgi",
+                    latitude=64.0,
+                    longitude=25.5,
+                    confidence=0.9,
+                    status=COORDINATE_STATUS_RESOLVED,
+                    source="nominatim",
+                    country_context="Europa",
+                )
+            },
+        ),
+    )
+
+    def fake_geocode(_place: str, _country: str):
+        return (64.0, 25.5, 0.9)
+
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+        llm_rewrite=True,
+        suggest_coordinates_fn=lambda _rows, _country: {
+            "Amuzgi": LlmPlaceSuggestion(
+                query="Amuzgi, Dagestan, Russia",
+                country="Russland",
+                latitude=41.82,
+                longitude=47.58,
+            )
+        },
+    )
+    assert errors == []
+    assert coords.places["Amuzgi"].latitude == pytest.approx(41.82)
+    assert coords.places["Amuzgi"].longitude == pytest.approx(47.58)
+    assert coords.places["Amuzgi"].source == "llm"
+    assert coords.places["Amuzgi"].display_label == "Amuzgi"
+
+
+def test_lookup_keeps_nominatim_when_it_agrees_with_llm(tmp_path: Path) -> None:
+    folders = ["Amuzgi"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+
+    def fake_geocode(place: str, _country: str):
+        if "Dagestan" in place:
+            return (41.81, 47.59, 0.91)
+        return (64.0, 25.5, 0.9)
+
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+        llm_rewrite=True,
+        suggest_coordinates_fn=lambda _rows, _country: {
+            "Amuzgi": LlmPlaceSuggestion(
+                query="Amuzgi, Dagestan, Russia",
+                country="Russland",
+                latitude=41.82,
+                longitude=47.58,
+            )
+        },
+    )
+    assert errors == []
+    assert coords.places["Amuzgi"].latitude == pytest.approx(41.81)
+    assert coords.places["Amuzgi"].source != "llm"
+
+
+def test_lookup_leaves_manual_amuzgi_untouched(tmp_path: Path) -> None:
+    folders = ["Amuzgi"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    save_map_coordinates(
+        project,
+        MapCoordinatesDocument(
+            project_id=project.id,
+            country="Europa",
+            places={
+                "Amuzgi": MapCoordinateRecord(
+                    chapter_id="Amuzgi",
+                    original_label="Amuzgi",
+                    display_label="Amuzgi",
+                    latitude=64.0,
+                    longitude=25.5,
+                    confidence=1.0,
+                    status=COORDINATE_STATUS_MANUAL,
+                    source="manual",
+                    country_context="Europa",
+                )
+            },
+        ),
+    )
+    called: list[str] = []
+
+    def fake_suggest(rows: list[tuple[str, str]], _country: str):
+        called.extend(chapter_id for chapter_id, _title in rows)
+        return {
+            "Amuzgi": LlmPlaceSuggestion(
+                query="Amuzgi, Dagestan, Russia",
+                country="Russland",
+                latitude=41.82,
+                longitude=47.58,
+            )
+        }
+
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=lambda _place, _country: (41.82, 47.58, 0.9),
+        llm_rewrite=True,
+        suggest_coordinates_fn=fake_suggest,
+    )
+    assert errors == []
+    assert called == []
+    assert coords.places["Amuzgi"].latitude == pytest.approx(64.0)
+    assert coords.places["Amuzgi"].status == COORDINATE_STATUS_MANUAL
+
+
+def test_lookup_after_reset_searches_previously_saved_place(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
+        reset_auto_map_coordinates,
+    )
+
+    folders = ["Amuzgi"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    save_map_coordinates(
+        project,
+        MapCoordinatesDocument(
+            project_id=project.id,
+            country="Europa",
+            places={
+                "Amuzgi": MapCoordinateRecord(
+                    chapter_id="Amuzgi",
+                    original_label="Amuzgi",
+                    display_label="Amuzgi",
+                    latitude=64.0,
+                    longitude=25.5,
+                    confidence=1.0,
+                    status=COORDINATE_STATUS_RESOLVED,
+                    source="nominatim",
+                    country_context="Europa",
+                )
+            },
+        ),
+    )
+    cleared, _plan, count = reset_auto_map_coordinates(project)
+    assert count == 1
+    assert cleared.places["Amuzgi"].has_coordinates is False
+    queried: list[str] = []
+
+    def fake_geocode(place: str, _country: str):
+        queried.append(place)
+        return (41.82, 47.58, 0.9)
+
+    coords, _rebuilt, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        coordinates=cleared,
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+    )
+    assert errors == []
+    assert queried == ["Amuzgi"]
+    assert coords.places["Amuzgi"].latitude == pytest.approx(41.82)
+
+
+def test_force_recheck_searches_confirmed_in_scope_place(tmp_path: Path) -> None:
+    folders = ["Amuzgi"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    save_map_coordinates(
+        project,
+        MapCoordinatesDocument(
+            project_id=project.id,
+            country="Europa",
+            places={
+                "Amuzgi": MapCoordinateRecord(
+                    chapter_id="Amuzgi",
+                    original_label="Amuzgi",
+                    display_label="Amuzgi",
+                    latitude=61.500276,
+                    longitude=23.740640,
+                    confidence=1.0,
+                    status=COORDINATE_STATUS_CONFIRMED,
+                    source="manual",
+                    country_context="Europa",
+                )
+            },
+        ),
+    )
+    queried: list[str] = []
+
+    def fake_geocode(place: str, _country: str):
+        queried.append(place)
+        return (41.82, 47.58, 0.9)
+
+    skipped, _plan, _errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+    )
+    assert queried == []
+    assert skipped.places["Amuzgi"].latitude == pytest.approx(61.500276)
+
+    coords, _rebuilt, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        coordinates=skipped,
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+        force_recheck=True,
+    )
+    assert errors == []
+    assert queried == ["Amuzgi"]
+    assert coords.places["Amuzgi"].latitude == pytest.approx(41.82)
+
+
+def test_lookup_uses_next_larger_city_when_village_is_wrong_country(
+    tmp_path: Path,
+) -> None:
+    folders = ["Ropoto"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    queried: list[str] = []
+
+    def fake_geocode(place: str, _country: str):
+        queried.append(place)
+        if "Trikala" in place:
+            return (39.555, 21.768, 0.9)
+        return (51.96, 7.63, 0.4)
+
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+        llm_rewrite=True,
+        suggest_coordinates_fn=lambda _rows, _country: {
+            "Ropoto": LlmPlaceSuggestion(
+                query="Ropoto",
+                country="Greece",
+                city="Trikala, Greece",
+                fallback="city",
+                latitude=39.56,
+                longitude=21.77,
+            )
+        },
+    )
+    assert errors == []
+    assert "Trikala, Greece" in queried
+    assert coords.places["Ropoto"].latitude == pytest.approx(39.555)
+    assert coords.places["Ropoto"].display_label == "Ropoto"
+
+
+def test_lookup_accepts_pyramiden_north_of_old_europe_box(tmp_path: Path) -> None:
+    folders = ["Pyramiden"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=lambda _place, _country: (78.656, 16.333, 0.9),
+        llm_rewrite=True,
+        suggest_coordinates_fn=lambda _rows, _country: {
+            "Pyramiden": LlmPlaceSuggestion(
+                query="Pyramiden, Svalbard",
+                country="Norway",
+                latitude=78.656,
+                longitude=16.333,
+            )
+        },
+    )
+    assert errors == []
+    assert coords.places["Pyramiden"].latitude == pytest.approx(78.656)
+    assert coords.places["Pyramiden"].longitude == pytest.approx(16.333)
+
+
+def test_lookup_uses_llm_city_coords_when_nominatim_misses(tmp_path: Path) -> None:
+    folders = ["Ropoto"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+
+    def fake_geocode(_place: str, _country: str):
+        return None
+
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+        llm_rewrite=True,
+        suggest_coordinates_fn=lambda _rows, _country: {
+            "Ropoto": LlmPlaceSuggestion(
+                query="Ropoto, Trikala, Greece",
+                country="Greece",
+                city="Trikala",
+                fallback="city",
+                latitude=39.56,
+                longitude=21.77,
+            )
+        },
+    )
+    assert errors == []
+    assert coords.places["Ropoto"].latitude == pytest.approx(39.56)
+    assert coords.places["Ropoto"].source == "llm"
+    assert "city fallback" in coords.places["Ropoto"].note

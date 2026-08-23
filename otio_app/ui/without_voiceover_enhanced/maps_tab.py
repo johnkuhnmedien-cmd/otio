@@ -16,6 +16,7 @@ from otio_app.services.without_voiceover_enhanced.maps.map_render_job import (
 )
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     COORDINATE_STATUS_LABELS,
+    COORDINATE_STATUS_MANUAL,
     COORDINATE_STATUS_MISSING,
     COORDINATE_STATUS_NEEDS_REVIEW,
     MAP_HEADING_BY_LANGUAGE,
@@ -39,6 +40,7 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     map_heading,
     rebuild_saved_map_plan,
     refresh_stale_map_plan,
+    reset_auto_map_coordinates,
     save_map_coordinates,
     save_map_plan,
     save_map_settings,
@@ -63,6 +65,49 @@ def _parse_optional_float(value: object) -> float | None:
         return float(text)
     except ValueError:
         return None
+
+
+def _coord_form_fingerprint(
+    project_id: str,
+    places: list[tuple[str, str, str]],
+    coordinates: MapCoordinatesDocument,
+) -> str:
+    parts = [project_id, coordinates.updated_at.isoformat()]
+    for chapter_id, _original, display in places:
+        rec = coordinates.places.get(chapter_id)
+        if rec is None:
+            parts.append(f"{chapter_id}:::{display}")
+            continue
+        lat = "" if rec.latitude is None else f"{rec.latitude:.6f}"
+        lon = "" if rec.longitude is None else f"{rec.longitude:.6f}"
+        parts.append(
+            f"{chapter_id}:{lat}:{lon}:{rec.status}:{rec.display_label or display}"
+        )
+    return "|".join(parts)
+
+
+def _sync_coord_form_fields(
+    project_id: str,
+    places: list[tuple[str, str, str]],
+    coordinates: MapCoordinatesDocument,
+) -> None:
+    """Streamlit keeps the last run in the widgets — overwrite after file changes."""
+    fp_key = f"enh_map_coord_fp_{project_id}"
+    fingerprint = _coord_form_fingerprint(project_id, places, coordinates)
+    if st.session_state.get(fp_key) == fingerprint:
+        return
+    st.session_state[fp_key] = fingerprint
+    for chapter_id, _original, display in places:
+        rec = coordinates.places.get(chapter_id)
+        st.session_state[f"enh_map_disp_{project_id}_{chapter_id}"] = (
+            (rec.display_label if rec is not None else "") or display
+        )
+        st.session_state[f"enh_map_lat_{project_id}_{chapter_id}"] = (
+            "" if rec is None or rec.latitude is None else f"{rec.latitude:.6f}"
+        )
+        st.session_state[f"enh_map_lon_{project_id}_{chapter_id}"] = (
+            "" if rec is None or rec.longitude is None else f"{rec.longitude:.6f}"
+        )
 
 
 def _init_settings_keys(project_id: str, stored: MapRenderSettings) -> None:
@@ -97,6 +142,10 @@ def render_enhanced_maps_page() -> None:
     st.header("③½ Karten")
     st.caption(
         "Plant Eröffnungs- und Übergangskarten aus der bestätigten Dramaturgie. "
+        "Jede Koordinate wird bei „Fehlende Koordinaten prüfen“ "
+        "(und im Auto-Lauf) am Folder-Skript vom Brief-LLM geprüft. "
+        "Fehlt der Ort, gilt die nächstgrößere Stadt aus dem Skript. "
+        "Rendern allein ändert keine Koordinaten. "
         "Rendern startet hier per Klick oder im Auto-Lauf nach dem Funnel "
         "(Plan, Koordinaten prüfen/bestätigen, alle Karten rendern)."
     )
@@ -108,6 +157,23 @@ def render_enhanced_maps_page() -> None:
     if confirmed is None:
         st.warning("Keine bestätigte Dramaturgie. Bitte zuerst ③ Dramaturgie bestätigen.")
         return
+    try:
+        from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+            load_locked_script,
+            load_script_draft,
+        )
+
+        has_scripts = (
+            load_locked_script(project) or load_script_draft(project)
+        ) is not None
+    except Exception:
+        has_scripts = False
+    if not has_scripts:
+        st.info(
+            "Noch kein Folder-Skript. Das Brief-LLM braucht den Kapiteltext, "
+            "um den Ort zu verstehen. Nach ④ Skripte nochmal "
+            "„Fehlende Koordinaten prüfen“ — sonst nur Name und Videotitel."
+        )
 
     stored_settings = load_map_settings(project)
     _init_settings_keys(project.id, stored_settings)
@@ -236,8 +302,9 @@ def render_enhanced_maps_page() -> None:
 
     st.subheader("Koordinaten")
     st.caption(
-        "Vorhandene Werte aus dem Projekt werden bevorzugt. "
-        "Schon gefundene Orte werden nicht erneut bei Nominatim abgefragt. "
+        "Jede nicht manuelle Koordinate wird am Folder-Skript vom Brief-LLM geprüft. "
+        "Fehlt der Ort, gilt die nächstgrößere Stadt aus dem Skript. "
+        "„Koordinaten leeren“ nimmt die gespeicherten Werte aus der Datei. "
         "Unsichere Treffer rendern nicht automatisch — bitte mit "
         "„Koordinaten bestätigen“ oder „Koordinaten speichern“ freigeben."
     )
@@ -250,6 +317,7 @@ def render_enhanced_maps_page() -> None:
         else:
             st.warning(text)
     places = unique_chapter_places(plan)
+    _sync_coord_form_fields(project.id, places, coordinates)
     for chapter_id, original, display in places:
         rec = coordinates.places.get(chapter_id) or MapCoordinateRecord(
             chapter_id=chapter_id,
@@ -323,13 +391,20 @@ def render_enhanced_maps_page() -> None:
                     st.session_state.pop(lat_key, None)
                     st.session_state.pop(lon_key, None)
                     st.session_state.pop(display_key, None)
+                    st.session_state.pop(f"enh_map_coord_fp_{project.id}", None)
                     st.session_state[geocode_note_key] = (
                         "success",
                         f"„{original}“ bestätigt. Kartenplan aktualisiert.",
                     )
                     st.rerun()
 
-    save_c1, save_c2 = st.columns(2)
+    st.caption(
+        "Das Brief-LLM liest jedes Folder-Skript und setzt die Koordinaten. "
+        "Ohne exakten Treffer die nächstgrößere Stadt. "
+        "Land/Region filtert die Treffer nicht. "
+        "Manuelle Koordinaten bleiben unangetastet."
+    )
+    save_c1, save_c2, save_c3 = st.columns(3)
     with save_c1:
         if st.button("Koordinaten speichern", key=f"enh_map_save_coords_{project.id}"):
             next_places = dict(coordinates.places)
@@ -371,12 +446,40 @@ def render_enhanced_maps_page() -> None:
                 coordinates=next_coords,
                 previous=plan,
             )
+            st.session_state.pop(f"enh_map_coord_fp_{project.id}", None)
             st.session_state[geocode_note_key] = (
                 "success",
                 "Koordinaten gespeichert und bestätigt. Kartenplan aktualisiert.",
             )
             st.rerun()
     with save_c2:
+        if st.button("Koordinaten leeren", key=f"enh_map_clear_coords_{project.id}"):
+            _coords, _plan, cleared = reset_auto_map_coordinates(
+                project,
+                settings=settings,
+                previous=plan,
+            )
+            for chapter_id, _original, _display in places:
+                rec = _coords.places.get(chapter_id)
+                if rec is not None and rec.status == COORDINATE_STATUS_MANUAL:
+                    continue
+                st.session_state.pop(f"enh_map_lat_{project.id}_{chapter_id}", None)
+                st.session_state.pop(f"enh_map_lon_{project.id}_{chapter_id}", None)
+                st.session_state.pop(f"enh_map_disp_{project.id}_{chapter_id}", None)
+            st.session_state.pop(f"enh_map_coord_fp_{project.id}", None)
+            if cleared:
+                st.session_state[geocode_note_key] = (
+                    "success",
+                    f"{cleared} gespeicherte Koordinaten entfernt. "
+                    "Jetzt „Fehlende Koordinaten prüfen“ — alle Orte werden neu gesucht.",
+                )
+            else:
+                st.session_state[geocode_note_key] = (
+                    "success",
+                    "Keine automatisch gespeicherten Koordinaten zum Leeren.",
+                )
+            st.rerun()
+    with save_c3:
         if st.button("Fehlende Koordinaten prüfen", key=f"enh_map_geocode_{project.id}"):
             progress_bar = st.progress(0.0)
             status_box = st.empty()
@@ -394,6 +497,7 @@ def render_enhanced_maps_page() -> None:
                 coordinates=coordinates,
                 on_progress=on_progress,
                 llm_rewrite=True,
+                force_recheck=True,
             )
             save_map_plan(project, rebuilt)
             found = sum(1 for item in seen if item.endswith(": gefunden"))
@@ -411,13 +515,12 @@ def render_enhanced_maps_page() -> None:
                 else:
                     note = (
                         f"Koordinatenprüfung fertig: {found} gefunden"
-                        + (f", {skipped} aus dem Cache." if skipped else ".")
+                        + (f", {skipped} aus dem Cache" if skipped else "")
+                        + ". Brief-LLM wurde für die Koordinaten befragt."
                     )
                 st.session_state[geocode_note_key] = ("success", note)
+            st.session_state.pop(f"enh_map_coord_fp_{project.id}", None)
             for chapter_id, _original, _display in places:
-                rec = _coords.places.get(chapter_id)
-                if rec is None or not rec.has_coordinates:
-                    continue
                 st.session_state.pop(f"enh_map_lat_{project.id}_{chapter_id}", None)
                 st.session_state.pop(f"enh_map_lon_{project.id}_{chapter_id}", None)
                 st.session_state.pop(f"enh_map_disp_{project.id}_{chapter_id}", None)
