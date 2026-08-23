@@ -765,3 +765,53 @@ def test_lookup_leaves_manual_amuzgi_untouched(tmp_path: Path) -> None:
     assert called == []
     assert coords.places["Amuzgi"].latitude == pytest.approx(64.0)
     assert coords.places["Amuzgi"].status == COORDINATE_STATUS_MANUAL
+
+
+def test_lookup_after_reset_searches_previously_saved_place(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
+        reset_auto_map_coordinates,
+    )
+
+    folders = ["Amuzgi"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Europa"})
+    _confirm(project, folders)
+    save_map_coordinates(
+        project,
+        MapCoordinatesDocument(
+            project_id=project.id,
+            country="Europa",
+            places={
+                "Amuzgi": MapCoordinateRecord(
+                    chapter_id="Amuzgi",
+                    original_label="Amuzgi",
+                    display_label="Amuzgi",
+                    latitude=64.0,
+                    longitude=25.5,
+                    confidence=1.0,
+                    status=COORDINATE_STATUS_RESOLVED,
+                    source="nominatim",
+                    country_context="Europa",
+                )
+            },
+        ),
+    )
+    cleared, _plan, count = reset_auto_map_coordinates(project)
+    assert count == 1
+    assert cleared.places["Amuzgi"].has_coordinates is False
+    queried: list[str] = []
+
+    def fake_geocode(place: str, _country: str):
+        queried.append(place)
+        return (41.82, 47.58, 0.9)
+
+    coords, _rebuilt, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        coordinates=cleared,
+        cache_path=tmp_path / "cache.json",
+        geocode_fn=fake_geocode,
+    )
+    assert errors == []
+    assert queried == ["Amuzgi"]
+    assert coords.places["Amuzgi"].latitude == pytest.approx(41.82)

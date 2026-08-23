@@ -16,6 +16,7 @@ from otio_app.services.without_voiceover_enhanced.maps.map_render_job import (
 )
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     COORDINATE_STATUS_LABELS,
+    COORDINATE_STATUS_MANUAL,
     COORDINATE_STATUS_MISSING,
     COORDINATE_STATUS_NEEDS_REVIEW,
     MAP_HEADING_BY_LANGUAGE,
@@ -39,6 +40,7 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     map_heading,
     rebuild_saved_map_plan,
     refresh_stale_map_plan,
+    reset_auto_map_coordinates,
     save_map_coordinates,
     save_map_plan,
     save_map_settings,
@@ -237,7 +239,10 @@ def render_enhanced_maps_page() -> None:
     st.subheader("Koordinaten")
     st.caption(
         "Vorhandene Werte aus dem Projekt werden bevorzugt. "
-        "Schon gefundene Orte werden nicht erneut bei Nominatim abgefragt. "
+        "„Fehlende Koordinaten prüfen“ überspringt schon gesetzte Treffer, "
+        "außer das Brief-LLM widerspricht. "
+        "„Koordinaten leeren“ nimmt alle nicht manuellen Werte raus, "
+        "danach alle neu prüfen. "
         "Unsichere Treffer rendern nicht automatisch — bitte mit "
         "„Koordinaten bestätigen“ oder „Koordinaten speichern“ freigeben."
     )
@@ -336,7 +341,7 @@ def render_enhanced_maps_page() -> None:
         "Amuzgi landet im Nordkaukasus, nicht in Finnland. "
         "Manuelle Koordinaten bleiben unangetastet."
     )
-    save_c1, save_c2 = st.columns(2)
+    save_c1, save_c2, save_c3 = st.columns(3)
     with save_c1:
         if st.button("Koordinaten speichern", key=f"enh_map_save_coords_{project.id}"):
             next_places = dict(coordinates.places)
@@ -384,6 +389,32 @@ def render_enhanced_maps_page() -> None:
             )
             st.rerun()
     with save_c2:
+        if st.button("Koordinaten leeren", key=f"enh_map_clear_coords_{project.id}"):
+            _coords, _plan, cleared = reset_auto_map_coordinates(
+                project,
+                settings=settings,
+                previous=plan,
+            )
+            for chapter_id, _original, _display in places:
+                rec = _coords.places.get(chapter_id)
+                if rec is not None and rec.status == COORDINATE_STATUS_MANUAL:
+                    continue
+                st.session_state.pop(f"enh_map_lat_{project.id}_{chapter_id}", None)
+                st.session_state.pop(f"enh_map_lon_{project.id}_{chapter_id}", None)
+                st.session_state.pop(f"enh_map_disp_{project.id}_{chapter_id}", None)
+            if cleared:
+                st.session_state[geocode_note_key] = (
+                    "success",
+                    f"{cleared} gespeicherte Koordinaten entfernt. "
+                    "Jetzt „Fehlende Koordinaten prüfen“ — alle Orte werden neu gesucht.",
+                )
+            else:
+                st.session_state[geocode_note_key] = (
+                    "success",
+                    "Keine automatisch gespeicherten Koordinaten zum Leeren.",
+                )
+            st.rerun()
+    with save_c3:
         if st.button("Fehlende Koordinaten prüfen", key=f"enh_map_geocode_{project.id}"):
             progress_bar = st.progress(0.0)
             status_box = st.empty()

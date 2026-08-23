@@ -424,6 +424,43 @@ def save_map_coordinates(
     return normalized
 
 
+def reset_auto_map_coordinates(
+    project: Project,
+    *,
+    settings: MapRenderSettings | None = None,
+    previous: MapPlanDocument | None = None,
+) -> tuple[MapCoordinatesDocument, MapPlanDocument, int]:
+    """Leert geocodierte und bestätigte Pins. Manuelle Einträge bleiben."""
+    document = load_map_coordinates(project)
+    cleared = 0
+    next_places = dict(document.places)
+    for chapter_id, record in document.places.items():
+        if record.status == COORDINATE_STATUS_MANUAL:
+            continue
+        if not record.has_coordinates and record.status == COORDINATE_STATUS_MISSING:
+            continue
+        next_places[chapter_id] = record.model_copy(
+            update={
+                "latitude": None,
+                "longitude": None,
+                "confidence": 0.0,
+                "status": COORDINATE_STATUS_MISSING,
+                "source": "",
+            }
+        )
+        cleared += 1
+    coords = save_map_coordinates(
+        project, document.model_copy(update={"places": next_places})
+    )
+    plan = rebuild_saved_map_plan(
+        project,
+        coordinates=coords,
+        settings=settings,
+        previous=previous,
+    )
+    return coords, plan, cleared
+
+
 def load_map_plan(project: Project) -> MapPlanDocument | None:
     return load_model(map_plan_path(project), MapPlanDocument)
 
