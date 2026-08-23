@@ -332,7 +332,9 @@ def render_enhanced_maps_page() -> None:
     st.caption(
         "Land/Region begrenzt die Suche: bei **Europa** nur europäische Treffer, "
         "kein „Granadilla, Europa“ (das landet in Costa Rica). "
-        "Falsche Kontinente werden verworfen und erneut gesucht."
+        "Das Brief-LLM liest das Folder-Skript und gibt Koordinaten vor — "
+        "Amuzgi landet im Nordkaukasus, nicht in Finnland. "
+        "Manuelle Koordinaten bleiben unangetastet."
     )
     save_c1, save_c2 = st.columns(2)
     with save_c1:

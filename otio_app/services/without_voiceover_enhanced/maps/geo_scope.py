@@ -7,6 +7,7 @@ aus „Granadilla, Europa“ die Urbanización La Europa in Costa Rica.
 
 from __future__ import annotations
 
+import math
 import unicodedata
 from dataclasses import dataclass
 
@@ -19,7 +20,8 @@ from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
 # south, west, north, east
 BBox = tuple[float, float, float, float]
 
-EUROPE_BBOX: BBox = (34.0, -25.0, 72.0, 45.0)
+# Osten bis Kaukasus (Dagestan ~47°E). Finnland bleibt im Kasten — LLM prüft Namesakes.
+EUROPE_BBOX: BBox = (34.0, -25.0, 72.0, 62.0)
 ASIA_BBOX: BBox = (-10.0, 26.0, 77.0, 180.0)
 AFRICA_BBOX: BBox = (-35.0, -18.0, 38.0, 52.0)
 NORTH_AMERICA_BBOX: BBox = (14.0, -170.0, 72.0, -50.0)
@@ -27,8 +29,9 @@ SOUTH_AMERICA_BBOX: BBox = (-56.0, -82.0, 13.0, -34.0)
 
 # Nominatim countrycodes — kommagetrennt, nur Europa (inkl. Reiseziele TR/CY/IS).
 EUROPE_COUNTRYCODES = (
-    "al,ad,at,ba,be,bg,by,ch,cy,cz,de,dk,ee,es,fi,fr,gb,gr,hr,hu,ie,is,it,"
-    "li,lt,lu,lv,mc,md,me,mk,mt,nl,no,pl,pt,ro,rs,se,si,sk,sm,tr,ua,xk"
+    "al,ad,am,at,az,ba,be,bg,by,ch,cy,cz,de,dk,ee,es,fi,fr,gb,ge,gr,hr,hu,"
+    "ie,is,it,li,lt,lu,lv,mc,md,me,mk,mt,nl,no,pl,pt,ro,rs,ru,se,si,sk,sm,"
+    "tr,ua,xk"
 )
 EUROPE_ISO2 = frozenset(
     code.strip() for code in EUROPE_COUNTRYCODES.split(",") if code.strip()
@@ -81,6 +84,32 @@ _REGION_TO_COUNTRY: dict[str, str] = {
     "bretagne": "france",
     "brittany": "france",
 }
+
+# Geocode-only (nicht Remotion-Länderkatalog): Kaukasus / Russland.
+_EXTRA_ISO2: dict[str, str] = {
+    "russia": "ru",
+    "russland": "ru",
+    "russian federation": "ru",
+    "dagestan": "ru",
+    "nordkaukasus": "ru",
+    "north caucasus": "ru",
+    "caucasus": "ru",
+    "kaukasus": "ru",
+    "georgia": "ge",
+    "georgien": "ge",
+    "armenia": "am",
+    "armenien": "am",
+    "azerbaijan": "az",
+    "aserbaidschan": "az",
+}
+_EXTRA_LABEL_EN: dict[str, str] = {
+    "ru": "Russia",
+    "ge": "Georgia",
+    "am": "Armenia",
+    "az": "Azerbaijan",
+}
+
+LLM_COORD_AGREE_KM = 150.0
 
 
 def _norm(value: str) -> str:
@@ -135,6 +164,20 @@ def resolve_geocode_scope(video_place: str) -> GeocodeScope:
             countrycodes=iso2,
             query_suffix=label,
             bbox=EUROPE_BBOX if iso2 in EUROPE_ISO2 else None,
+            label_en=label,
+        )
+
+    extra_iso = _EXTRA_ISO2.get(key)
+    if extra_iso:
+        label = _EXTRA_LABEL_EN.get(extra_iso, raw)
+        return GeocodeScope(
+            raw=raw,
+            kind="country",
+            canonical=extra_iso,
+            iso2=extra_iso,
+            countrycodes=extra_iso,
+            query_suffix=label,
+            bbox=EUROPE_BBOX,
             label_en=label,
         )
 
@@ -218,6 +261,44 @@ def hit_in_scope(
     if not country_code_in_scope(country_code, scope):
         return False
     return coordinates_in_scope(latitude, longitude, scope)
+
+
+def haversine_km(
+    lat1: float | None,
+    lon1: float | None,
+    lat2: float | None,
+    lon2: float | None,
+) -> float | None:
+    """Großkreis-Abstand in km, oder None wenn eine Koordinate fehlt."""
+    try:
+        a = float(lat1)
+        b = float(lon1)
+        c = float(lat2)
+        d = float(lon2)
+    except (TypeError, ValueError):
+        return None
+    if any(math.isnan(value) for value in (a, b, c, d)):
+        return None
+    phi1, phi2 = math.radians(a), math.radians(c)
+    d_phi = math.radians(c - a)
+    d_lambda = math.radians(d - b)
+    chord = (
+        math.sin(d_phi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    )
+    return 6371.0 * 2 * math.atan2(math.sqrt(chord), math.sqrt(max(0.0, 1.0 - chord)))
+
+
+def coordinates_disagree(
+    lat1: float | None,
+    lon1: float | None,
+    lat2: float | None,
+    lon2: float | None,
+    *,
+    max_km: float = LLM_COORD_AGREE_KM,
+) -> bool:
+    distance = haversine_km(lat1, lon1, lat2, lon2)
+    return distance is not None and distance > max_km
 
 
 def pin_display_label(chapter_label: str, osm_name: str) -> str:
