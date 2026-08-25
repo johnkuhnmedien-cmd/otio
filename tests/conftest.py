@@ -37,6 +37,30 @@ def temp_project_layout(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+@pytest.fixture(autouse=True)
+def _default_stock_watermark_check_clean(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    """Bestehende Analyse-Tests sollen nicht an Gemini für Wasserzeichen hängen."""
+    test_path = getattr(request.node, "path", None)
+    if test_path is not None and Path(test_path).name == "test_asset_watermark_check.py":
+        return
+
+    from otio_app.services.asset_watermark_check import StockWatermarkCheckResult
+
+    def _clean(*_args, **_kwargs) -> StockWatermarkCheckResult:
+        return StockWatermarkCheckResult(blocked=False)
+
+    monkeypatch.setattr(
+        "otio_app.services.asset_analyzer.check_frames_for_stock_watermark",
+        _clean,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.asset_watermark_check.check_frames_for_stock_watermark",
+        _clean,
+    )
+
+
 @pytest.fixture
 def temp_db_path(tmp_path: Path) -> Path:
     return tmp_path / "test_projects.db"

@@ -671,6 +671,35 @@ def parse_media_frame_analysis(text: str) -> MediaFrameAnalysis:
         return _parse_fail(raw)
 
 
+def generate_text_from_image_frames(
+    prompt: str,
+    frame_paths: list[Path],
+    *,
+    model: Optional[str] = None,
+) -> str:
+    """Kurzer Vision-Aufruf über JPEG-Frames — gleiches Asset-Modell, nicht Cut."""
+    if not frame_paths:
+        return ""
+
+    client = _get_client()
+    from google.genai import types
+
+    parts: list[types.Part] = [types.Part.from_text(text=prompt)]
+    for frame_path in frame_paths:
+        parts.append(
+            types.Part.from_bytes(
+                data=frame_path.read_bytes(),
+                mime_type="image/jpeg",
+            )
+        )
+
+    response = client.models.generate_content(
+        model=resolve_gemini_model(model),
+        contents=[types.Content(role="user", parts=parts)],
+    )
+    return (response.text or "").strip()
+
+
 def analyze_media_from_frames(
     media_name: str,
     folder_name: str,

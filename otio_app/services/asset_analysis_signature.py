@@ -98,6 +98,8 @@ def try_build_analysis_signature(
 
 def is_usable_asset_analysis(entry: AssetMediaAnalysis) -> bool:
     """Legacy-/Anzeige-tauglich: echte Beschreibung, kein Parse-/Analysefehler."""
+    if entry.watermark_blocked is True:
+        return False
     description = entry.description.strip()
     if not description:
         return False
@@ -125,6 +127,9 @@ def classify_asset_cache_status(
 
     if entry.analysis_parse_ok is False:
         return AssetCacheStatus("invalid", ["parse_failed"])
+
+    if entry.watermark_blocked is True:
+        return AssetCacheStatus("failed", ["watermark_blocked"])
 
     if entry.error and entry.error.strip():
         return AssetCacheStatus("failed", ["analysis_error"])

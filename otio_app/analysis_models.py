@@ -177,6 +177,11 @@ class AssetMediaAnalysis(BaseModel):
     description_model_resolved: str = ""
     # Nur bei parse_ok=False diagnostisch (begrenzt); bei Erfolg leer.
     analysis_raw_response: str = ""
+    # Stock-Wasserzeichen-Gate (additiv; Alt-JSONs ohne Felder bleiben gültig).
+    watermark_blocked: Optional[bool] = None
+    watermark_provider: str = ""
+    watermark_note: str = ""
+    watermark_check_version: str = ""
 
 
 #: ``asset_origin`` lokal gedrehter Originale. Alles andere ist beschafftes
