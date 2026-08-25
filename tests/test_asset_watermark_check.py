@@ -28,7 +28,10 @@ from otio_app.services.asset_watermark_check import (
     watermark_check_is_current,
     watermark_review_txt_path,
 )
+from otio_app.services.folder_analysis_status import FolderAnalysisState, get_folder_analysis_state
 from otio_app.services.folder_asset_status import folder_is_fully_analyzed
+from otio_app.services.inventory_loader import load_folder_inventory_file
+from otio_app.services.inventory_prompt_view import slim_inventory_path_for
 from otio_app.services.gemini_client import (
     ASSET_DESCRIPTION_PROMPT_VERSION,
     GeminiNotConfiguredError,
@@ -211,11 +214,57 @@ def test_watermarked_asset_fails_analysis_and_is_listed(
     assert not is_successfully_analyzed(cached)
     assert not is_usable_asset_analysis(cached)
     assert not folder_is_fully_analyzed(project, "Grand Canyon")
+    # Kein erfolgreicher Clip → kein Ordner-Inventar.
     assert not project.folder_inventory_path("Grand Canyon").is_file()
     items = load_watermark_review_items(project)
     assert len(items) == 1
     assert items[0].filename == "clip.mp4"
     assert document.items[0].assets[0].error == WATERMARK_BLOCK_ERROR
+
+
+def test_partial_folder_writes_inventory_without_watermarked_clips(
+    temp_project_layout: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    folder = temp_project_layout["project_root"] / "Grand Canyon"
+    clean = folder / "clip_clean.mp4"
+    dirty = folder / "clip_wm.mp4"
+    clean.write_bytes(b"video-clean")
+    dirty.write_bytes(b"video-wm")
+    (folder / "clip.mp4").unlink()
+
+    def fake_wm(frame_paths, *, media_name, folder_name, model=None):
+        if media_name == dirty.name:
+            return _blocked_adobe()
+        return _clean_watermark()
+
+    def fake_v3(media_name, folder_name, frame_paths, language, *, model=None):
+        return MediaFrameAnalysis.successful(description=f"Beschreibung für {media_name}")
+
+    monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", _fake_extract)
+    monkeypatch.setattr(
+        "otio_app.services.asset_analyzer.check_frames_for_stock_watermark",
+        fake_wm,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.asset_analyzer.analyze_media_from_frames",
+        fake_v3,
+    )
+
+    project = _sample_project(temp_project_layout)
+    analyze_asset_folders(project, ["Grand Canyon"], use_api=True)
+
+    assert get_folder_analysis_state(project, "Grand Canyon") == FolderAnalysisState.PARTIAL
+    assert not folder_is_fully_analyzed(project, "Grand Canyon")
+    inventory_path = project.folder_inventory_path("Grand Canyon")
+    assert inventory_path.is_file()
+    item = load_folder_inventory_file(inventory_path)
+    assert item is not None
+    names = {Path(asset.path).name for asset in item.assets}
+    assert names == {"clip_clean.mp4"}
+    assert slim_inventory_path_for(inventory_path).is_file()
+    review = load_watermark_review_items(project)
+    assert [entry.filename for entry in review] == ["clip_wm.mp4"]
 
 
 def test_current_v3_cache_runs_only_watermark_check(

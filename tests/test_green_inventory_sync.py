@@ -1,4 +1,4 @@
-"""Tests: Inventory-JSON nur bei grünem Ordner-Status."""
+"""Tests: Inventory-JSON bei grünen und teilweisen Ordnern."""
 
 from __future__ import annotations
 
@@ -10,11 +10,17 @@ from otio_app.services.folder_analysis_status import (
     FolderAnalysisState,
     get_folder_analysis_state,
 )
-from otio_app.services.inventory_loader import sync_folder_inventory_with_status
+from otio_app.services.inventory_loader import (
+    load_folder_inventory_file,
+    sync_folder_inventory_with_status,
+)
+from otio_app.services.inventory_prompt_view import slim_inventory_path_for
 from otio_app.services.media_inventory_cache import media_cache_path, save_cached_media
 
 
-def test_inventory_json_only_when_folder_green(temp_project_layout: dict[str, Path]) -> None:
+def test_inventory_json_written_for_partial_and_complete_folders(
+    temp_project_layout: dict[str, Path],
+) -> None:
     project = Project(
         id="green-inv-test",
         name="Test",
@@ -32,24 +38,34 @@ def test_inventory_json_only_when_folder_green(temp_project_layout: dict[str, Pa
     )
 
     assert get_folder_analysis_state(project, "Grand Canyon") == FolderAnalysisState.PARTIAL
-    assert not project.folder_inventory_path("Grand Canyon").is_file()
+    inventory_path = project.folder_inventory_path("Grand Canyon")
+    assert not inventory_path.is_file()
+    assert sync_folder_inventory_with_status(project, "Grand Canyon") is True
+    assert inventory_path.is_file()
+    item = load_folder_inventory_file(inventory_path)
+    assert item is not None
+    assert [Path(asset.path).name for asset in item.assets] == ["clip.mp4"]
+    slim_path = slim_inventory_path_for(inventory_path)
+    assert slim_path.is_file()
+    assert get_folder_analysis_state(project, "Grand Canyon") == FolderAnalysisState.PARTIAL
 
     save_cached_media(
         media_cache_path(project, "Grand Canyon", folder / "clip2.mp4"),
         AssetMediaAnalysis(path=str(folder / "clip2.mp4"), description="OK 2"),
     )
-    # Status-Anzeige ist read-only — Inventory erst per Sync.
     assert get_folder_analysis_state(project, "Grand Canyon") == FolderAnalysisState.COMPLETE
-    assert not project.folder_inventory_path("Grand Canyon").is_file()
     assert sync_folder_inventory_with_status(project, "Grand Canyon") is True
-    assert project.folder_inventory_path("Grand Canyon").is_file()
+    complete = load_folder_inventory_file(inventory_path)
+    assert complete is not None
+    assert {Path(asset.path).name for asset in complete.assets} == {"clip.mp4", "clip2.mp4"}
 
     save_cached_media(
         media_cache_path(project, "Grand Canyon", folder / "clip2.mp4"),
         AssetMediaAnalysis(path=str(folder / "clip2.mp4"), description=""),
     )
     assert get_folder_analysis_state(project, "Grand Canyon") == FolderAnalysisState.PARTIAL
-    assert project.folder_inventory_path("Grand Canyon").is_file()
-
-    sync_folder_inventory_with_status(project, "Grand Canyon")
-    assert not project.folder_inventory_path("Grand Canyon").is_file()
+    assert sync_folder_inventory_with_status(project, "Grand Canyon") is True
+    reduced = load_folder_inventory_file(inventory_path)
+    assert reduced is not None
+    assert [Path(asset.path).name for asset in reduced.assets] == ["clip.mp4"]
+    assert slim_inventory_path_for(inventory_path).is_file()

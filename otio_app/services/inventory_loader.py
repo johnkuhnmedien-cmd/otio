@@ -149,26 +149,27 @@ def folder_is_green(project: Project, folder_name: str) -> bool:
 
 
 def sync_folder_inventory_with_status(project: Project, folder_name: str) -> bool:
-    """Grün → Inventory-JSON erstellen/aktualisieren. Nicht grün → JSON entfernen."""
+    """Schreibt Inventory-JSON (+ Slim), sobald mindestens ein Asset analysiert ist.
+
+    Unvollständige Ordner bleiben gelb (z. B. Stock-Wasserzeichen), bekommen
+    aber trotzdem kanonisches Inventar und Slim aus den erfolgreichen Caches.
+    Ohne erfolgreiche Analyse wird vorhandenes Inventar entfernt.
+    """
     media_paths = discover_folder_media_paths(project, folder_name)
     if not media_paths:
         delete_folder_inventory(project, folder_name)
         return False
 
     auto_complete = folder_is_fully_analyzed(project, folder_name)
-    manual_complete = is_manually_complete(project, folder_name)
-
-    if not auto_complete and not manual_complete:
-        delete_folder_inventory(project, folder_name)
-        return False
-
-    allow_partial = manual_complete and not auto_complete
     item, _error = materialize_folder_inventory_from_cache(
         project,
         folder_name,
-        allow_partial=allow_partial,
+        allow_partial=not auto_complete,
     )
-    return item is not None
+    if item is None:
+        delete_folder_inventory(project, folder_name)
+        return False
+    return True
 
 
 def remove_stale_folder_inventory(
@@ -176,9 +177,19 @@ def remove_stale_folder_inventory(
     folder_name: str,
     media_paths: list[Path] | None = None,
 ) -> None:
-    """Entfernt Inventory-JSON, wenn der Ordner nicht grün ist."""
-    if folder_is_green(project, folder_name):
+    """Entfernt Inventory-JSON nur wenn kein erfolgreicher Analyse-Cache mehr da ist."""
+    paths = (
+        media_paths
+        if media_paths is not None
+        else discover_folder_media_paths(project, folder_name)
+    )
+    if not paths:
+        delete_folder_inventory(project, folder_name)
         return
+    for media_path in paths:
+        cached = load_cached_media_for_asset(project, folder_name, media_path)
+        if cached is not None and is_successfully_analyzed(cached):
+            return
     delete_folder_inventory(project, folder_name)
 
 
@@ -642,11 +653,9 @@ def folder_has_usable_inventory_data(project: Project, folder_name: str) -> bool
     Analyse-Cache, via load_folder_inventory().
 
     Bewusst NICHT dasselbe wie folder_is_green()/get_folder_inventory_path(...).
-    is_file(): Diese Datei wird von sync_folder_inventory_with_status() wieder
-    gelöscht, sobald auch nur EIN einzelnes Asset im Ordner nicht als vollständig
-    analysiert gilt (z. B. nach Clean-Media-Umbenennungen) — obwohl die
-    Dramaturgie-Planung selbst (build_and_save_folder_inventory_summaries) genau
-    denselben Cache-Fallback nutzt und daher KEINEN "grünen" Ordner braucht.
+    Unvollständige Ordner schreiben trotzdem Inventory aus den erfolgreichen
+    Caches; fehlt die Datei, reicht der Analyse-Cache als Fallback — denselben
+    nutzt die Dramaturgie-Planung (build_and_save_folder_inventory_summaries).
     Nur diese lockerere Prüfung sollte für Bereit-Zustände der "Projekt ohne
     Voice-Over"-Pipeline verwendet werden, nicht die strikte Datei-Prüfung."""
     analysis = load_folder_inventory(project, folder_name)
