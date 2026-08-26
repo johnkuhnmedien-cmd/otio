@@ -21,9 +21,11 @@ from otio_app.models import Project
 from otio_app.services.clean_media import (
     CLEAN_STATUS_CLEAN,
     CLEAN_STATUS_OK,
+    CLEAN_STATUS_PENDING,
     _count_leading_black_frames,
     _first_frame_is_black,
     _trim_tiny_leading_black,
+    count_folder_clean_status,
     find_clean_file_for_media,
     folder_clean_media_ready,
     load_clean_media_manifest,
@@ -214,6 +216,44 @@ def test_folder_not_ready_after_padded_adobe_replacement(tmp_path: Path) -> None
         ),
     )
     assert folder_clean_media_ready(project, "Ratece") is False
+
+
+def test_preview_clean_does_not_keep_folder_green_when_original_is_older(
+    tmp_path: Path,
+) -> None:
+    """Adobe-Neudownload kann älteren mtime haben als die transkodierte Vorschau."""
+    project = _project(tmp_path, folder_name="Ratece")
+    folder = project.project_root_path / "Ratece"
+    (folder / "clip.mp4").unlink()
+    new_original = folder / "Ratece_Asset00012.mov"
+    new_original.write_bytes(b"licensed")
+    old_clean = project.work_dir_path / "clean" / "Ratece" / "Ratece_Asset12.mp4"
+    old_clean.parent.mkdir(parents=True, exist_ok=True)
+    old_clean.write_bytes(b"preview-transcode")
+    newer_clean = new_original.stat().st_mtime_ns + 5_000_000_000
+    os.utime(old_clean, ns=(newer_clean, newer_clean))
+    save_clean_media_manifest(
+        project.work_dir_path / "clean_media" / "Ratece.json",
+        CleanMediaManifest(
+            project_id=project.id,
+            folder="Ratece",
+            entries=[
+                CleanMediaEntry(
+                    original_path=str(new_original.resolve()),
+                    clean_path=str(old_clean.resolve()),
+                    status=CLEAN_STATUS_CLEAN,
+                )
+            ],
+        ),
+    )
+    assert folder_clean_media_ready(project, "Ratece") is False
+    counts = count_folder_clean_status(project, "Ratece")
+    assert counts[CLEAN_STATUS_PENDING] >= 1
+    resolved = resolve_effective_media_path(project, "Ratece", new_original)
+    assert resolved == new_original.resolve()
+    from otio_app.ui.clean_media import _folder_status_label
+
+    assert _folder_status_label(project, "Ratece").startswith("⚠️")
 
 
 @patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))

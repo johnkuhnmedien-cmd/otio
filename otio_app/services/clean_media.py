@@ -111,6 +111,28 @@ def clean_output_is_stale_for_original(original: Path, clean: Path) -> bool:
         return False
 
 
+def clean_output_belongs_to_original(original: Path, clean: Path) -> bool:
+    """True wenn die Clean-Datei zu diesem Originalnamen gehört, nicht nur zur Asset-Nummer.
+
+    ``Asset00012.mov`` darf nicht die transkodierte Vorschau ``Asset12.mp4`` verwenden.
+    Zoom-Exports (``Asset00012_1920x1080.mp4``) gehören zum gleichen Stem.
+    """
+    original_stem = media_stem_key(original)
+    if not original_stem:
+        return False
+    candidate_stem = media_stem_key(clean)
+    candidate_base = clean_output_base_stem_key(clean)
+    return candidate_stem == original_stem or candidate_base == original_stem
+
+
+def clean_output_is_usable_for_original(original: Path, clean: Path | None) -> bool:
+    if clean is None or not clean_file_is_present(clean):
+        return False
+    if not clean_output_belongs_to_original(original, clean):
+        return False
+    return not clean_output_is_stale_for_original(original, clean)
+
+
 def _unlink_clean_output(path: Path | None) -> None:
     if path is None:
         return
@@ -1194,9 +1216,7 @@ def resolve_effective_media_path(
         resolved = media_path.expanduser()
 
     clean_candidate = find_clean_file_for_media(project, folder_name, resolved)
-    if clean_file_is_present(clean_candidate) and not clean_output_is_stale_for_original(
-        resolved, clean_candidate
-    ):
+    if clean_output_is_usable_for_original(resolved, clean_candidate):
         return clean_candidate
 
     manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
@@ -1217,9 +1237,7 @@ def resolve_effective_media_path(
                     candidate = candidate.expanduser().resolve()
                 except OSError:
                     candidate = candidate.expanduser()
-                if clean_file_is_present(candidate) and not clean_output_is_stale_for_original(
-                    resolved, candidate
-                ):
+                if clean_output_is_usable_for_original(resolved, candidate):
                     return candidate
 
         if entry.status == CLEAN_STATUS_OK:
@@ -1257,17 +1275,17 @@ def entry_is_ready_on_disk(
             folder_name,
             Path(entry.original_path),
         )
-        if clean is None and entry.clean_path:
-            clean = Path(entry.clean_path)
-        if clean is None:
-            return False
         original = Path(entry.original_path)
-        if clean_output_is_stale_for_original(original, clean):
-            return False
+        if not clean_output_is_usable_for_original(original, clean):
+            fallback = Path(entry.clean_path) if entry.clean_path else None
+            if not clean_output_is_usable_for_original(original, fallback):
+                return False
+            clean = fallback
+        assert clean is not None
         if strict:
             valid, _ = validate_clean_output(clean)
             return valid
-        return clean_file_is_present(clean)
+        return True
     if entry.status == CLEAN_STATUS_OK:
         original = Path(entry.original_path)
         return path_is_readable_file(original)
@@ -1433,10 +1451,11 @@ def count_folder_clean_status(
     for entry in manifest.entries:
         if entry.status == CLEAN_STATUS_CLEAN:
             original = Path(entry.original_path)
-            clean: Path | None = Path(entry.clean_path) if entry.clean_path else None
-            if clean is None or not clean_file_is_present(clean):
-                clean = find_clean_file_for_media(project, folder_name, original)
-            if clean is not None and clean_output_is_stale_for_original(original, clean):
+            clean: Path | None = find_clean_file_for_media(project, folder_name, original)
+            if not clean_output_is_usable_for_original(original, clean):
+                fallback = Path(entry.clean_path) if entry.clean_path else None
+                clean = fallback if clean_output_is_usable_for_original(original, fallback) else None
+            if clean is None:
                 counts[CLEAN_STATUS_PENDING] += 1
                 continue
         key = entry.status if entry.status in counts else CLEAN_STATUS_PENDING

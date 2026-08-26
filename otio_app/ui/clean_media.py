@@ -15,6 +15,7 @@ from otio_app.services.clean_media import (
     audit_folder_clean_media,
     count_folder_clean_status,
     find_clean_file_for_media,
+    folder_clean_media_ready,
     folder_manifest_path,
     load_clean_media_manifest,
     path_is_readable_file,
@@ -48,7 +49,11 @@ def _folder_status_label(project, folder_name: str) -> str:
     counts = count_folder_clean_status(project, folder_name)
     if counts[CLEAN_STATUS_FAILED] > 0:
         return f"❌ {folder_name}"
-    if counts[CLEAN_STATUS_NEEDS_TRANSCODE] > 0 or counts[CLEAN_STATUS_PENDING] > 0:
+    if (
+        counts[CLEAN_STATUS_NEEDS_TRANSCODE] > 0
+        or counts[CLEAN_STATUS_PENDING] > 0
+        or not folder_clean_media_ready(project, folder_name, strict=False)
+    ):
         return f"⚠️ {folder_name}"
     if counts[CLEAN_STATUS_OK] + counts[CLEAN_STATUS_CLEAN] > 0:
         return f"✅ {folder_name}"
@@ -299,7 +304,8 @@ def render_clean_media_page() -> None:
     elif selected_folders:
         st.info(
             "Mindestens ein Ordner braucht noch Prüfung oder Transcode "
-            "(inkl. neuer Medien unter `_supplemental/_…/`)."
+            "(neue Dateien, ersetzte Downloads ohne passende Clean-Kopie, "
+            "oder Medien unter `_supplemental/_…/`)."
         )
 
     col1, col2, col3, col4 = st.columns(4)
@@ -316,8 +322,8 @@ def render_clean_media_page() -> None:
             type="primary",
             disabled=job_running or not selected_folders,
             help=(
-                "Nur noch offene Ordner: Top-Level- und `_supplemental/_…/`-Medien "
-                "prüfen/transcodieren. Bereits grüne/bereite Ordner werden übersprungen."
+                "Offene Ordner prüfen/transcodieren, inkl. ersetzter Downloads "
+                "(neue Dateinamen). Bereits passende Clean-Kopien werden übersprungen."
             ),
         )
     with col3:
@@ -326,8 +332,8 @@ def render_clean_media_page() -> None:
             key=f"clean_repair_{project.id}",
             disabled=job_running or not selected_folders,
             help=(
-                "Wie Prüfen & transcodieren: nur noch offene Ordner. "
-                "Bereits bereite Ordner werden übersprungen."
+                "Wie Prüfen & transcodieren: offene Ordner inkl. ersetzter Downloads. "
+                "Passende Clean-Kopien werden übersprungen."
             ),
         )
     with col4:
