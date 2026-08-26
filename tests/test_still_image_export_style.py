@@ -17,9 +17,10 @@ from otio_app.services.otio_exporter import _append_timeline_item_clip
 from otio_app.services.still_image_export_style import (
     STILL_BACKGROUND_PAPER_EDGE,
     STILL_BACKGROUND_VINTAGE,
-    VINTAGE_BACKGROUND_RGB,
+    bundled_vintage_paper_path,
     ensure_styled_still_for_export,
     render_styled_still_image,
+    resolve_vintage_paper_texture,
     still_style_needed,
     styled_still_output_path,
 )
@@ -139,6 +140,21 @@ def test_export_recovers_original_still_from_hold_mp4(tmp_path: Path) -> None:
     assert out == styled_hold.resolve()
 
 
+def _assert_warm_paper_not_photo(rgb: tuple[int, ...]) -> None:
+    r, g, b = rgb[0], rgb[1], rgb[2]
+    assert r > 140 and g > 120, rgb
+    assert b < 220, rgb
+    assert r >= b, rgb  # warm, nicht das kräftige Foto-Blau
+
+
+def test_bundled_vintage_paper_texture_exists() -> None:
+    path = bundled_vintage_paper_path()
+    assert path.is_file()
+    assert path.stat().st_size > 10_000
+    resolved = resolve_vintage_paper_texture()
+    assert resolved == path.resolve()
+
+
 def test_still_style_needed_defaults() -> None:
     assert still_style_needed(enabled=True, zoom=0.8, background_style="vintage") is True
     assert still_style_needed(enabled=True, zoom=1.0, background_style="paper_edge") is True
@@ -161,10 +177,8 @@ def test_render_styled_still_image_vintage_zoom(tmp_path: Path) -> None:
     assert output.is_file()
     with Image.open(output) as img:
         assert img.size == (1920, 1080)
-        # Ecken sollten Vintage-Hintergrund sein (nicht das kräftige Blau des Fotos)
-        corner = img.getpixel((10, 10))
-        assert abs(corner[0] - VINTAGE_BACKGROUND_RGB[0]) < 80
-        assert abs(corner[1] - VINTAGE_BACKGROUND_RGB[1]) < 80
+        # Ecken sollten die Papiertextur sein (nicht das kräftige Blau des Fotos)
+        _assert_warm_paper_not_photo(img.getpixel((10, 10)))
 
 
 def test_render_styled_still_image_paper_edge(tmp_path: Path) -> None:
@@ -181,10 +195,8 @@ def test_render_styled_still_image_paper_edge(tmp_path: Path) -> None:
     assert output.is_file()
     with Image.open(output) as img:
         assert img.size == (1920, 1080)
-        # Ecken: Pergament-Hintergrund (Foto sitzt innen mit Zackenrand)
-        corner = img.getpixel((8, 8))
-        assert abs(corner[0] - VINTAGE_BACKGROUND_RGB[0]) < 90
-        assert abs(corner[1] - VINTAGE_BACKGROUND_RGB[1]) < 90
+        # Ecken: Papiertextur (Foto sitzt innen mit Zackenrand)
+        _assert_warm_paper_not_photo(img.getpixel((8, 8)))
         # Bildmitte sollte Foto-Blau tragen
         center = img.getpixel((960, 540))
         assert center[2] > center[0]  # bläulich
@@ -219,6 +231,26 @@ def test_ensure_styled_still_caches(tmp_path: Path) -> None:
     )
     assert second == first
     assert any("Cache" in n for n in notes2)
+
+
+def test_project_root_overrides_bundled_vintage_paper(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    Image.new("RGB", (64, 64), (20, 180, 40)).save(
+        project.project_root_path / "still_vintage_paper.jpg", format="JPEG"
+    )
+    source = _write_photo(project.project_root_path / "Canyon" / "shot.jpg")
+    styled = ensure_styled_still_for_export(
+        project,
+        "Canyon",
+        source,
+        enabled=True,
+        zoom=0.8,
+        background_style="vintage",
+    )
+    with Image.open(styled) as img:
+        corner = img.getpixel((8, 8))
+    assert corner[1] > corner[0]
+    assert corner[1] > corner[2]
 
 
 def test_append_timeline_item_applies_still_style(tmp_path: Path) -> None:

@@ -4,9 +4,14 @@ Komponiert JPEG/PNG auf Zielauflösung: Zoom (Default 0.8, fit) auf
 gewähltem Hintergrund. Kein Cut-Plan-Rebuild nötig — greift nur beim Export.
 
 Hintergründe:
-- ``vintage``: Pergament + Vignette
-- ``paper_edge``: Pergament + Foto mit unregelmäßigem Papierrand + Schatten
+- ``vintage``: Vintage-Papiertextur (Cover-Fill)
+- ``paper_edge``: dieselbe Textur + Foto mit unregelmäßigem Papierrand + Schatten
 - ``none``: schwarzer Hintergrund, nur Zoom
+
+Textur-Suche (erste Trefferdatei gewinnt):
+1. ``still_vintage_paper.{jpg,jpeg,png,webp}`` im Projektordner
+2. dieselbe Datei im Work-Dir
+3. mitgelieferte Default-Textur unter ``otio_app/assets/``
 """
 
 from __future__ import annotations
@@ -25,6 +30,9 @@ __all__ = [
     "STILL_BACKGROUND_NONE",
     "DEFAULT_STILL_IMAGE_ZOOM",
     "VINTAGE_BACKGROUND_RGB",
+    "VINTAGE_PAPER_TEXTURE_NAMES",
+    "bundled_vintage_paper_path",
+    "resolve_vintage_paper_texture",
     "still_style_needed",
     "styled_still_output_path",
     "render_styled_still_image",
@@ -36,10 +44,56 @@ STILL_BACKGROUND_PAPER_EDGE = "paper_edge"
 STILL_BACKGROUND_NONE = "none"
 DEFAULT_STILL_IMAGE_ZOOM = 0.8
 
-# Warmes Pergament / Vintage-Papier
+# Fallback, falls keine Texturdatei gefunden wird.
 VINTAGE_BACKGROUND_RGB = (196, 168, 130)
 VINTAGE_VIGNETTE_RGB = (120, 96, 70)
 PAPER_EDGE_SHADOW_RGB = (70, 55, 40)
+
+VINTAGE_PAPER_TEXTURE_NAMES = (
+    "still_vintage_paper.jpg",
+    "still_vintage_paper.jpeg",
+    "still_vintage_paper.png",
+    "still_vintage_paper.webp",
+)
+
+
+def bundled_vintage_paper_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "assets" / "still_vintage_paper.jpg"
+
+
+def resolve_vintage_paper_texture(
+    search_dirs: list[Path] | None = None,
+    *,
+    texture_path: Path | None = None,
+) -> Path | None:
+    """Liefert die erste vorhandene Vintage-Papiertextur.
+
+    Expliziter ``texture_path`` gewinnt, danach Dateien in ``search_dirs``,
+    zuletzt die mitgelieferte Default-Textur.
+    """
+    if texture_path is not None:
+        try:
+            resolved = texture_path.expanduser()
+            if resolved.is_file():
+                return resolved.resolve()
+        except OSError:
+            pass
+
+    candidates: list[Path] = []
+    for folder in search_dirs or []:
+        if folder is None:
+            continue
+        root = Path(folder)
+        for name in VINTAGE_PAPER_TEXTURE_NAMES:
+            candidates.append(root / name)
+    candidates.append(bundled_vintage_paper_path())
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path.resolve()
+        except OSError:
+            continue
+    return None
 
 
 def still_style_needed(
@@ -76,17 +130,49 @@ def styled_still_output_path(
     return get_folder_clean_output_dir(work_dir, folder_name) / name
 
 
-def _cache_token(source: Path, *, width: int, height: int, zoom: float, background_style: str) -> str:
+def _cache_token(
+    source: Path,
+    *,
+    width: int,
+    height: int,
+    zoom: float,
+    background_style: str,
+    texture_path: Path | None = None,
+) -> str:
     try:
         stat = source.stat()
         payload = f"{source.resolve()}|{stat.st_mtime_ns}|{stat.st_size}|{width}x{height}|{zoom}|{background_style}"
     except OSError:
         payload = f"{source}|{width}x{height}|{zoom}|{background_style}"
+    if texture_path is not None:
+        try:
+            tex_stat = texture_path.stat()
+            payload += f"|tex:{texture_path.resolve()}|{tex_stat.st_mtime_ns}|{tex_stat.st_size}"
+        except OSError:
+            payload += f"|tex:{texture_path}"
+    else:
+        payload += "|tex:procedural"
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
 
-def _draw_vintage_background(img, width: int, height: int) -> None:
-    """Füllt img mit Vintage-Pergament + leichter Vignette (in-place)."""
+def _cover_resize(image, width: int, height: int):
+    """Skaliert so, dass die Fläche vollständig gefüllt wird (Center-Crop)."""
+    from PIL import Image
+
+    src_w, src_h = image.size
+    if src_w <= 0 or src_h <= 0:
+        return image.resize((max(1, width), max(1, height)), Image.Resampling.LANCZOS)
+    scale = max(width / src_w, height / src_h)
+    new_w = max(width, int(round(src_w * scale)))
+    new_h = max(height, int(round(src_h * scale)))
+    resized = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    left = max(0, (new_w - width) // 2)
+    top = max(0, (new_h - height) // 2)
+    return resized.crop((left, top, left + width, top + height))
+
+
+def _draw_procedural_vintage_background(img, width: int, height: int) -> None:
+    """Fallback: flächiges Pergament + Vignette, wenn keine Textur da ist."""
     from PIL import Image, ImageDraw, ImageFilter
 
     base = Image.new("RGB", (width, height), VINTAGE_BACKGROUND_RGB)
@@ -101,6 +187,29 @@ def _draw_vintage_background(img, width: int, height: int) -> None:
     dark = Image.new("RGB", (width, height), VINTAGE_VIGNETTE_RGB)
     blended = Image.composite(base, dark, vignette)
     img.paste(blended)
+
+
+def _draw_vintage_background(
+    img,
+    width: int,
+    height: int,
+    *,
+    texture_path: Path | None = None,
+) -> None:
+    """Füllt img mit Vintage-Papiertextur (Cover-Fill) oder proceduralem Fallback."""
+    from PIL import Image, ImageOps
+
+    path = resolve_vintage_paper_texture(texture_path=texture_path)
+    if path is None:
+        _draw_procedural_vintage_background(img, width, height)
+        return
+    try:
+        with Image.open(path) as opened:
+            texture = ImageOps.exif_transpose(opened).convert("RGB")
+        filled = _cover_resize(texture, width, height)
+        img.paste(filled)
+    except OSError:
+        _draw_procedural_vintage_background(img, width, height)
 
 
 def _fit_size(src_w: int, src_h: int, max_w: int, max_h: int) -> tuple[int, int]:
@@ -188,6 +297,8 @@ def render_styled_still_image(
     height: int,
     zoom: float = DEFAULT_STILL_IMAGE_ZOOM,
     background_style: str = STILL_BACKGROUND_VINTAGE,
+    texture_path: Path | None = None,
+    search_dirs: list[Path] | None = None,
 ) -> Path:
     """Komponiert Still auf Zielrahmen; schreibt JPEG nach output."""
     from PIL import Image, ImageOps
@@ -220,7 +331,12 @@ def render_styled_still_image(
         VINTAGE_BACKGROUND_RGB if uses_parchment else (0, 0, 0),
     )
     if uses_parchment:
-        _draw_vintage_background(canvas, width, height)
+        resolved_texture = resolve_vintage_paper_texture(
+            search_dirs=search_dirs, texture_path=texture_path
+        )
+        _draw_vintage_background(
+            canvas, width, height, texture_path=resolved_texture
+        )
 
     # Paper-edge braucht etwas Rand für Schatten/Zacken — Zoom leicht begrenzen.
     effective_zoom = min(zoom, 0.92) if style == STILL_BACKGROUND_PAPER_EDGE else zoom
@@ -270,6 +386,9 @@ def ensure_styled_still_for_export(
     width = max(2, int(project.width or 1920))
     height = max(2, int(project.height or 1080))
     style = (background_style or STILL_BACKGROUND_VINTAGE).strip().lower() or STILL_BACKGROUND_VINTAGE
+    texture = resolve_vintage_paper_texture(
+        search_dirs=[project.project_root_path, project.work_dir_path],
+    )
     output = styled_still_output_path(
         project.work_dir_path,
         folder_name,
@@ -280,7 +399,14 @@ def ensure_styled_still_for_export(
         background_style=style,
     )
     token_path = output.with_suffix(output.suffix + ".token")
-    token = _cache_token(source, width=width, height=height, zoom=zoom, background_style=style)
+    token = _cache_token(
+        source,
+        width=width,
+        height=height,
+        zoom=zoom,
+        background_style=style,
+        texture_path=texture,
+    )
 
     if output.is_file() and token_path.is_file():
         try:
@@ -302,6 +428,7 @@ def ensure_styled_still_for_export(
             height=height,
             zoom=zoom,
             background_style=style,
+            texture_path=texture,
         )
         token_path.write_text(token, encoding="utf-8")
         if notes is not None:
