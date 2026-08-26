@@ -1,0 +1,429 @@
+"""Auto-Lauf: Kartenplan, Geocode, Bestätigen, Rendern — vor Python Timing."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
+from typing import Any
+
+from otio_app.models import Project
+from otio_app.services.voiceover_generation.dramaturgy_service import (
+    load_confirmed_dramaturgy,
+)
+from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
+    lookup_missing_coordinates,
+)
+from otio_app.services.without_voiceover_enhanced.maps.models import (
+    RENDER_STATUS_BLOCKED,
+    RENDER_STATUS_DONE,
+    RENDER_STATUS_FAILED,
+)
+from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
+    MapPlanError,
+    build_map_plan,
+    clamp_max_parallel,
+    confirm_all_valid_map_coordinates,
+    dramaturgy_fingerprint,
+    load_map_plan,
+    load_map_settings,
+    map_item_hash_is_current,
+    save_map_plan,
+)
+from otio_app.services.without_voiceover_enhanced.maps.render_service import (
+    MapRenderCancelled,
+    MapRenderError,
+    MapRenderer,
+    output_file_nonempty,
+    selectable_maps,
+)
+from otio_app.services.without_voiceover_enhanced.paths import map_output_dir
+
+ProgressFn = Callable[..., None]
+CancelFn = Callable[[], bool]
+
+
+def _item_output_path(project: Project, item) -> str:
+    if item.output_path:
+        return item.output_path
+    return str(map_output_dir(project) / item.output_filename)
+
+
+def maps_render_queue(plan) -> tuple[list, list, list]:
+    """Offene Renderziele, bereits fertige Karten, blockierte (ohne Koordinaten)."""
+    blocked = [item for item in plan.maps if item.render_status == RENDER_STATUS_BLOCKED]
+    blocked_ids = {item.chapter_id for item in blocked}
+    targets = selectable_maps(plan.maps, mode="missing")
+    target_ids = {item.chapter_id for item in targets}
+    already_done = [
+        item
+        for item in plan.maps
+        if item.chapter_id not in target_ids and item.chapter_id not in blocked_ids
+    ]
+    return targets, already_done, blocked
+
+
+def format_maps_auto_run_status(
+    *,
+    plan_count: int,
+    render_count: int,
+    done_count: int,
+    blocked_count: int,
+) -> str:
+    """Eine Zeile: 16 zu rendern von 27, nicht „nur 16 Kapitel“."""
+    if render_count <= 0:
+        if done_count and blocked_count:
+            return (
+                f"Keine Karten zu rendern — {done_count} schon da, "
+                f"{blocked_count} ohne Koordinaten."
+            )
+        if blocked_count:
+            return f"Keine Karten zu rendern — {blocked_count} ohne Koordinaten."
+        if done_count:
+            return f"Keine Karten zu rendern — {done_count} von {plan_count} schon da."
+        return "Keine Karten zu rendern."
+    parts = [f"{render_count} zu rendern von {plan_count}"]
+    if done_count:
+        parts.append(f"{done_count} schon da")
+    if blocked_count:
+        parts.append(f"{blocked_count} ohne Koordinaten")
+    return "Karten: " + " · ".join(parts)
+
+
+def _kill_renderer(renderer) -> None:
+    killer = getattr(renderer, "kill_all", None)
+    if callable(killer):
+        killer()
+
+
+def _notify_maps_progress(
+    on_message: ProgressFn | None,
+    message: str,
+    *,
+    item_label: str = "",
+    item_index: int = 0,
+    item_total: int = 0,
+) -> None:
+    if on_message is None:
+        return
+    try:
+        on_message(
+            message,
+            item_label=item_label,
+            item_index=item_index,
+            item_total=item_total,
+        )
+    except TypeError:
+        on_message(message)
+
+
+def _geocode_progress_text(event) -> str:
+    message = str(getattr(event, "message", "") or "").strip()
+    if message:
+        return message
+    place = str(getattr(event, "place", "") or "").strip()
+    kind = str(getattr(event, "kind", "") or "").strip()
+    detail = str(getattr(event, "detail", "") or "").strip()
+    if kind == "waiting":
+        wait = float(getattr(event, "wait_sec", 0) or 0)
+        extra = f"warte {wait:.0f}s {detail}".strip()
+        return extra or place
+    if kind == "error":
+        return detail or place or "Fehler"
+    if kind == "missing":
+        return f"{place}: kein Treffer" if place else "kein Treffer"
+    return place or kind or "…"
+
+
+def _render_auto_run_targets(
+    project: Project,
+    plan,
+    targets,
+    *,
+    renderer,
+    cancelled: CancelFn,
+    emit,
+    plan_count: int,
+) -> tuple[list[str], int, list[tuple[str, str]]]:
+    """Rendert offene Karten parallel — HD max. 4, wie auf der Karten-Seite."""
+    rendered: list[str] = []
+    failed: list[tuple[str, str]] = []
+    reused = 0
+    total = len(targets)
+    cap = clamp_max_parallel(plan.settings.resolution, plan.settings.max_parallel)
+    workers = max(1, min(cap, total))
+    plan_lock = Lock()
+    progress_lock = Lock()
+    done = 0
+    active_labels: dict[str, str] = {}
+    cancel_error: MapRenderCancelled | None = None
+    reset = getattr(renderer, "reset_kill_flag", None)
+    if callable(reset):
+        reset()
+
+    def status_line(label: str = "") -> None:
+        with progress_lock:
+            running = [name for name in active_labels.values() if name]
+            message = (
+                f"Karten parallel (max. {cap}) · {done}/{total} von {plan_count}"
+            )
+            if running:
+                message += ": " + ", ".join(running)
+            elif label:
+                message += f": {label}"
+            emit(
+                message,
+                item_label=(running[0] if running else label),
+                item_index=done,
+                item_total=total,
+            )
+
+    def render_one(item) -> None:
+        nonlocal done, reused, cancel_error
+        label = item.original_chapter_label or item.chapter_id
+        if cancelled() or cancel_error is not None:
+            raise MapRenderCancelled("Auto-Lauf gestoppt.")
+        with progress_lock:
+            active_labels[item.chapter_id] = label
+        try:
+            status_line(label)
+            try:
+                result = renderer.render_item(
+                    project,
+                    item,
+                    overwrite=False,
+                    should_cancel=lambda: cancelled() or cancel_error is not None,
+                )
+            except MapRenderCancelled as exc:
+                cancel_error = exc
+                _kill_renderer(renderer)
+                raise
+            except MapRenderError as exc:
+                with plan_lock:
+                    failed.append((item.chapter_id, str(exc)))
+                    item.render_status = RENDER_STATUS_FAILED
+                    item.error_detail = str(exc)
+                    save_map_plan(project, plan)
+                with progress_lock:
+                    done += 1
+                return
+            except Exception as exc:  # noqa: BLE001
+                reason = str(exc) or type(exc).__name__
+                with plan_lock:
+                    failed.append((item.chapter_id, reason))
+                    item.render_status = RENDER_STATUS_FAILED
+                    item.error_detail = reason
+                    save_map_plan(project, plan)
+                with progress_lock:
+                    done += 1
+                return
+            export_path = str(result.get("export_path") or "")
+            with plan_lock:
+                item.render_status = RENDER_STATUS_DONE
+                item.output_path = export_path
+                item.media_hash = str(result.get("content_hash") or "")
+                item.progress = 1.0
+                item.error_detail = ""
+                item.blocked_reason = ""
+                rendered.append(item.chapter_id)
+                if result.get("reused"):
+                    reused += 1
+                save_map_plan(project, plan)
+            with progress_lock:
+                done += 1
+                finished = done
+            emit(
+                f"Karte {finished}/{total} von {plan_count}: {label}",
+                item_label=label,
+                item_index=finished,
+                item_total=total,
+            )
+            status_line(label)
+        finally:
+            with progress_lock:
+                active_labels.pop(item.chapter_id, None)
+
+    emit(
+        f"Karten parallel (max. {cap}) · 0/{total} von {plan_count}",
+        item_total=total,
+    )
+    if workers == 1 or total == 1:
+        for item in targets:
+            if cancelled():
+                raise MapRenderCancelled("Auto-Lauf gestoppt.")
+            render_one(item)
+    else:
+        try:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(render_one, item) for item in targets]
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except MapRenderCancelled:
+                        _kill_renderer(renderer)
+                        for pending in futures:
+                            pending.cancel()
+                        raise
+                    if cancelled():
+                        _kill_renderer(renderer)
+                        raise MapRenderCancelled("Auto-Lauf gestoppt.")
+        finally:
+            if cancelled() or cancel_error is not None:
+                _kill_renderer(renderer)
+    if cancel_error is not None:
+        raise cancel_error
+    if cancelled():
+        raise MapRenderCancelled("Auto-Lauf gestoppt.")
+    save_map_plan(project, plan)
+    return rendered, reused, failed
+
+
+def maps_complete(project: Project) -> bool:
+    """True wenn der Plan zur Dramaturgie passt und jede renderbare Karte fertig ist."""
+    confirmed = load_confirmed_dramaturgy(project)
+    if confirmed is None:
+        return False
+    plan = load_map_plan(project)
+    if plan is None or not plan.maps:
+        return False
+    if plan.dramaturgy_fingerprint != dramaturgy_fingerprint(confirmed):
+        return False
+    for item in plan.maps:
+        if item.render_status == RENDER_STATUS_BLOCKED:
+            continue
+        path = _item_output_path(project, item)
+        if (
+            item.render_status == RENDER_STATUS_DONE
+            and output_file_nonempty(path)
+            and map_item_hash_is_current(item)
+        ):
+            continue
+        return False
+    return True
+
+
+def run_maps_for_auto_run(
+    project: Project,
+    *,
+    should_cancel: CancelFn | None = None,
+    on_message: ProgressFn | None = None,
+    geocode_fn=None,
+    renderer: MapRenderer | None = None,
+) -> dict[str, Any]:
+    """Kartenplan erzeugen, Koordinaten prüfen/bestätigen, alle Karten rendern."""
+
+    def emit(
+        message: str,
+        *,
+        item_label: str = "",
+        item_index: int = 0,
+        item_total: int = 0,
+    ) -> None:
+        _notify_maps_progress(
+            on_message,
+            message,
+            item_label=item_label,
+            item_index=item_index,
+            item_total=item_total,
+        )
+
+    def cancelled() -> bool:
+        return bool(should_cancel and should_cancel())
+
+    if cancelled():
+        raise MapRenderCancelled("Auto-Lauf gestoppt.")
+
+    settings = load_map_settings(project)
+    emit("Kartenplan aus Dramaturgie erzeugen…")
+    previous = load_map_plan(project)
+    plan = build_map_plan(project, settings=settings, previous=previous)
+    save_map_plan(project, plan)
+
+    if cancelled():
+        raise MapRenderCancelled("Auto-Lauf gestoppt.")
+
+    emit("Koordinaten prüfen…")
+
+    def on_geocode(event) -> None:
+        emit(
+            f"Koordinaten: {_geocode_progress_text(event)}",
+            item_label=str(getattr(event, "place", "") or ""),
+            item_index=int(getattr(event, "index", 0) or 0),
+            item_total=int(getattr(event, "total", 0) or 0),
+        )
+
+    _coords, plan, geocode_errors = lookup_missing_coordinates(
+        project,
+        settings=settings,
+        plan=plan,
+        geocode_fn=geocode_fn,
+        on_progress=on_geocode,
+    )
+    save_map_plan(project, plan)
+
+    if cancelled():
+        raise MapRenderCancelled("Auto-Lauf gestoppt.")
+
+    emit("Koordinaten bestätigen…")
+    _coords, plan = confirm_all_valid_map_coordinates(
+        project,
+        settings=settings,
+        previous=plan,
+    )
+
+    targets, already_done, blocked = maps_render_queue(plan)
+    rendered: list[str] = []
+    failed: list[tuple[str, str]] = []
+    reused = 0
+    plan_count = len(plan.maps)
+    emit(
+        format_maps_auto_run_status(
+            plan_count=plan_count,
+            render_count=len(targets),
+            done_count=len(already_done),
+            blocked_count=len(blocked),
+        )
+    )
+
+    if not targets:
+        return {
+            "plan": plan,
+            "rendered": rendered,
+            "reused": reused,
+            "already_done": [item.chapter_id for item in already_done],
+            "blocked": [item.chapter_id for item in blocked],
+            "failed": failed,
+            "geocode_errors": list(geocode_errors),
+        }
+
+    active = renderer or MapRenderer()
+    readiness = active.readiness()
+    if not readiness.get("ready"):
+        missing = [
+            name for name, ok in (readiness.get("checks") or {}).items() if not ok
+        ]
+        raise MapPlanError(
+            "Kartenrenderer ist nicht bereit ("
+            + ", ".join(missing)
+            + "). Im Ordner des Vendored Remotion-Renderers einmal `npm ci` ausführen."
+        )
+
+    rendered, reused, failed = _render_auto_run_targets(
+        project,
+        plan,
+        targets,
+        renderer=active,
+        cancelled=cancelled,
+        emit=emit,
+        plan_count=plan_count,
+    )
+    save_map_plan(project, plan)
+    return {
+        "plan": plan,
+        "rendered": rendered,
+        "reused": reused,
+        "already_done": [item.chapter_id for item in already_done],
+        "blocked": [item.chapter_id for item in blocked],
+        "failed": failed,
+        "geocode_errors": list(geocode_errors),
+    }
