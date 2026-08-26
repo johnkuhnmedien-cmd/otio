@@ -460,6 +460,12 @@ class DramaturgyFolderEntry(BaseModel):
     use_callback_to_previous: bool = False
     use_contrast_with_previous: bool = False
     use_commonality_with_previous: bool = False
+    # Kapitelende-CTAs (Like + Dranbleiben): von der Dramaturgie geplant,
+    # vom Kapitel-Skript gesprochen. Keine Craft-Flags.
+    cta_like: bool = False
+    cta_stay: bool = False
+    cta_stay_text: str = ""
+    cta_stay_target_folders: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
 
 

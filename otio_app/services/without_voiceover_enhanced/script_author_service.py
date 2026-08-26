@@ -18,6 +18,9 @@ from otio_app.models import Project
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.gemini_client import _extract_json
 from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
+from otio_app.services.voiceover_generation.chapter_cta import (
+    build_chapter_end_cta_prompt_block,
+)
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
     build_default_folder_voiceover_settings,
@@ -97,6 +100,7 @@ from otio_app.services.without_voiceover_enhanced.script_rhetoric import (
     remove_rhetoric_claims_for_folder,
     save_rhetoric_ledger,
     validate_rhetoric_usage_against_ledger,
+    RhetoricClaim,
 )
 
 DEFAULT_ENHANCED_SCRIPT_MODEL = "openai:gpt-5.4-mini"
@@ -252,6 +256,29 @@ def _build_script_neighbor_context(
     ledger = remove_rhetoric_claims_for_folder(
         load_rhetoric_ledger(project), entry.folder_name
     )
+    stay_elsewhere = next(
+        (
+            item
+            for item in entries
+            if item.enabled and item.cta_stay and item.folder_name != entry.folder_name
+        ),
+        None,
+    )
+    if stay_elsewhere is not None and not any(
+        claim.slot_id == "stay_tuned_payoff" for claim in ledger.claims
+    ):
+        ledger = ledger.model_copy(
+            update={
+                "claims": list(ledger.claims)
+                + [
+                    RhetoricClaim(
+                        slot_id="stay_tuned_payoff",
+                        folder_name=stay_elsewhere.folder_name,
+                        evidence_quote="(geplante Dramaturgie: CTA Dranbleiben)",
+                    )
+                ]
+            }
+        )
     rhetoric_ledger_text = build_rhetoric_ledger_prompt_block(ledger)
 
     chapter_index = folder_order.index(entry.folder_name)
@@ -930,6 +957,12 @@ def generate_enhanced_script_for_folder(
                 use_commonality_with_previous=allow_commonality,
                 style_is_raw_chapter=style_is_raw,
                 repair_instruction=repair_instruction,
+                chapter_end_cta_text=build_chapter_end_cta_prompt_block(
+                    entry=entry,
+                    entries=entries,
+                    next_folder_name=next_name,
+                    language=project.language,
+                ),
             )
 
             if llm_callable is not None:
@@ -1000,13 +1033,14 @@ def generate_enhanced_script_for_folder(
                 allow_from_previous=allow_from,
                 allow_to_next=allow_to,
                 allow_callback=allow_callback,
+                ignore_tail_to_next=bool(entry.cta_like or entry.cta_stay),
             )
             link_errors.extend(
                 _validate_chapter_link_usage_audit(
                     payload_dict,
                     narration_full=partial.narration_full,
                     allow_from_previous=allow_from,
-                    allow_to_next=allow_to,
+                    allow_to_next=allow_to or bool(entry.cta_like),
                     allow_callback=allow_callback,
                 )
             )

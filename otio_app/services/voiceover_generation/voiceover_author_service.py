@@ -827,6 +827,7 @@ def generate_folder_voiceover(
         next_folder_name=next_name,
         inventory_assets=inventory_assets,
         style_context_text=style_context_text_for_prompts(project),
+        all_dramaturgy_entries=list(plan.recommended_folder_order),
     )
     prompt_hash = content_hash(prompt)
     write_llm_prompt(run_dir, prompt)

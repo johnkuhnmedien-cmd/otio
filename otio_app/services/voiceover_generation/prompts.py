@@ -22,6 +22,10 @@ from otio_app.defaults import (
     SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE,
 )
 from otio_app.services.voiceover_generation.folder_asset_readiness import SentenceAssetReadinessIssue
+from otio_app.services.voiceover_generation.chapter_cta import (
+    build_chapter_end_cta_prompt_block,
+    build_dramaturgy_cta_task_block,
+)
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
     DramaturgyPlan,
@@ -441,6 +445,10 @@ justifies it. Then set:
 - recommended_min_words = target − {delta} (not below {band_min})
 - recommended_max_words = target + {delta} (not above {band_max})
 Asset counts are only weak capacity signals — they must NOT dictate word count.
+Chapter-end CTAs are extra spoken words later — do NOT inflate recommended_word_count \
+to include them.
+
+{build_dramaturgy_cta_task_block()}
 
 Do NOT output per-chapter transition/callback/contrast checkboxes, hint strings, \
 or craft flags. Those optional editor controls are handled outside this prompt and \
@@ -470,6 +478,10 @@ this shape:
       "recommended_word_count": {baseline},
       "recommended_min_words": {band_min},
       "recommended_max_words": {band_max},
+      "cta_like": false,
+      "cta_stay": false,
+      "cta_stay_text": "",
+      "cta_stay_target_folders": [],
       "risks": []
     }}
   ],
@@ -596,6 +608,7 @@ def build_folder_voiceover_prompt(
     next_folder_name: str | None,
     inventory_assets: list[dict],
     style_context_text: str | None = None,
+    all_dramaturgy_entries: list[DramaturgyFolderEntry] | None = None,
 ) -> str:
     """Baut den Prompt für die Erzeugung des Voice-over-Textes EINES Ordners.
 
@@ -611,6 +624,18 @@ def build_folder_voiceover_prompt(
         setting=setting,
         previous_folder_name=previous_folder_name,
         next_folder_name=next_folder_name,
+    )
+    cta_block = build_chapter_end_cta_prompt_block(
+        entry=dramaturgy_entry,
+        entries=all_dramaturgy_entries,
+        next_folder_name=next_folder_name,
+        language=project_brief.language,
+    )
+    cta_section = f"\n{cta_block}\n" if cta_block.strip() else ""
+    extra_cta_words = (
+        "\n  (chapter-end CTAs, if assigned above, are EXTRA words after the body)"
+        if cta_section
+        else ""
     )
 
     return f"""You are a documentary narration writer. Write the voice-over section \
@@ -655,9 +680,9 @@ stay purely atmospheric/sensory)
 - energy: {setting.energy}
 - must include (topics/ideas, not literal phrases): {must_include_block}
 - editor's extra instructions for this location: {setting.folder_extra_prompt or "(none)"}
-
+{cta_section}
 ## Target length
-- target_words: {setting.target_words} (min {setting.min_words}, max {setting.max_words})
+- target_words: {setting.target_words} (min {setting.min_words}, max {setting.max_words}){extra_cta_words}
 
 ## Inventory for this location (CONTENT SOURCE ONLY — asset_id values are EXACT)
 ## Do not copy inventory wording; re-express meaning in the target language.

@@ -43,6 +43,10 @@ from otio_app.services.voiceover_generation.llm_trace_service import (
     write_llm_prompt,
     write_llm_raw_response,
 )
+from otio_app.services.voiceover_generation.chapter_cta import (
+    normalize_chapter_ctas_after_llm,
+    sanitize_chapter_ctas,
+)
 from otio_app.services.voiceover_generation.model_settings_service import resolve_llm_model_id
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
@@ -371,6 +375,7 @@ def confirm_dramaturgy_plan(project: Project, edited_plan: DramaturgyPlan) -> Dr
         entry.model_copy(update={"order_index": index})
         for index, entry in enumerate(enabled_entries + disabled_entries, start=1)
     ]
+    normalized_entries = sanitize_chapter_ctas(normalized_entries)
     risks = list(edited_plan.risks)
     if missing_names:
         risks.append(
@@ -440,6 +445,12 @@ def update_dramaturgy_order(project: Project, edited_rows: list[dict]) -> Dramat
             updates["use_contrast_with_previous"] = bool(row["use_contrast_with_previous"])
         if "use_commonality_with_previous" in row:
             updates["use_commonality_with_previous"] = bool(row["use_commonality_with_previous"])
+        if "cta_like" in row:
+            updates["cta_like"] = bool(row["cta_like"])
+        if "cta_stay" in row:
+            updates["cta_stay"] = bool(row["cta_stay"])
+        if "cta_stay_text" in row:
+            updates["cta_stay_text"] = str(row["cta_stay_text"] or "").strip()
         updated_entries.append(existing.model_copy(update=updates))
 
     updated_plan = draft.model_copy(update={"recommended_folder_order": updated_entries})
@@ -461,6 +472,17 @@ def _parse_dramaturgy_response(raw_text: str) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Dramaturgie-Antwort ist kein JSON-Objekt.")
     return payload
+
+
+def _bool_field(entry: dict, key: str, default: bool = False) -> bool:
+    value = entry.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value) if value is not None else default
 
 
 def _float_field(entry: dict, key: str) -> float:
@@ -550,6 +572,10 @@ def _folder_entry_from_payload(
         use_callback_to_previous=False,
         use_contrast_with_previous=False,
         use_commonality_with_previous=False,
+        cta_like=_bool_field(entry, "cta_like"),
+        cta_stay=_bool_field(entry, "cta_stay"),
+        cta_stay_text=str(entry.get("cta_stay_text") or "").strip(),
+        cta_stay_target_folders=as_str_list(entry.get("cta_stay_target_folders")),
         risks=as_str_list(entry.get("risks")),
     )
 
@@ -696,6 +722,7 @@ def build_dramaturgy_plan(
         entries, folder_summaries, word_band=word_band
     )
     entries = rebalance_contrast_roles(entries)
+    entries = normalize_chapter_ctas_after_llm(entries)
 
     risks = as_str_list(payload.get("risks"))
     if missing_names:

@@ -223,7 +223,7 @@ OUTPUT (JSON only):
       "segment_id": "{seg}",
       "text": "...",
       "sequence_index": 1,
-      "semantic_function": "atmosphere|history|geography|culture|fact|transition",
+      "semantic_function": "atmosphere|history|geography|culture|fact|transition|cta_stay|cta_like",
       "fact_check_required": false,
       "paragraph_break_after": false,
       "author_pause_after_seconds": 0.0,
@@ -434,6 +434,7 @@ def build_enhanced_folder_script_prompt(
     use_commonality_with_previous: bool = False,
     style_is_raw_chapter: bool = False,
     repair_instruction: str = "",
+    chapter_end_cta_text: str = "",
 ) -> str:
     """Ein Dramaturgie-Kapitel / Ordner — nur gesprochene Narration (keine Assets)."""
     forbidden = "\n".join(f'- "{p}"' for p in FORBIDDEN_PHRASES)
@@ -483,6 +484,17 @@ def build_enhanced_folder_script_prompt(
     rhetoric_ledger_block = _optional_block(rhetoric_ledger_text)
     opening_inventory_block = _optional_block(opening_inventory_text)
     repair_block = _optional_block(repair_instruction)
+    cta_block = _optional_block(chapter_end_cta_text)
+
+    body_words_line = (
+        f"- target_words: {target_words} (soft target; stay within {min_words}-{max_words})"
+    )
+    if cta_block:
+        body_words_line = (
+            f"- target_words: {target_words} (soft target for the CHAPTER BODY; "
+            f"stay within {min_words}-{max_words} before any chapter-end CTAs). "
+            "Planned chapter-end CTAs are EXTRA words after the body."
+        )
 
     style_label = (
         "RAW CHAPTER PROSE REFERENCE / STYLE CONTEXT"
@@ -527,13 +539,13 @@ THIS CHAPTER ONLY
 - dramaturgy_role (SILENT METADATA — do not verbalize): {dramaturgy_role}
 {prev_line}
 {next_line}
-- target_words: {target_words} (soft target; stay within {min_words}-{max_words})
+{body_words_line}
 - Write ONLY the spoken narration for this chapter — not the whole film.
 - Every segment MUST set folder_name to exactly "{folder_name}".
 - Use ID prefixes starting with "{id_prefix}" (e.g. {id_prefix}segment_001).
 
 {permissions_block}
-{repair_block}{chapter_order_block}{film_wide_block}{opening_inventory_block}{rhetoric_ledger_block}{neighbor_excerpts_block}{editorial_neighbor_block}
+{cta_block}{repair_block}{chapter_order_block}{film_wide_block}{opening_inventory_block}{rhetoric_ledger_block}{neighbor_excerpts_block}{editorial_neighbor_block}
 {_json_schema_block(id_prefix=id_prefix).replace("EXACT_FOLDER_NAME", folder_name)}
 
 PROJECT BRIEF:
