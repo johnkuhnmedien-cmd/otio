@@ -20,6 +20,8 @@ from otio_app.services.media_inventory_cache import (
     discover_folder_media_paths,
     is_successfully_analyzed,
     media_cache_path,
+    media_file_is_accessible,
+    numbered_asset_discovery_key,
     save_cached_media,
 )
 from otio_app.services.media_utils import (
@@ -47,7 +49,18 @@ def test_placeholder_description_is_not_successful() -> None:
     assert not is_successfully_analyzed(entry)
 
 
-def test_discover_includes_cache_only_asset(temp_project_layout: dict[str, Path]) -> None:
+def test_numbered_asset_discovery_key_merges_padding_and_extension() -> None:
+    assert numbered_asset_discovery_key(Path("Rateče_Asset12.mp4")) == (
+        numbered_asset_discovery_key(Path("Rateče_Asset00012.mov"))
+    )
+    assert numbered_asset_discovery_key(Path("clip.mp4")) != numbered_asset_discovery_key(
+        Path("other.mp4")
+    )
+
+
+def test_discover_drops_cache_only_ghost_without_icloud(
+    temp_project_layout: dict[str, Path],
+) -> None:
     project = _project(temp_project_layout)
     folder = temp_project_layout["project_root"] / "Grand Canyon"
     asset15 = folder / "Florida_Keys_Asset15.mp4"
@@ -59,7 +72,67 @@ def test_discover_includes_cache_only_asset(temp_project_layout: dict[str, Path]
     discovered = discover_folder_media_paths(project, "Grand Canyon")
     names = {path.name for path in discovered}
     assert "clip.mp4" in names
+    assert "Florida_Keys_Asset15.mp4" not in names
+
+
+def test_discover_keeps_cache_asset_with_icloud_placeholder(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = _project(temp_project_layout)
+    folder = temp_project_layout["project_root"] / "Grand Canyon"
+    asset15 = folder / "Florida_Keys_Asset15.mp4"
+    (folder / f".{asset15.name}.icloud").write_text("placeholder", encoding="utf-8")
+    save_cached_media(
+        media_cache_path(project, "Grand Canyon", asset15),
+        AssetMediaAnalysis(path=str(asset15), description="Aus Cache"),
+    )
+
+    discovered = discover_folder_media_paths(project, "Grand Canyon")
+    names = {path.name for path in discovered}
+    assert "clip.mp4" in names
     assert "Florida_Keys_Asset15.mp4" in names
+
+
+def test_discover_merges_replaced_unpadded_cache_with_new_file(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = _project(temp_project_layout)
+    folder = temp_project_layout["project_root"] / "Grand Canyon"
+    old = folder / "Rateče_Asset12.mp4"
+    new = folder / "Rateče_Asset00012.mov"
+    new.write_bytes(b"replacement")
+    save_cached_media(
+        media_cache_path(project, "Grand Canyon", old),
+        AssetMediaAnalysis(
+            path=str(old),
+            error="Mediendatei nicht lokal verfügbar: `Rateče_Asset12.mp4` "
+            "(iCloud — bitte im Finder laden)",
+        ),
+    )
+
+    discovered = discover_folder_media_paths(project, "Grand Canyon")
+    names = [path.name for path in discovered]
+    assert "Rateče_Asset00012.mov" in names
+    assert "Rateče_Asset12.mp4" not in names
+
+
+def test_media_file_is_accessible_distinguishes_icloud_from_missing(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    folder = temp_project_layout["project_root"] / "Grand Canyon"
+    missing = folder / "gone.mp4"
+    ok, error = media_file_is_accessible(missing)
+    assert ok is False
+    assert error is not None
+    assert "iCloud" not in error
+    assert "fehlt" in error
+
+    icloud = folder / "cloud.mp4"
+    (folder / f".{icloud.name}.icloud").write_text("placeholder", encoding="utf-8")
+    ok_cloud, error_cloud = media_file_is_accessible(icloud)
+    assert ok_cloud is False
+    assert error_cloud is not None
+    assert "iCloud" in error_cloud
 
 
 def test_placeholder_cache_is_retried_on_reanalysis(
@@ -104,6 +177,57 @@ def test_placeholder_cache_is_retried_on_reanalysis(
     )
 
     analyze_asset_folders(project, ["Grand Canyon"], use_api=True)
+    assert folder_is_fully_analyzed(project, "Grand Canyon")
+
+
+def test_replaced_unpadded_cache_is_not_analyzed_as_icloud(
+    temp_project_layout: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(temp_project_layout)
+    folder = temp_project_layout["project_root"] / "Grand Canyon"
+    old = folder / "Rateče_Asset12.mp4"
+    new = folder / "Rateče_Asset00012.mov"
+    new.write_bytes(b"replacement")
+    save_cached_media(
+        media_cache_path(project, "Grand Canyon", old),
+        AssetMediaAnalysis(
+            path=str(old),
+            error="Mediendatei nicht lokal verfügbar: `Rateče_Asset12.mp4` "
+            "(iCloud — bitte im Finder laden)",
+        ),
+    )
+
+    calls: list[str] = []
+
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        frame = output_dir / "frame_001.jpg"
+        frame.write_bytes(b"jpeg")
+        return [frame]
+
+    def fake_describe(
+        media_name: str,
+        folder_name: str,
+        frame_paths: list[Path],
+        language: str,
+        *,
+        model: str | None = None,
+    ) -> MediaFrameAnalysis:
+        calls.append(media_name)
+        return MediaFrameAnalysis.successful(description=f"Neu: {media_name}")
+
+    monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", fake_extract)
+    monkeypatch.setattr(
+        "otio_app.services.asset_analyzer.analyze_media_from_frames",
+        fake_describe,
+    )
+
+    _document, report = analyze_asset_folders(project, ["Grand Canyon"], use_api=True)
+    assert "Rateče_Asset12.mp4" not in calls
+    assert "Rateče_Asset00012.mov" in calls
+    assert report.media_failed == 0
+    assert all("iCloud" not in failure for failure in report.failures)
     assert folder_is_fully_analyzed(project, "Grand Canyon")
 
 

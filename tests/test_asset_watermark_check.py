@@ -22,6 +22,7 @@ from otio_app.services.asset_watermark_check import (
     format_watermark_review_banner,
     load_watermark_review_items,
     parse_stock_watermark_response,
+    prune_stale_watermark_review,
     remove_watermark_review_item,
     stock_watermark_from_v3_defects,
     upsert_watermark_review_item,
@@ -170,6 +171,37 @@ def test_review_file_upsert_and_remove(temp_project_layout: dict[str, Path]) -> 
     remove_watermark_review_item(project, media, folder="Grand Canyon")
     remaining = load_watermark_review_items(project)
     assert [item.filename for item in remaining] == ["clip2.mp4"]
+
+
+def test_prune_stale_watermark_review_drops_replaced_filename(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = _sample_project(temp_project_layout)
+    folder = temp_project_layout["project_root"] / "Grand Canyon"
+    old = folder / "Rateče_Asset12.mp4"
+    replacement = folder / "Rateče_Asset00012.mov"
+    replacement.write_bytes(b"new")
+    keep = folder / "clip.mp4"
+
+    upsert_watermark_review_item(
+        project,
+        folder="Grand Canyon",
+        media_path=old,
+        provider="adobe_stock",
+        note="altes Preview",
+    )
+    upsert_watermark_review_item(
+        project,
+        folder="Grand Canyon",
+        media_path=keep,
+        provider="adobe_stock",
+        note="noch da",
+    )
+
+    dropped = prune_stale_watermark_review(project)
+    assert dropped == 1
+    remaining = load_watermark_review_items(project)
+    assert [item.filename for item in remaining] == ["clip.mp4"]
 
 
 def test_format_review_banner_points_to_txt(tmp_path: Path) -> None:

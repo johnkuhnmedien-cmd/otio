@@ -472,3 +472,56 @@ def remove_watermark_review_item(
     if len(remaining) == len(items) and not watermark_review_json_path(project).is_file():
         return
     _write_watermark_review(project, remaining)
+
+
+def _watermark_review_source_present(project: Project, item: WatermarkReviewItem) -> bool:
+    """True, wenn die gemeldete Datei noch im Ordner, als iCloud-Platzhalter oder Clean-Kopie liegt."""
+    from otio_app.project_layout import clean_output_path_for_media
+    from otio_app.services.clean_media import clean_file_is_present
+    from otio_app.services.media_inventory_cache import media_has_icloud_placeholder
+    from otio_app.services.media_utils import list_media_files
+
+    filename = (item.filename or Path(item.path).name).strip()
+    if not filename:
+        return False
+    folder = (item.folder or "").strip()
+    media_path = (
+        project.project_root_path / folder / filename
+        if folder
+        else Path(item.path)
+    )
+    try:
+        if media_path.is_file():
+            return True
+    except OSError:
+        pass
+    parent = media_path.parent
+    try:
+        listed = {path.name.casefold() for path in list_media_files(parent)}
+    except OSError:
+        listed = set()
+    if filename.casefold() in listed:
+        return True
+    if media_has_icloud_placeholder(media_path):
+        return True
+    if not folder:
+        return False
+    return clean_file_is_present(
+        clean_output_path_for_media(project.work_dir_path, folder, media_path)
+    )
+
+
+def prune_stale_watermark_review(project: Project) -> int:
+    """Entfernt Review-Zeilen, deren Originaldatei ersetzt oder gelöscht wurde.
+
+    ``Asset12.mp4`` und ``Asset00012.mov`` gelten als verschiedene Dateien —
+    ein Neudownload räumt den alten Wasserzeichen-Eintrag.
+    """
+    items = load_watermark_review_items(project)
+    if not items:
+        return 0
+    kept = [item for item in items if _watermark_review_source_present(project, item)]
+    dropped = len(items) - len(kept)
+    if dropped:
+        _write_watermark_review(project, kept)
+    return dropped

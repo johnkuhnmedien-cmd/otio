@@ -138,7 +138,7 @@ def test_partial_folder_analyzes_only_assets_without_current_json(
     assert has_successful_asset_cache(project, "Grand Canyon", clip2)
 
 
-def test_discover_missing_asset_from_cache_number_gap(
+def test_discover_missing_asset_from_cache_number_gap_needs_icloud(
     temp_project_layout: dict[str, Path],
 ) -> None:
     project = Project(
@@ -152,6 +152,7 @@ def test_discover_missing_asset_from_cache_number_gap(
     folder_name = "Grand Canyon"
     folder = temp_project_layout["project_root"] / folder_name
     asset14 = folder / "Florida_Keys_Asset14.mp4"
+    asset15 = folder / "Florida_Keys_Asset15.mp4"
     asset16 = folder / "Florida_Keys_Asset16.mp4"
     asset14.write_bytes(b"v14")
     asset16.write_bytes(b"v16")
@@ -165,13 +166,19 @@ def test_discover_missing_asset_from_cache_number_gap(
         _current_cache_entry(asset16, "OK 16"),
     )
 
-    missing = list_assets_missing_successful_cache(project, folder_name)
-    names = {path.name for path in missing}
-    assert "Florida_Keys_Asset15.mp4" in names
-
     discovered = discover_folder_media_paths(project, folder_name)
     discovered_names = {path.name for path in discovered}
-    assert "Florida_Keys_Asset15.mp4" in discovered_names
+    assert "Florida_Keys_Asset15.mp4" not in discovered_names
+
+    (folder / f".{asset15.name}.icloud").write_text("placeholder", encoding="utf-8")
+    discovered_icloud = {
+        path.name for path in discover_folder_media_paths(project, folder_name)
+    }
+    assert "Florida_Keys_Asset15.mp4" in discovered_icloud
+    missing = {
+        path.name for path in list_assets_missing_successful_cache(project, folder_name)
+    }
+    assert "Florida_Keys_Asset15.mp4" in missing
 
 
 def test_partial_folder_not_skipped_when_frame_dir_exists_without_json(
