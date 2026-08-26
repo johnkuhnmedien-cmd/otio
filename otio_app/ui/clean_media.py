@@ -261,6 +261,10 @@ def render_clean_media_page() -> None:
         (Clean-Ausgabe: `_otio/clean/<Ordner>/_supplemental/_…/`).
 
         Analyse, Inventar und OTIO-Export verwenden danach automatisch die Clean-Pfade.
+
+        **Gleiche Dateinamen:** Wenn du eine Vorschau durch die Lizenzdatei *unter demselben
+        Namen* ersetzt hast, erkennt Clean Media das an Größe/Datum/Inhalt — nicht am Namen.
+        Ältere Läufe haben diesen Stempel noch nicht: dann **Clean-Kopien ersetzen**.
         """
     )
 
@@ -322,8 +326,9 @@ def render_clean_media_page() -> None:
             type="primary",
             disabled=job_running or not selected_folders,
             help=(
-                "Offene Ordner prüfen/transcodieren, inkl. ersetzter Downloads "
-                "(neue Dateinamen). Bereits passende Clean-Kopien werden übersprungen."
+                "Offene Ordner prüfen/transcodieren. "
+                "Ersetzte Dateien unter neuem Namen oder mit geändertem Stempel "
+                "werden mitgenommen; unveränderte Clean-Kopien übersprungen."
             ),
         )
     with col3:
@@ -332,7 +337,7 @@ def render_clean_media_page() -> None:
             key=f"clean_repair_{project.id}",
             disabled=job_running or not selected_folders,
             help=(
-                "Wie Prüfen & transcodieren: offene Ordner inkl. ersetzter Downloads. "
+                "Wie Prüfen & transcodieren: offene Ordner. "
                 "Passende Clean-Kopien werden übersprungen."
             ),
         )
@@ -343,6 +348,17 @@ def render_clean_media_page() -> None:
             disabled=job_running,
             help="Alle Ordner auswählen — bereits bereite werden übersprungen",
         )
+
+    force_clicked = st.button(
+        "🔁 Clean-Kopien ersetzen",
+        key=f"clean_force_{project.id}",
+        disabled=job_running or not selected_folders,
+        help=(
+            "Transkodiert die ausgewählten Ordner neu, auch wenn sie grün sind. "
+            "Für Originale, die du unter demselben Dateinamen ausgetauscht hast "
+            "(Wasserzeichen-Vorschau → Lizenzdatei)."
+        ),
+    )
 
     manager = get_clean_media_job_manager()
     if validate_clicked and selected_folders:
@@ -365,6 +381,15 @@ def render_clean_media_page() -> None:
         all_folders = list(project.asset_subdir_names)
         st.session_state[folder_state_key] = all_folders
         if manager.start(project, all_folders, mode=CleanMediaJobMode.PROCESS):
+            st.rerun()
+        else:
+            st.warning("Clean-Media-Job läuft bereits.")
+    if force_clicked and selected_folders:
+        if manager.start(project, selected_folders, mode=CleanMediaJobMode.PROCESS_FORCE):
+            st.info(
+                "Erzwungener Clean-Lauf: vorhandene Clean-Kopien der ausgewählten "
+                "Ordner werden aus den aktuellen Originalen neu erzeugt."
+            )
             st.rerun()
         else:
             st.warning("Clean-Media-Job läuft bereits.")

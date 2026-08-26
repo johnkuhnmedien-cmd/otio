@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -51,6 +52,7 @@ CLEAN_FORCE_DROP_LEADING_FRAMES = 3
 
 _ASSET_NUMBER_RE = re.compile(r"asset[_\s-]*(\d+)", re.IGNORECASE)
 _EXPORT_STEM_SUFFIX_RE = re.compile(r"_\d+x\d+(?:_title)?$", re.IGNORECASE)
+_SOURCE_HEAD_BYTES = 256 * 1024
 
 _RESOLVE_FRIENDLY_VIDEO_CODECS = frozenset(
     {"h264", "avc", "avc1", "libx264", "mpeg4", "mp4v"}
@@ -92,6 +94,16 @@ def clean_output_base_stem_key(path: Path) -> str:
     return _EXPORT_STEM_SUFFIX_RE.sub("", media_stem_key(path))
 
 
+def original_head_sha256(path: Path) -> str | None:
+    """Kurzer Inhaltsstempel — erkennt Tausch unter gleichem Namen ohne volle Datei zu hashen."""
+    try:
+        with path.open("rb") as handle:
+            chunk = handle.read(_SOURCE_HEAD_BYTES)
+        return hashlib.sha256(chunk).hexdigest()
+    except OSError:
+        return None
+
+
 def stamp_clean_source_identity(entry: CleanMediaEntry, original: Path) -> None:
     try:
         stat = original.stat()
@@ -99,16 +111,58 @@ def stamp_clean_source_identity(entry: CleanMediaEntry, original: Path) -> None:
         return
     entry.source_size = stat.st_size
     entry.source_mtime_ns = stat.st_mtime_ns
+    entry.source_head_sha256 = original_head_sha256(original)
+
+
+def original_identity_mismatch(
+    original: Path,
+    entry: CleanMediaEntry | None,
+    clean: Path | None = None,
+    *,
+    check_head: bool = False,
+) -> bool:
+    """True wenn das Original nicht mehr die Datei ist, für die Clean gelaufen ist.
+
+    Gleicher Dateiname reicht nicht: Vorschau und Lizenz-Download heißen oft identisch.
+    Zuerst Größe/mtime aus dem Manifest, sonst Legacy-Vergleich Original vs Clean.
+    ``check_head`` (im Transcode-Lauf) prüft zusätzlich die ersten 256 KiB.
+    """
+    try:
+        if not original.is_file():
+            return False
+        stat = original.stat()
+    except OSError:
+        return False
+
+    if entry is not None and entry.source_size is not None:
+        if stat.st_size != entry.source_size:
+            return True
+        if entry.source_mtime_ns is not None and stat.st_mtime_ns != entry.source_mtime_ns:
+            return True
+        if check_head and entry.source_head_sha256:
+            head = original_head_sha256(original)
+            if head is not None and head != entry.source_head_sha256:
+                return True
+        return False
+
+    if clean is not None:
+        try:
+            if clean.is_file() and stat.st_mtime_ns > clean.stat().st_mtime_ns:
+                return True
+        except OSError:
+            pass
+    if entry is not None and entry.transcoded_at is not None:
+        transcoded = entry.transcoded_at
+        if transcoded.tzinfo is None:
+            transcoded = transcoded.replace(tzinfo=timezone.utc)
+        if stat.st_mtime > transcoded.timestamp():
+            return True
+    return False
 
 
 def clean_output_is_stale_for_original(original: Path, clean: Path) -> bool:
     """True wenn das Original nach der Clean-Datei ersetzt wurde (neuer mtime)."""
-    try:
-        if not original.is_file() or not clean.is_file():
-            return False
-        return original.stat().st_mtime_ns > clean.stat().st_mtime_ns
-    except OSError:
-        return False
+    return original_identity_mismatch(original, None, clean)
 
 
 def clean_output_belongs_to_original(original: Path, clean: Path) -> bool:
@@ -125,12 +179,19 @@ def clean_output_belongs_to_original(original: Path, clean: Path) -> bool:
     return candidate_stem == original_stem or candidate_base == original_stem
 
 
-def clean_output_is_usable_for_original(original: Path, clean: Path | None) -> bool:
+def clean_output_is_usable_for_original(
+    original: Path,
+    clean: Path | None,
+    *,
+    entry: CleanMediaEntry | None = None,
+) -> bool:
     if clean is None or not clean_file_is_present(clean):
         return False
     if not clean_output_belongs_to_original(original, clean):
         return False
-    return not clean_output_is_stale_for_original(original, clean)
+    if original_identity_mismatch(original, entry, clean):
+        return False
+    return True
 
 
 def _unlink_clean_output(path: Path | None) -> None:
@@ -851,8 +912,15 @@ def process_media_file(
             media_path,
         )
 
+    previous = _entry_for_original(
+        load_clean_media_manifest(folder_manifest_path(project, folder_name)),
+        media_path,
+    )
+
     if export_transcode and path_is_readable_file(output_path) and not force_transcode:
-        if not clean_output_is_stale_for_original(media_path, output_path):
+        if not original_identity_mismatch(
+            media_path, previous, output_path, check_head=True
+        ):
             valid, validation_error = validate_clean_output(output_path)
             if valid:
                 processed_probe = probe_media(output_path)
@@ -877,9 +945,15 @@ def process_media_file(
             entry.error = "Clean-Datei gehört zu einer älteren Originalversion"
 
     existing_clean = find_clean_file_for_media(project, folder_name, media_path)
+    identity_changed = original_identity_mismatch(
+        media_path, previous, existing_clean, check_head=True
+    )
     stale_existing = bool(
         existing_clean is not None
-        and clean_output_is_stale_for_original(media_path, existing_clean)
+        and (
+            identity_changed
+            or clean_output_is_stale_for_original(media_path, existing_clean)
+        )
     )
     if (
         existing_clean is not None
@@ -1151,6 +1225,7 @@ def process_folder(
     *,
     should_cancel: ShouldCancel | None = None,
     on_progress: Callable[[str, CleanMediaEntry], None] | None = None,
+    force_transcode: bool = False,
 ) -> CleanMediaManifest:
     """Prüft und transkodiert alle Medien eines Ordners."""
     media_paths = list_folder_media(project, folder_name)
@@ -1159,7 +1234,12 @@ def process_folder(
     for media_path in media_paths:
         if should_cancel and should_cancel():
             break
-        entry = process_media_file(project, folder_name, media_path)
+        entry = process_media_file(
+            project,
+            folder_name,
+            media_path,
+            force_transcode=force_transcode,
+        )
         entries.append(entry)
         if on_progress:
             on_progress("process", entry)
@@ -1216,11 +1296,11 @@ def resolve_effective_media_path(
         resolved = media_path.expanduser()
 
     clean_candidate = find_clean_file_for_media(project, folder_name, resolved)
-    if clean_output_is_usable_for_original(resolved, clean_candidate):
-        return clean_candidate
-
     manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
     entry = _entry_for_original(manifest, resolved)
+    if clean_output_is_usable_for_original(resolved, clean_candidate, entry=entry):
+        return clean_candidate
+
     if entry is not None:
         if entry.status == CLEAN_STATUS_CLEAN:
             for candidate in (
@@ -1237,7 +1317,7 @@ def resolve_effective_media_path(
                     candidate = candidate.expanduser().resolve()
                 except OSError:
                     candidate = candidate.expanduser()
-                if clean_output_is_usable_for_original(resolved, candidate):
+                if clean_output_is_usable_for_original(resolved, candidate, entry=entry):
                     return candidate
 
         if entry.status == CLEAN_STATUS_OK:
@@ -1276,9 +1356,9 @@ def entry_is_ready_on_disk(
             Path(entry.original_path),
         )
         original = Path(entry.original_path)
-        if not clean_output_is_usable_for_original(original, clean):
+        if not clean_output_is_usable_for_original(original, clean, entry=entry):
             fallback = Path(entry.clean_path) if entry.clean_path else None
-            if not clean_output_is_usable_for_original(original, fallback):
+            if not clean_output_is_usable_for_original(original, fallback, entry=entry):
                 return False
             clean = fallback
         assert clean is not None
@@ -1288,7 +1368,11 @@ def entry_is_ready_on_disk(
         return True
     if entry.status == CLEAN_STATUS_OK:
         original = Path(entry.original_path)
-        return path_is_readable_file(original)
+        if not path_is_readable_file(original):
+            return False
+        if original_identity_mismatch(original, entry, None):
+            return False
+        return True
     return False
 
 
@@ -1452,10 +1536,19 @@ def count_folder_clean_status(
         if entry.status == CLEAN_STATUS_CLEAN:
             original = Path(entry.original_path)
             clean: Path | None = find_clean_file_for_media(project, folder_name, original)
-            if not clean_output_is_usable_for_original(original, clean):
+            if not clean_output_is_usable_for_original(original, clean, entry=entry):
                 fallback = Path(entry.clean_path) if entry.clean_path else None
-                clean = fallback if clean_output_is_usable_for_original(original, fallback) else None
+                clean = (
+                    fallback
+                    if clean_output_is_usable_for_original(original, fallback, entry=entry)
+                    else None
+                )
             if clean is None:
+                counts[CLEAN_STATUS_PENDING] += 1
+                continue
+        elif entry.status == CLEAN_STATUS_OK:
+            original = Path(entry.original_path)
+            if original_identity_mismatch(original, entry, None):
                 counts[CLEAN_STATUS_PENDING] += 1
                 continue
         key = entry.status if entry.status in counts else CLEAN_STATUS_PENDING

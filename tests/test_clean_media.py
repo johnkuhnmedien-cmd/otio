@@ -334,6 +334,42 @@ def test_inplace_newer_original_makes_clean_stale(_mock_validate, tmp_path: Path
 
 
 @patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+def test_same_filename_size_change_invalidates_old_clean(_mock_validate, tmp_path: Path) -> None:
+    """Vorschau und Lizenzdatei können identisch heißen — erkannt an der Größe."""
+    project = _project(tmp_path)
+    original = project.project_root_path / "Florida Keys" / "clip.mp4"
+    clean = project.work_dir_path / "clean" / "Florida_Keys" / "clip.mp4"
+    clean.parent.mkdir(parents=True, exist_ok=True)
+    clean.write_bytes(b"old-preview-clean")
+    original.write_bytes(b"tiny")
+    save_clean_media_manifest(
+        project.work_dir_path / "clean_media" / "Florida_Keys.json",
+        CleanMediaManifest(
+            project_id=project.id,
+            folder="Florida Keys",
+            entries=[
+                CleanMediaEntry(
+                    original_path=str(original.resolve()),
+                    clean_path=str(clean.resolve()),
+                    status=CLEAN_STATUS_CLEAN,
+                    source_size=4,
+                    source_mtime_ns=original.stat().st_mtime_ns,
+                )
+            ],
+        ),
+    )
+    original.write_bytes(b"licensed-replacement-bytes")
+    older = clean.stat().st_mtime_ns - 2_000_000_000
+    os.utime(original, ns=(older, older))
+
+    assert folder_clean_media_ready(project, "Florida Keys") is False
+    counts = count_folder_clean_status(project, "Florida Keys")
+    assert counts[CLEAN_STATUS_PENDING] >= 1
+    resolved = resolve_effective_media_path(project, "Florida Keys", original)
+    assert resolved == original.resolve()
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
 def test_resolve_effective_media_path_uses_manifest(_mock_validate, tmp_path: Path) -> None:
     project = _project(tmp_path)
     original = project.project_root_path / "Florida Keys" / "clip.mp4"

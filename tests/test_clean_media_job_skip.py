@@ -148,3 +148,59 @@ def test_process_job_does_not_skip_replaced_original(tmp_path: Path) -> None:
     assert processed == ["Grand Canyon"]
     assert "Grand Canyon" not in (state.skipped_folders or [])
     manager.dismiss(project.id)
+
+
+def test_process_force_recleans_ready_folder(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    ready_original = project.project_root_path / "Grand Canyon" / "clip.mp4"
+    save_clean_media_manifest(
+        project.work_dir_path / "clean_media" / "Grand_Canyon.json",
+        CleanMediaManifest(
+            project_id=project.id,
+            folder="Grand Canyon",
+            entries=[
+                CleanMediaEntry(
+                    original_path=str(ready_original.resolve()),
+                    status=CLEAN_STATUS_OK,
+                )
+            ],
+        ),
+    )
+
+    manager = get_clean_media_job_manager()
+    processed: list[str] = []
+    forced: list[bool] = []
+
+    def fake_process(project_arg, folder_name, **kwargs):
+        processed.append(folder_name)
+        forced.append(bool(kwargs.get("force_transcode")))
+        return CleanMediaManifest(project_id=project_arg.id, folder=folder_name, entries=[])
+
+    with (
+        patch(
+            "otio_app.services.clean_media_job.get_project_by_id",
+            return_value=project,
+        ),
+        patch(
+            "otio_app.services.clean_media_job.process_folder",
+            side_effect=fake_process,
+        ),
+    ):
+        assert manager.start(
+            project,
+            ["Grand Canyon"],
+            mode=CleanMediaJobMode.PROCESS_FORCE,
+        )
+        for _ in range(50):
+            state = manager.get_state(project.id)
+            if state is not None and state.status != JobStatus.RUNNING:
+                break
+            time.sleep(0.05)
+
+    state = manager.get_state(project.id)
+    assert state is not None
+    assert state.status == JobStatus.COMPLETED
+    assert processed == ["Grand Canyon"]
+    assert forced == [True]
+    assert "Grand Canyon" not in (state.skipped_folders or [])
+    manager.dismiss(project.id)

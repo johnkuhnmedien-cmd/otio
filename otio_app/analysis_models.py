@@ -58,6 +58,7 @@ class CleanMediaEntry(BaseModel):
     transcoded_at: Optional[datetime] = None
     source_size: Optional[int] = None
     source_mtime_ns: Optional[int] = None
+    source_head_sha256: Optional[str] = None
 
 
 class CleanMediaManifest(BaseModel):
