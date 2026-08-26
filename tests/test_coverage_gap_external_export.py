@@ -220,3 +220,154 @@ def test_build_export_empty_without_coverage(tmp_path: Path) -> None:
     doc = build_coverage_gaps_external_export(project)
     assert doc.gaps == []
     assert doc.open_count == 0
+
+
+def test_external_export_ignores_fill_without_matching_run_id(tmp_path: Path) -> None:
+    """UI zählt solche Fills nicht — External-JSON darf nicht auf filled bleiben."""
+    project = _project(tmp_path)
+    _lock(project)
+    persist_coverage_gaps(
+        project,
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id="run-current",
+            gaps=[
+                CoverageGap(
+                    gap_id="g_generic",
+                    related_shot_ids=["s1"],
+                    needed_visual="church interior",
+                    search_concepts=["bled church bell"],
+                )
+            ],
+        ),
+    )
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="generic_Bleder_See_Asset00008",
+                    provider="generic_fallback",
+                    gap_id="g_generic",
+                    media_type="video",
+                    local_media_path="/tmp/asset.mov",
+                    media_validation_status="export_ready",
+                    cut_plan_run_id="",
+                )
+            ],
+        ),
+    )
+    doc = refresh_coverage_gaps_external_export(project)
+    assert doc.open_count == 1
+    assert doc.filled_count == 0
+    assert doc.gaps[0].status == "open"
+    assert doc.gaps[0].filled_asset is None
+
+
+def test_external_export_open_after_unbind(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _lock(project)
+    persist_coverage_gaps(
+        project,
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id="run-1",
+            gaps=[
+                CoverageGap(
+                    gap_id="g1",
+                    related_shot_ids=["s1"],
+                    needed_visual="waves",
+                    search_concepts=["ocean waves"],
+                )
+            ],
+        ),
+    )
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="generic_asset",
+                    provider="generic_fallback",
+                    gap_id="",
+                    media_type="video",
+                    local_media_path="/tmp/waves.mp4",
+                    media_validation_status="export_ready",
+                    cut_plan_run_id="",
+                )
+            ],
+        ),
+    )
+    doc = refresh_coverage_gaps_external_export(project)
+    assert doc.open_count == 1
+    assert doc.filled_count == 0
+    assert doc.gaps[0].filled_asset is None
+
+
+def test_unbind_rewrites_external_json_from_filled_to_open(tmp_path: Path, monkeypatch) -> None:
+    """Reset hat die External-JSON früher vor dem Unbind geschrieben."""
+    from otio_app.services.without_voiceover_enhanced.gap_reset_service import (
+        reset_open_coverage_gaps,
+    )
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        GapStatusSummary,
+    )
+
+    project = _project(tmp_path)
+    _lock(project)
+    persist_coverage_gaps(
+        project,
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id="run-1",
+            gaps=[
+                CoverageGap(
+                    gap_id="g1",
+                    related_shot_ids=["s1"],
+                    needed_visual="waves",
+                    search_concepts=["ocean waves"],
+                )
+            ],
+        ),
+    )
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="generic_Bleder_See_Asset00008",
+                    provider="generic_fallback",
+                    gap_id="g1",
+                    media_type="video",
+                    local_media_path="/tmp/bled.mov",
+                    media_validation_status="export_ready",
+                    cut_plan_run_id="run-1",
+                )
+            ],
+        ),
+    )
+    before = refresh_coverage_gaps_external_export(project)
+    assert before.filled_count == 1
+    assert before.gaps[0].status == "filled"
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.gap_status_service"
+        ".summarize_gap_status",
+        lambda _project: GapStatusSummary(
+            total=1,
+            open_gap_ids=[],
+            filled_gap_ids=["g1"],
+            cut_plan_run_id="run-1",
+        ),
+    )
+    reset_open_coverage_gaps(project, unbind_filled=True)
+
+    doc = load_model(coverage_gaps_external_path(project), CoverageGapsExternalDocument)
+    assert doc is not None
+    assert doc.open_count == 1
+    assert doc.filled_count == 0
+    assert doc.gaps[0].status == "open"
+    assert doc.gaps[0].filled_asset is None
