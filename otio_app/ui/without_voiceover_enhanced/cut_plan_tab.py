@@ -1104,8 +1104,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         with s2:
             bg_options = list(STILL_BACKGROUND_CHOICES)
             bg_labels = {
-                "vintage": "vintage — Pergament + Vignette",
-                "paper_edge": "paper_edge — Pergament + Papierrand",
+                "vintage": "vintage — Papiertextur",
+                "paper_edge": "paper_edge — Papiertextur + Papierrand",
                 "none": "none — schwarzer Hintergrund",
             }
             bg_index = (
@@ -1121,9 +1121,10 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 key=f"enh_opt_still_bg_{project.id}",
                 disabled=not still_image_style_enabled,
                 help=(
-                    "vintage: warmes Pergament. "
-                    "paper_edge: Foto mit unregelmäßigem Papierrand + Schatten. "
-                    "none: nur Zoom auf Schwarz."
+                    "vintage: mitgelieferte Vintage-Papiertextur. "
+                    "paper_edge: dieselbe Textur, Foto mit unregelmäßigem Papierrand + Schatten. "
+                    "none: nur Zoom auf Schwarz. "
+                    "Eigene Textur: still_vintage_paper.jpg (oder .png) in den Projektordner legen."
                 ),
             )
         still_image_dynamic_zoom_enabled = st.checkbox(
