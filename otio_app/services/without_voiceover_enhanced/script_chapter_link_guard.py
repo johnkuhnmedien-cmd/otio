@@ -69,6 +69,7 @@ def detect_chapter_link_violations(
     allow_from_previous: bool = False,
     allow_to_next: bool = False,
     allow_callback: bool = False,
+    ignore_tail_to_next: bool = False,
 ) -> list[str]:
     """Prüft erste/letzte Sätze auf Reise- und Kapitelverbindungsformeln.
 
@@ -96,8 +97,12 @@ def detect_chapter_link_violations(
             if kind == "from_previous" and not allow_from_previous:
                 blocked = True
             elif kind == "to_next" and not allow_to_next:
+                if ignore_tail_to_next and where == "Ende":
+                    continue
                 blocked = True
             elif kind == "either" and not (allow_from_previous or allow_to_next):
+                if ignore_tail_to_next and where == "Ende":
+                    continue
                 blocked = True
             if blocked:
                 violations.append(

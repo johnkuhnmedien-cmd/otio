@@ -352,6 +352,9 @@ def _plan_to_rows(plan) -> list[dict]:
             "use_contrast_with_previous": entry.use_contrast_with_previous,
             "use_commonality_with_previous": entry.use_commonality_with_previous,
             "transition_goal_to_next": entry.transition_goal_to_next,
+            "cta_like": entry.cta_like,
+            "cta_stay": entry.cta_stay,
+            "cta_stay_text": entry.cta_stay_text,
             "risks": ", ".join(entry.risks),
         }
         for entry in sorted(plan.recommended_folder_order, key=lambda entry: entry.order_index)
@@ -369,6 +372,12 @@ def _render_draft_editor(project: Project, draft) -> list[dict]:
     if draft.risks:
         st.caption(f"Risiken: {', '.join(draft.risks)}")
 
+    st.caption(
+        "Kapitelende-CTAs: **Like** einmal pro Film (nennt das nächste Kapitel) und "
+        "**Dranbleiben** einmal pro Film (konkretes Bild eines späteren Orts ohne "
+        "Namen — Stil der Referenzsätze). Nicht im letzten Kapitel. ④ spricht sie "
+        "am Kapitelende; die Wortzahl gilt nur für den Kapitelkörper."
+    )
     rows = _plan_to_rows(draft)
     return st.data_editor(
         rows,
@@ -411,6 +420,9 @@ def _render_draft_editor(project: Project, draft) -> list[dict]:
             "use_contrast_with_previous": st.column_config.CheckboxColumn("Kontrast"),
             "use_commonality_with_previous": st.column_config.CheckboxColumn("Gemeinsamkeit"),
             "transition_goal_to_next": st.column_config.TextColumn("Übergang zum nächsten Ort"),
+            "cta_like": st.column_config.CheckboxColumn("CTA Like"),
+            "cta_stay": st.column_config.CheckboxColumn("CTA Dranbleiben"),
+            "cta_stay_text": st.column_config.TextColumn("CTA-Text (Dranbleiben)"),
             "risks": st.column_config.TextColumn("Risiken", disabled=True),
         },
     )

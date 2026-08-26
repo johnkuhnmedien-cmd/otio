@@ -678,6 +678,108 @@ def test_update_dramaturgy_order_persists_craft_flags(tmp_path: Path) -> None:
     assert by_folder["Yellowstone"].use_callback_to_previous is True
 
 
+def test_update_dramaturgy_order_persists_cta_fields(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    draft = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(folder_name="Grand Canyon", order_index=1),
+            DramaturgyFolderEntry(folder_name="Yellowstone", order_index=2),
+        ],
+    )
+    save_dramaturgy_draft(project, draft)
+    updated = update_dramaturgy_order(
+        project,
+        [
+            {
+                "folder_name": "Grand Canyon",
+                "order_index": 1,
+                "cta_like": True,
+                "cta_stay": True,
+                "cta_stay_text": "Später wartet ein Dorf zwischen Bergen.",
+            },
+            {"folder_name": "Yellowstone", "order_index": 2, "cta_like": False},
+        ],
+    )
+    by_folder = {entry.folder_name: entry for entry in updated.recommended_folder_order}
+    assert by_folder["Grand Canyon"].cta_like is True
+    assert by_folder["Grand Canyon"].cta_stay is True
+    assert "Dorf zwischen Bergen" in by_folder["Grand Canyon"].cta_stay_text
+    assert by_folder["Yellowstone"].cta_like is False
+
+
+def test_build_dramaturgy_plan_parses_and_normalizes_ctas(tmp_path: Path) -> None:
+    folders = ["A", "B", "C", "D"]
+    project = _make_project(tmp_path, folders)
+    stay_text = (
+        "Später sehen wir einen Ort, an dem die Häuser dicht an einem steilen Hang "
+        "gebaut wurden. Allein die Lage ist ziemlich verrückt!"
+    )
+    payload = json.dumps(
+        {
+            "project_title": "Test",
+            "recommended_folder_order": [
+                {
+                    "folder_name": "A",
+                    "order_index": 1,
+                    "cta_like": False,
+                    "cta_stay": True,
+                    "cta_stay_text": stay_text,
+                    "cta_stay_target_folders": ["C", "D"],
+                },
+                {"folder_name": "B", "order_index": 2, "cta_like": True},
+                {"folder_name": "C", "order_index": 3, "cta_like": True},
+                {"folder_name": "D", "order_index": 4, "cta_like": True, "cta_stay": True},
+            ],
+        }
+    )
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(payload),
+    ):
+        result = build_dramaturgy_plan(
+            project, provider="anthropic", model="claude-sonnet-5"
+        )
+
+    assert result.status == STATUS_PASS
+    assert result.plan is not None
+    by_folder = {entry.folder_name: entry for entry in result.plan.recommended_folder_order}
+    assert by_folder["A"].cta_stay is True
+    assert by_folder["A"].cta_stay_text == stay_text
+    assert by_folder["A"].cta_stay_target_folders == ["C", "D"]
+    assert by_folder["B"].cta_like is True
+    assert by_folder["C"].cta_like is False
+    assert by_folder["D"].cta_like is False
+    assert by_folder["D"].cta_stay is False
+
+
+def test_confirm_dramaturgy_strips_ctas_from_last_chapter(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    draft = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(folder_name="Grand Canyon", order_index=1),
+            DramaturgyFolderEntry(
+                folder_name="Yellowstone",
+                order_index=2,
+                cta_like=True,
+                cta_stay=True,
+                cta_stay_text="should vanish",
+            ),
+        ],
+    )
+    save_dramaturgy_draft(project, draft)
+    confirmed = confirm_dramaturgy_plan(project, draft)
+    last = next(
+        entry
+        for entry in confirmed.recommended_folder_order
+        if entry.folder_name == "Yellowstone"
+    )
+    assert last.cta_like is False
+    assert last.cta_stay is False
+    assert last.cta_stay_text == ""
+
+
 def test_disable_dramaturgy_craft_flags_clears_all_craft_fields(tmp_path: Path) -> None:
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
     draft = DramaturgyPlan(
@@ -690,6 +792,10 @@ def test_disable_dramaturgy_craft_flags_clears_all_craft_fields(tmp_path: Path) 
                 use_contrast_with_previous=True,
                 transition_goal_to_next="Tease Yellowstone",
                 contrast_or_commonality_hint="rock vs steam",
+                cta_like=True,
+                cta_stay=True,
+                cta_stay_text="Später sehen wir einen Ort an einem steilen Hang.",
+                cta_stay_target_folders=["Yellowstone"],
             ),
             DramaturgyFolderEntry(
                 folder_name="Yellowstone",
@@ -715,6 +821,11 @@ def test_disable_dramaturgy_craft_flags_clears_all_craft_fields(tmp_path: Path) 
         assert entry.transition_goal_to_next == ""
         assert entry.transition_from_previous_hint == ""
         assert entry.contrast_or_commonality_hint == ""
+
+    by_folder = {entry.folder_name: entry for entry in cleared.recommended_folder_order}
+    assert by_folder["Grand Canyon"].cta_like is True
+    assert by_folder["Grand Canyon"].cta_stay is True
+    assert "steilen Hang" in by_folder["Grand Canyon"].cta_stay_text
 
     confirmed = load_confirmed_dramaturgy(project)
     assert confirmed is not None
