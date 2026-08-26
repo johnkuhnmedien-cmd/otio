@@ -228,6 +228,13 @@ def test_unbind_filled_keeps_asset_but_drops_gap_binding(project_with_gaps):
     assert Path(kept.local_media_path).is_file()
     assert kept.media_validation_status == "export_ready"
 
+    funnel = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
+    filled_row = next(g for g in funnel.gaps if g.gap_id == FILLED_GAP)
+    assert filled_row.filled is False
+    assert filled_row.export_ready_candidate_id is None
+    assert FILLED_GAP not in (funnel.filled_gap_ids or [])
+    assert FILLED_GAP in (funnel.open_gap_ids or [])
+
 
 def test_reset_never_deletes_media_files(project_with_gaps):
     project = project_with_gaps

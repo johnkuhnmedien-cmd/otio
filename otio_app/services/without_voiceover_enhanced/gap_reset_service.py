@@ -248,6 +248,7 @@ def reset_open_coverage_gaps(
     )
     if accepted is not None:
         kept_supplements: list[StockCandidate] = []
+        unbound_gap_ids: list[str] = []
         for candidate in accepted.supplements or []:
             ready = (
                 str(candidate.media_validation_status or "").strip()
@@ -260,6 +261,8 @@ def reset_open_coverage_gaps(
                 continue
             in_scope = gap_ids is None or gap_id in scope
             if ready and unbind_filled and in_scope and (gap_id or candidate.cut_plan_run_id):
+                if gap_id:
+                    unbound_gap_ids.append(gap_id)
                 candidate = candidate.model_copy(
                     update={"gap_id": "", "cut_plan_run_id": ""}
                 )
@@ -270,5 +273,58 @@ def reset_open_coverage_gaps(
                 accepted_supplements_path(project),
                 accepted.model_copy(update={"supplements": kept_supplements}),
             )
+        if unbound_gap_ids:
+            _unfill_funnel_gaps(project, unbound_gap_ids)
 
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        refresh_coverage_gaps_external_export,
+    )
+
+    refresh_coverage_gaps_external_export(project)
     return report
+
+
+def _unfill_funnel_gaps(project: Project, gap_ids: list[str]) -> None:
+    """Funnel-Report nach Unbind wieder auf offen stellen."""
+    unbound = {str(gid).strip() for gid in gap_ids if str(gid).strip()}
+    if not unbound:
+        return
+    funnel = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
+    if funnel is None:
+        return
+    updated_gaps = []
+    for gap_report in funnel.gaps or []:
+        gid = str(gap_report.gap_id or "").strip()
+        if gid in unbound:
+            updated_gaps.append(
+                gap_report.model_copy(
+                    update={"filled": False, "export_ready_candidate_id": None}
+                )
+            )
+        else:
+            updated_gaps.append(gap_report)
+    filled_ids = [
+        gid for gid in (funnel.filled_gap_ids or []) if str(gid).strip() not in unbound
+    ]
+    open_ids = [
+        gid
+        for gid in list(funnel.open_gap_ids or []) + sorted(unbound)
+        if str(gid).strip() and str(gid).strip() not in filled_ids
+    ]
+    seen: set[str] = set()
+    open_unique: list[str] = []
+    for gid in open_ids:
+        if gid in seen:
+            continue
+        seen.add(gid)
+        open_unique.append(gid)
+    write_json(
+        supplement_funnel_report_path(project),
+        funnel.model_copy(
+            update={
+                "gaps": updated_gaps,
+                "filled_gap_ids": filled_ids,
+                "open_gap_ids": open_unique,
+            }
+        ),
+    )

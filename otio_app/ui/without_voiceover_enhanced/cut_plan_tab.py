@@ -2652,6 +2652,7 @@ def _render_open_gap_reset(project) -> None:
             )
             st.caption("Jetzt den LLM Cut für die gewünschten Kapitel neu erzeugen.")
             st.session_state.pop(preview_key, None)
+            st.rerun()
 
 
 def _render_section_funnel(project) -> None:
@@ -2743,12 +2744,13 @@ def _render_section_funnel(project) -> None:
         coverage_gaps_external_path,
     )
 
-    # Inbox-Drops der externen App übernehmen, External-JSON aktuell halten.
+    # Inbox zuerst, dann Status (kann Fills rebinden), dann External-JSON —
+    # sonst schreibt der Export einen älteren Fill-Stand als die UI anzeigt.
     ingest_coverage_gap_inbox(project)
+    gap_status = summarize_gap_status(project)
     external_doc = refresh_coverage_gaps_external_export(project)
 
     # Fix 4: Run-ID-aware Zähler (weak offen bis Merge; stale Funnel ignorieren).
-    gap_status = summarize_gap_status(project)
     open_gap_ids = list(gap_status.open_gap_ids)
     open_gaps_count = gap_status.open_count
     filled_gaps_count = gap_status.filled_count

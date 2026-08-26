@@ -136,8 +136,12 @@ def _filled_by_gap(
         if status != "export_ready":
             continue
         cand_run = str(getattr(cand, "cut_plan_run_id", "") or "").strip()
-        if expected and cand_run and cand_run != expected:
-            continue
+        # Gleicher Maßstab wie die Cut-Plan-UI (summarize_gap_status):
+        # ohne passende Run-ID zählt der Fill nicht — sonst bleibt die
+        # External-JSON auf filled, während die App 44 offen anzeigt.
+        if expected:
+            if not cand_run or cand_run != expected:
+                continue
         out[gid] = CoverageGapExternalFilledAsset(
             candidate_id=str(cand.candidate_id or ""),
             local_media_path=str(cand.local_media_path or ""),
