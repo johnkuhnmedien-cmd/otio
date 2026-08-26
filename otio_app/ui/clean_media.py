@@ -152,7 +152,7 @@ def _render_folder_details(project, folder_name: str) -> None:
     if pending:
         st.warning(
             f"{pending} Datei(en) auf Disk fehlen im Manifest "
-            "(häufig neue `_supplemental/_…/`-Assets) — **Reparieren** oder "
+            "(neue Dateien, ersetzte Downloads oder `_supplemental/_…/`-Assets) — **Reparieren** oder "
             "**Prüfen & transcodieren**."
         )
     for entry in manifest.entries:

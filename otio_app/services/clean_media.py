@@ -50,6 +50,7 @@ CLEAN_STATUS_NEEDS_TRANSCODE = "needs_transcode"
 CLEAN_FORCE_DROP_LEADING_FRAMES = 3
 
 _ASSET_NUMBER_RE = re.compile(r"asset[_\s-]*(\d+)", re.IGNORECASE)
+_EXPORT_STEM_SUFFIX_RE = re.compile(r"_\d+x\d+(?:_title)?$", re.IGNORECASE)
 
 _RESOLVE_FRIENDLY_VIDEO_CODECS = frozenset(
     {"h264", "avc", "avc1", "libx264", "mpeg4", "mp4v"}
@@ -84,6 +85,39 @@ def media_asset_number(path: Path) -> int | None:
 
 def media_stem_key(path: Path) -> str:
     return safe_folder_slug(path.stem).casefold()
+
+
+def clean_output_base_stem_key(path: Path) -> str:
+    """Stem ohne ``_1920x1080`` / ``_title``-Export-Suffix."""
+    return _EXPORT_STEM_SUFFIX_RE.sub("", media_stem_key(path))
+
+
+def stamp_clean_source_identity(entry: CleanMediaEntry, original: Path) -> None:
+    try:
+        stat = original.stat()
+    except OSError:
+        return
+    entry.source_size = stat.st_size
+    entry.source_mtime_ns = stat.st_mtime_ns
+
+
+def clean_output_is_stale_for_original(original: Path, clean: Path) -> bool:
+    """True wenn das Original nach der Clean-Datei ersetzt wurde (neuer mtime)."""
+    try:
+        if not original.is_file() or not clean.is_file():
+            return False
+        return original.stat().st_mtime_ns > clean.stat().st_mtime_ns
+    except OSError:
+        return False
+
+
+def _unlink_clean_output(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def path_is_readable_file(path: Path) -> bool:
@@ -171,7 +205,12 @@ def find_clean_file_for_media(
     folder_name: str,
     media_path: Path,
 ) -> Path | None:
-    """Sucht Clean-Datei per erwartetem Pfad, Asset-Nummer oder Stem-Slug."""
+    """Sucht Clean-Datei per erwartetem Pfad oder Stem-Slug — nicht per Asset-Nummer.
+
+    ``Asset12.mp4`` und ``Asset00012.mov`` sind verschiedene Dateien (typisch
+    Adobe-Neudownload). Eine transkodierte Vorschau darf die neue Datei nicht
+    verdecken.
+    """
     from otio_app.services.clean_media_settings import load_clean_media_settings
 
     auto_zoom_fill = load_clean_media_settings(project).auto_zoom_fill
@@ -216,43 +255,30 @@ def find_clean_file_for_media(
         ):
             return expected
 
-    asset_number = media_asset_number(media_path)
     stem_key = media_stem_key(media_path)
     # Nur im erwarteten Clean-Unterordner suchen — verhindert Kollisionen
     # zwischen Top-Level und `_supplemental/_provider/`.
+    # Zoom-/Title-Exports (``stem_1920x1080.mp4``) gehören zum selben Original;
+    # ``Asset12.mp4`` vs ``Asset00012.mov`` teilen nur die Nummer, nicht den Stem.
     for candidate in _list_clean_files_in_dir(expected.parent):
-        if asset_number is not None and media_asset_number(candidate) == asset_number:
-            if auto_zoom_fill and not is_image_media(media_path):
-                candidate_probe = probe_media(candidate)
-                if (
-                    candidate_probe.width
-                    and candidate_probe.height
-                    and not _probe_matches_target_resolution(
-                        candidate_probe,
-                        project.width,
-                        project.height,
-                    )
-                ):
-                    continue
-                return candidate
-            else:
-                return candidate
-        if media_stem_key(candidate) == stem_key:
-            if auto_zoom_fill and not is_image_media(media_path):
-                candidate_probe = probe_media(candidate)
-                if (
-                    candidate_probe.width
-                    and candidate_probe.height
-                    and not _probe_matches_target_resolution(
-                        candidate_probe,
-                        project.width,
-                        project.height,
-                    )
-                ):
-                    continue
-                return candidate
-            else:
-                return candidate
+        candidate_stem = media_stem_key(candidate)
+        candidate_base = clean_output_base_stem_key(candidate)
+        if candidate_stem != stem_key and candidate_base != stem_key:
+            continue
+        if auto_zoom_fill and not is_image_media(media_path):
+            candidate_probe = probe_media(candidate)
+            if (
+                candidate_probe.width
+                and candidate_probe.height
+                and not _probe_matches_target_resolution(
+                    candidate_probe,
+                    project.width,
+                    project.height,
+                )
+            ):
+                continue
+            return candidate
+        return candidate
     return None
 
 
@@ -804,28 +830,41 @@ def process_media_file(
         )
 
     if export_transcode and path_is_readable_file(output_path) and not force_transcode:
-        valid, validation_error = validate_clean_output(output_path)
-        if valid:
-            processed_probe = probe_media(output_path)
-            resolution_ok = True
-            if zoom_transcode and not _probe_matches_target_resolution(
-                processed_probe,
-                project.width,
-                project.height,
-            ):
-                resolution_ok = False
-            if resolution_ok:
-                entry.clean_path = str(output_path.resolve())
-                entry.status = CLEAN_STATUS_CLEAN
-                entry.probe = processed_probe
-                entry.error = None
-                entry.transcoded_at = entry.transcoded_at or datetime.now(timezone.utc)
-                return entry
-        if validation_error:
-            entry.error = validation_error
+        if not clean_output_is_stale_for_original(media_path, output_path):
+            valid, validation_error = validate_clean_output(output_path)
+            if valid:
+                processed_probe = probe_media(output_path)
+                resolution_ok = True
+                if zoom_transcode and not _probe_matches_target_resolution(
+                    processed_probe,
+                    project.width,
+                    project.height,
+                ):
+                    resolution_ok = False
+                if resolution_ok:
+                    entry.clean_path = str(output_path.resolve())
+                    entry.status = CLEAN_STATUS_CLEAN
+                    entry.probe = processed_probe
+                    entry.error = None
+                    entry.transcoded_at = entry.transcoded_at or datetime.now(timezone.utc)
+                    stamp_clean_source_identity(entry, media_path)
+                    return entry
+            if validation_error:
+                entry.error = validation_error
+        else:
+            entry.error = "Clean-Datei gehört zu einer älteren Originalversion"
 
     existing_clean = find_clean_file_for_media(project, folder_name, media_path)
-    if existing_clean is not None and not force_transcode and not export_transcode:
+    stale_existing = bool(
+        existing_clean is not None
+        and clean_output_is_stale_for_original(media_path, existing_clean)
+    )
+    if (
+        existing_clean is not None
+        and not force_transcode
+        and not export_transcode
+        and not stale_existing
+    ):
         valid, validation_error = validate_clean_output(existing_clean)
         if valid:
             clean_probe = probe_media(existing_clean)
@@ -835,15 +874,16 @@ def process_media_file(
                 entry.probe = clean_probe
                 entry.error = None
                 entry.transcoded_at = entry.transcoded_at or datetime.now(timezone.utc)
+                stamp_clean_source_identity(entry, media_path)
                 return entry
         if existing_clean != output_path:
-            try:
-                existing_clean.unlink(missing_ok=True)
-            except OSError:
-                pass
+            _unlink_clean_output(existing_clean)
         entry.error = validation_error
 
     if not entry.needs_transcode and not force_transcode and not export_transcode:
+        if stale_existing:
+            _unlink_clean_output(existing_clean)
+        stamp_clean_source_identity(entry, media_path)
         return entry
 
     from otio_app.services.otio_media_transform import build_export_video_filter
@@ -900,6 +940,7 @@ def process_media_file(
     entry.probe = probe_media(output_path)
     entry.transcoded_at = datetime.now(timezone.utc)
     entry.error = None
+    stamp_clean_source_identity(entry, media_path)
     return entry
 
 
@@ -935,12 +976,23 @@ def upsert_clean_media_entry(
         target = str(Path(entry.original_path).expanduser())
 
     remaining: list[CleanMediaEntry] = []
+    new_original = Path(entry.original_path)
+    new_number = media_asset_number(new_original)
+    new_stem = media_stem_key(new_original)
     for existing in manifest.entries:
         try:
             existing_key = str(Path(existing.original_path).expanduser().resolve())
         except OSError:
             existing_key = str(Path(existing.original_path).expanduser())
         if existing_key == target:
+            continue
+        existing_original = Path(existing.original_path)
+        if (
+            new_number is not None
+            and media_asset_number(existing_original) == new_number
+            and media_stem_key(existing_original) != new_stem
+            and not path_is_readable_file(existing_original)
+        ):
             continue
         remaining.append(existing)
     remaining.append(entry)
@@ -966,6 +1018,7 @@ def process_and_persist_media_file(
         force_transcode=force_transcode,
     )
     upsert_clean_media_entry(project, folder_name, entry)
+    prune_replaced_clean_outputs(project, folder_name)
     return entry
 
 
@@ -1039,6 +1092,37 @@ def validate_folder(
     return manifest
 
 
+def prune_replaced_clean_outputs(
+    project: Project,
+    folder_name: str,
+    media_paths: list[Path] | None = None,
+) -> list[Path]:
+    """Löscht Clean-Kopien ersetzter Originale (Asset12.mp4 vs Asset00012.mov)."""
+    current = media_paths if media_paths is not None else list_folder_media(project, folder_name)
+    current_stems: set[str] = set()
+    stems_by_number: dict[int, set[str]] = {}
+    for media_path in current:
+        stem = media_stem_key(media_path)
+        current_stems.add(stem)
+        number = media_asset_number(media_path)
+        if number is not None:
+            stems_by_number.setdefault(number, set()).add(stem)
+
+    removed: list[Path] = []
+    for candidate in list_clean_files_in_folder(project, folder_name):
+        base_stem = clean_output_base_stem_key(candidate)
+        if base_stem in current_stems:
+            continue
+        number = media_asset_number(candidate)
+        if number is None or number not in stems_by_number:
+            continue
+        if base_stem in stems_by_number[number]:
+            continue
+        _unlink_clean_output(candidate)
+        removed.append(candidate)
+    return removed
+
+
 def process_folder(
     project: Project,
     folder_name: str,
@@ -1047,8 +1131,10 @@ def process_folder(
     on_progress: Callable[[str, CleanMediaEntry], None] | None = None,
 ) -> CleanMediaManifest:
     """Prüft und transkodiert alle Medien eines Ordners."""
+    media_paths = list_folder_media(project, folder_name)
+    prune_replaced_clean_outputs(project, folder_name, media_paths)
     entries: list[CleanMediaEntry] = []
-    for media_path in list_folder_media(project, folder_name):
+    for media_path in media_paths:
         if should_cancel and should_cancel():
             break
         entry = process_media_file(project, folder_name, media_path)
@@ -1108,7 +1194,9 @@ def resolve_effective_media_path(
         resolved = media_path.expanduser()
 
     clean_candidate = find_clean_file_for_media(project, folder_name, resolved)
-    if clean_file_is_present(clean_candidate):
+    if clean_file_is_present(clean_candidate) and not clean_output_is_stale_for_original(
+        resolved, clean_candidate
+    ):
         return clean_candidate
 
     manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
@@ -1129,7 +1217,9 @@ def resolve_effective_media_path(
                     candidate = candidate.expanduser().resolve()
                 except OSError:
                     candidate = candidate.expanduser()
-                if clean_file_is_present(candidate):
+                if clean_file_is_present(candidate) and not clean_output_is_stale_for_original(
+                    resolved, candidate
+                ):
                     return candidate
 
         if entry.status == CLEAN_STATUS_OK:
@@ -1171,6 +1261,9 @@ def entry_is_ready_on_disk(
             clean = Path(entry.clean_path)
         if clean is None:
             return False
+        original = Path(entry.original_path)
+        if clean_output_is_stale_for_original(original, clean):
+            return False
         if strict:
             valid, _ = validate_clean_output(clean)
             return valid
@@ -1207,7 +1300,7 @@ def folder_clean_media_ready(
             # damit z. B. `_supplemental/_pexels/clip.mp4` nicht den Primary-Eintrag trifft.
             media_supp = SUPPLEMENTAL_FOLDER_NAME in media_path.parts
             media_name = media_path.name.casefold()
-            media_number = media_asset_number(media_path)
+            media_stem = media_stem_key(media_path)
             for candidate in manifest.entries:
                 cand_path = Path(candidate.original_path)
                 if (SUPPLEMENTAL_FOLDER_NAME in cand_path.parts) != media_supp:
@@ -1215,7 +1308,7 @@ def folder_clean_media_ready(
                 if cand_path.name.casefold() == media_name:
                     entry = candidate
                     break
-                if media_number is not None and media_asset_number(cand_path) == media_number:
+                if media_stem_key(cand_path) == media_stem:
                     entry = candidate
                     break
         if entry is None:
@@ -1338,6 +1431,14 @@ def count_folder_clean_status(
         return counts
 
     for entry in manifest.entries:
+        if entry.status == CLEAN_STATUS_CLEAN:
+            original = Path(entry.original_path)
+            clean: Path | None = Path(entry.clean_path) if entry.clean_path else None
+            if clean is None or not clean_file_is_present(clean):
+                clean = find_clean_file_for_media(project, folder_name, original)
+            if clean is not None and clean_output_is_stale_for_original(original, clean):
+                counts[CLEAN_STATUS_PENDING] += 1
+                continue
         key = entry.status if entry.status in counts else CLEAN_STATUS_PENDING
         counts[key] += 1
 
