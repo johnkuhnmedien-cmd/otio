@@ -29,6 +29,7 @@ from otio_app.services.asset_watermark_check import (
     WATERMARK_CHECK_VERSION,
     StockWatermarkCheckResult,
     check_frames_for_stock_watermark,
+    prune_stale_watermark_review,
     remove_watermark_review_item,
     stock_watermark_from_v3_defects,
     upsert_watermark_review_item,
@@ -828,6 +829,12 @@ def analyze_asset_folders(
     """
     selected = validate_asset_selection(project.asset_subdir_names, folder_names)
     report = AnalysisRunReport()
+    dropped_review = prune_stale_watermark_review(project)
+    if dropped_review:
+        _log(
+            project,
+            f"REVIEW-PRUNE {dropped_review} Wasserzeichen-Einträge ohne Datei entfernt",
+        )
     total_media = _count_media_to_analyze(
         project, selected, model=model, include_supplements=analyze_supplements
     )

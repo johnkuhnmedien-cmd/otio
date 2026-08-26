@@ -104,6 +104,31 @@ def media_stem_slug(media_path: Path) -> str:
     return safe_folder_slug(media_path.stem).casefold()
 
 
+def numbered_asset_discovery_key(media_path: Path) -> str:
+    """Gleicher Schlüssel für Asset12.mp4 und Asset00012.mov."""
+    slug = media_stem_slug(media_path)
+    match = _NUMBERED_ASSET_STEM_RE.match(slug)
+    if match is None:
+        return slug
+    return f"{match.group(1).casefold()}{int(match.group(2))}"
+
+
+def media_has_icloud_placeholder(media_path: Path) -> bool:
+    """True wenn macOS eine iCloud-Platzhalterdatei für dieses Medium zeigt."""
+    parent = media_path.parent
+    name = media_path.name
+    for candidate in (
+        parent / f".{name}.icloud",
+        parent / f"{name}.icloud",
+    ):
+        try:
+            if candidate.is_file():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def cache_json_stem_slug(cache_filename: str) -> str:
     """Slug aus einem Cache-Dateinamen (z. B. Florida_Keys_Asset15.mp4.json)."""
     base = cache_filename[:-5] if cache_filename.endswith(".json") else cache_filename
@@ -223,7 +248,9 @@ def _prefer_discovered_media_path(current: Path, candidate: Path) -> Path:
         return candidate
     if current_is_file and not candidate_is_file:
         return current
-    if len(candidate.name) < len(current.name):
+    # Beide lokal oder beide fehlend: Adobe-Neudownload (Asset00012.mov)
+    # schlägt die alte Kurzform (Asset12.mp4).
+    if len(candidate.name) > len(current.name):
         return candidate
     return current
 
@@ -379,7 +406,7 @@ def _merge_media_path(
     folder_path: Path,
     media_path: Path,
 ) -> None:
-    slug = media_stem_slug(media_path)
+    slug = numbered_asset_discovery_key(media_path)
     if SUPPLEMENTAL_FOLDER_NAME in media_path.parts:
         resolved = media_path
     else:
@@ -458,12 +485,43 @@ def _discover_media_from_frame_dirs(
         _merge_media_path(by_slug, folder_path, candidate)
 
 
+def _media_available_for_discovery(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+    *,
+    listed_names: set[str],
+) -> bool:
+    """True wenn die Datei im Ordner, als iCloud-Platzhalter oder als Clean-Kopie da ist."""
+    if media_path.name.casefold() in listed_names:
+        return True
+    try:
+        if media_path.is_file():
+            return True
+    except OSError:
+        pass
+    if media_has_icloud_placeholder(media_path):
+        return True
+    from otio_app.services.clean_media import clean_file_is_present, find_clean_file_for_media
+
+    return clean_file_is_present(
+        find_clean_file_for_media(project, folder_name, media_path)
+    )
+
+
 def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path]:
-    """Medien im Ordner: Dateisystem plus Cache und Frame-Arbeit vereinen."""
+    """Medien im Ordner: Dateisystem plus Cache und Frame-Arbeit vereinen.
+
+    Cache-/Frame-Geister ohne Datei werden nicht mitgeschleppt — typisch nach
+    Ersetzen von Wasserzeichen-Downloads (Asset12.mp4 weg, Asset00012.mov neu).
+    iCloud-Platzhalter und Namen aus der Ordnerliste bleiben erhalten.
+    """
     folder_path = project.project_root_path / folder_name
+    listed = list(list_media_files(folder_path))
+    listed_names = {path.name.casefold() for path in listed}
     by_slug: dict[str, Path] = {}
 
-    for media_path in list_media_files(folder_path):
+    for media_path in listed:
         _merge_media_path(by_slug, folder_path, media_path)
 
     for cache_dir in list_cache_dirs_for_folder(project, folder_name):
@@ -494,16 +552,28 @@ def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path
     _discover_gaps_from_cache_dir(project, folder_name, folder_path, by_slug)
     _discover_media_from_frame_dirs(project, folder_name, by_slug)
 
-    return sorted(by_slug.values(), key=lambda path: path.name.casefold())
+    kept = [
+        path
+        for path in by_slug.values()
+        if _media_available_for_discovery(
+            project, folder_name, path, listed_names=listed_names
+        )
+    ]
+    return sorted(kept, key=lambda path: path.name.casefold())
 
 
 def media_file_is_accessible(media_path: Path) -> tuple[bool, str | None]:
     """Prüft, ob eine Mediendatei lokal lesbar ist (iCloud-Check)."""
     try:
         if not media_path.is_file():
+            if media_has_icloud_placeholder(media_path):
+                return False, (
+                    f"Mediendatei nicht lokal verfügbar: `{media_path.name}` "
+                    "(iCloud — bitte im Finder laden)"
+                )
             return False, (
-                f"Mediendatei nicht lokal verfügbar: `{media_path.name}` "
-                "(iCloud — bitte im Finder laden)"
+                f"Mediendatei fehlt: `{media_path.name}` "
+                "(nicht mehr im Ordner — vermutlich ersetzt oder entfernt)"
             )
         with media_path.open("rb") as handle:
             handle.read(1)

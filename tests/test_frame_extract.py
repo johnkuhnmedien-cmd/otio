@@ -46,6 +46,12 @@ def test_discover_includes_media_from_existing_frame_dir(
     frames_dir.mkdir(parents=True, exist_ok=True)
     (frames_dir / "frame_001.jpg").write_bytes(b"jpeg")
 
+    discovered_ghost = discover_folder_media_paths(project, "Grand Canyon")
+    ghost_names = {path.name for path in discovered_ghost}
+    assert "clip.mp4" in ghost_names
+    assert "Florida_Keys_Asset15.mp4" not in ghost_names
+
+    (folder / f".{asset15.name}.icloud").write_text("placeholder", encoding="utf-8")
     discovered = discover_folder_media_paths(project, "Grand Canyon")
     names = {path.name for path in discovered}
     assert "clip.mp4" in names

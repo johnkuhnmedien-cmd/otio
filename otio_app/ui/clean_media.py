@@ -15,6 +15,7 @@ from otio_app.services.clean_media import (
     audit_folder_clean_media,
     count_folder_clean_status,
     find_clean_file_for_media,
+    folder_clean_media_ready,
     folder_manifest_path,
     load_clean_media_manifest,
     path_is_readable_file,
@@ -48,7 +49,11 @@ def _folder_status_label(project, folder_name: str) -> str:
     counts = count_folder_clean_status(project, folder_name)
     if counts[CLEAN_STATUS_FAILED] > 0:
         return f"❌ {folder_name}"
-    if counts[CLEAN_STATUS_NEEDS_TRANSCODE] > 0 or counts[CLEAN_STATUS_PENDING] > 0:
+    if (
+        counts[CLEAN_STATUS_NEEDS_TRANSCODE] > 0
+        or counts[CLEAN_STATUS_PENDING] > 0
+        or not folder_clean_media_ready(project, folder_name, strict=False)
+    ):
         return f"⚠️ {folder_name}"
     if counts[CLEAN_STATUS_OK] + counts[CLEAN_STATUS_CLEAN] > 0:
         return f"✅ {folder_name}"
@@ -152,7 +157,7 @@ def _render_folder_details(project, folder_name: str) -> None:
     if pending:
         st.warning(
             f"{pending} Datei(en) auf Disk fehlen im Manifest "
-            "(häufig neue `_supplemental/_…/`-Assets) — **Reparieren** oder "
+            "(neue Dateien, ersetzte Downloads oder `_supplemental/_…/`-Assets) — **Reparieren** oder "
             "**Prüfen & transcodieren**."
         )
     for entry in manifest.entries:
@@ -256,6 +261,10 @@ def render_clean_media_page() -> None:
         (Clean-Ausgabe: `_otio/clean/<Ordner>/_supplemental/_…/`).
 
         Analyse, Inventar und OTIO-Export verwenden danach automatisch die Clean-Pfade.
+
+        **Gleiche Dateinamen:** Wenn du eine Vorschau durch die Lizenzdatei *unter demselben
+        Namen* ersetzt hast, erkennt Clean Media das an Größe/Datum/Inhalt — nicht am Namen.
+        Ältere Läufe haben diesen Stempel noch nicht: dann **Clean-Kopien ersetzen**.
         """
     )
 
@@ -299,7 +308,8 @@ def render_clean_media_page() -> None:
     elif selected_folders:
         st.info(
             "Mindestens ein Ordner braucht noch Prüfung oder Transcode "
-            "(inkl. neuer Medien unter `_supplemental/_…/`)."
+            "(neue Dateien, ersetzte Downloads ohne passende Clean-Kopie, "
+            "oder Medien unter `_supplemental/_…/`)."
         )
 
     col1, col2, col3, col4 = st.columns(4)
@@ -316,8 +326,9 @@ def render_clean_media_page() -> None:
             type="primary",
             disabled=job_running or not selected_folders,
             help=(
-                "Nur noch offene Ordner: Top-Level- und `_supplemental/_…/`-Medien "
-                "prüfen/transcodieren. Bereits grüne/bereite Ordner werden übersprungen."
+                "Offene Ordner prüfen/transcodieren. "
+                "Ersetzte Dateien unter neuem Namen oder mit geändertem Stempel "
+                "werden mitgenommen; unveränderte Clean-Kopien übersprungen."
             ),
         )
     with col3:
@@ -326,8 +337,8 @@ def render_clean_media_page() -> None:
             key=f"clean_repair_{project.id}",
             disabled=job_running or not selected_folders,
             help=(
-                "Wie Prüfen & transcodieren: nur noch offene Ordner. "
-                "Bereits bereite Ordner werden übersprungen."
+                "Wie Prüfen & transcodieren: offene Ordner. "
+                "Passende Clean-Kopien werden übersprungen."
             ),
         )
     with col4:
@@ -337,6 +348,17 @@ def render_clean_media_page() -> None:
             disabled=job_running,
             help="Alle Ordner auswählen — bereits bereite werden übersprungen",
         )
+
+    force_clicked = st.button(
+        "🔁 Clean-Kopien ersetzen",
+        key=f"clean_force_{project.id}",
+        disabled=job_running or not selected_folders,
+        help=(
+            "Transkodiert die ausgewählten Ordner neu, auch wenn sie grün sind. "
+            "Für Originale, die du unter demselben Dateinamen ausgetauscht hast "
+            "(Wasserzeichen-Vorschau → Lizenzdatei)."
+        ),
+    )
 
     manager = get_clean_media_job_manager()
     if validate_clicked and selected_folders:
@@ -359,6 +381,15 @@ def render_clean_media_page() -> None:
         all_folders = list(project.asset_subdir_names)
         st.session_state[folder_state_key] = all_folders
         if manager.start(project, all_folders, mode=CleanMediaJobMode.PROCESS):
+            st.rerun()
+        else:
+            st.warning("Clean-Media-Job läuft bereits.")
+    if force_clicked and selected_folders:
+        if manager.start(project, selected_folders, mode=CleanMediaJobMode.PROCESS_FORCE):
+            st.info(
+                "Erzwungener Clean-Lauf: vorhandene Clean-Kopien der ausgewählten "
+                "Ordner werden aus den aktuellen Originalen neu erzeugt."
+            )
             st.rerun()
         else:
             st.warning("Clean-Media-Job läuft bereits.")

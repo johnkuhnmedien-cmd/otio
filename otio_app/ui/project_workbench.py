@@ -508,9 +508,11 @@ def _render_analysis_actions(
     from otio_app.services.asset_watermark_check import (
         format_watermark_review_banner,
         load_watermark_review_items,
+        prune_stale_watermark_review,
         watermark_review_txt_path,
     )
 
+    prune_stale_watermark_review(project)
     watermark_review_items = load_watermark_review_items(project)
     if watermark_review_items:
         review_txt = watermark_review_txt_path(project)

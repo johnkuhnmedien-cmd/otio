@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,9 +21,11 @@ from otio_app.models import Project
 from otio_app.services.clean_media import (
     CLEAN_STATUS_CLEAN,
     CLEAN_STATUS_OK,
+    CLEAN_STATUS_PENDING,
     _count_leading_black_frames,
     _first_frame_is_black,
     _trim_tiny_leading_black,
+    count_folder_clean_status,
     find_clean_file_for_media,
     folder_clean_media_ready,
     load_clean_media_manifest,
@@ -30,6 +33,7 @@ from otio_app.services.clean_media import (
     needs_transcode,
     process_and_persist_media_file,
     process_media_file,
+    prune_replaced_clean_outputs,
     resolve_effective_media_path,
     save_clean_media_manifest,
     transcode_to_clean,
@@ -152,6 +156,217 @@ def test_find_clean_by_asset_number(_mock_validate, tmp_path: Path) -> None:
     from_edit_plan = project.work_dir_path / "clean" / "Arches_National_Park" / "Arches_National_Park_Asset03.mp4"
     found2 = find_clean_file_for_media(project, "Arches National Park", from_edit_plan)
     assert found2 == clean
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+def test_find_clean_matches_export_resolution_suffix(_mock_validate, tmp_path: Path) -> None:
+    project = _project(tmp_path, folder_name="Caddo Lake")
+    original = project.project_root_path / "Caddo Lake" / "Caddo_Lake_Asset10.mp4"
+    original.write_bytes(b"original")
+    clean = (
+        project.work_dir_path
+        / "clean"
+        / "Caddo_Lake"
+        / "Caddo_Lake_Asset10_3840x2160.mp4"
+    )
+    clean.parent.mkdir(parents=True, exist_ok=True)
+    clean.write_bytes(b"zoomed")
+
+    found = find_clean_file_for_media(project, "Caddo Lake", original)
+    assert found == clean.resolve()
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+def test_find_clean_does_not_reuse_replaced_asset_number(_mock_validate, tmp_path: Path) -> None:
+    project = _project(tmp_path, folder_name="Ratece")
+    folder = project.project_root_path / "Ratece"
+    new_original = folder / "Ratece_Asset00012.mov"
+    new_original.write_bytes(b"licensed")
+    old_clean = project.work_dir_path / "clean" / "Ratece" / "Ratece_Asset12.mp4"
+    old_clean.parent.mkdir(parents=True, exist_ok=True)
+    old_clean.write_bytes(b"preview-transcode")
+
+    assert find_clean_file_for_media(project, "Ratece", new_original) is None
+    resolved = resolve_effective_media_path(project, "Ratece", new_original)
+    assert resolved == new_original.resolve()
+
+
+def test_folder_not_ready_after_padded_adobe_replacement(tmp_path: Path) -> None:
+    project = _project(tmp_path, folder_name="Ratece")
+    folder = project.project_root_path / "Ratece"
+    (folder / "clip.mp4").unlink()
+    new_original = folder / "Ratece_Asset00012.mov"
+    new_original.write_bytes(b"licensed")
+    old_original = folder / "Ratece_Asset12.mp4"
+    old_clean = project.work_dir_path / "clean" / "Ratece" / "Ratece_Asset12.mp4"
+    old_clean.parent.mkdir(parents=True, exist_ok=True)
+    old_clean.write_bytes(b"preview-transcode")
+    save_clean_media_manifest(
+        project.work_dir_path / "clean_media" / "Ratece.json",
+        CleanMediaManifest(
+            project_id=project.id,
+            folder="Ratece",
+            entries=[
+                CleanMediaEntry(
+                    original_path=str(old_original),
+                    clean_path=str(old_clean),
+                    status=CLEAN_STATUS_CLEAN,
+                )
+            ],
+        ),
+    )
+    assert folder_clean_media_ready(project, "Ratece") is False
+
+
+def test_preview_clean_does_not_keep_folder_green_when_original_is_older(
+    tmp_path: Path,
+) -> None:
+    """Adobe-Neudownload kann älteren mtime haben als die transkodierte Vorschau."""
+    project = _project(tmp_path, folder_name="Ratece")
+    folder = project.project_root_path / "Ratece"
+    (folder / "clip.mp4").unlink()
+    new_original = folder / "Ratece_Asset00012.mov"
+    new_original.write_bytes(b"licensed")
+    old_clean = project.work_dir_path / "clean" / "Ratece" / "Ratece_Asset12.mp4"
+    old_clean.parent.mkdir(parents=True, exist_ok=True)
+    old_clean.write_bytes(b"preview-transcode")
+    newer_clean = new_original.stat().st_mtime_ns + 5_000_000_000
+    os.utime(old_clean, ns=(newer_clean, newer_clean))
+    save_clean_media_manifest(
+        project.work_dir_path / "clean_media" / "Ratece.json",
+        CleanMediaManifest(
+            project_id=project.id,
+            folder="Ratece",
+            entries=[
+                CleanMediaEntry(
+                    original_path=str(new_original.resolve()),
+                    clean_path=str(old_clean.resolve()),
+                    status=CLEAN_STATUS_CLEAN,
+                )
+            ],
+        ),
+    )
+    assert folder_clean_media_ready(project, "Ratece") is False
+    counts = count_folder_clean_status(project, "Ratece")
+    assert counts[CLEAN_STATUS_PENDING] >= 1
+    resolved = resolve_effective_media_path(project, "Ratece", new_original)
+    assert resolved == new_original.resolve()
+    from otio_app.ui.clean_media import _folder_status_label
+
+    assert _folder_status_label(project, "Ratece").startswith("⚠️")
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+@patch("otio_app.services.clean_media.transcode_to_clean")
+@patch("otio_app.services.clean_media.test_decode", return_value=(True, None))
+@patch("otio_app.services.clean_media.probe_media")
+def test_process_replaces_preview_clean_for_new_original(
+    mock_probe,
+    _mock_decode,
+    mock_transcode,
+    _mock_validate,
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, folder_name="Ratece")
+    folder = project.project_root_path / "Ratece"
+    (folder / "clip.mp4").unlink()
+    new_original = folder / "Ratece_Asset00012.mov"
+    new_original.write_bytes(b"licensed-prores")
+    old_clean = project.work_dir_path / "clean" / "Ratece" / "Ratece_Asset12.mp4"
+    old_clean.parent.mkdir(parents=True, exist_ok=True)
+    old_clean.write_bytes(b"preview-transcode")
+
+    def _fake_transcode(
+        original: Path,
+        output_path: Path,
+        *,
+        video_filter: str | None = None,
+        expected_width: int | None = None,
+        expected_height: int | None = None,
+    ) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"new-clean")
+
+    mock_probe.return_value = MediaProbeInfo(
+        video_codec="prores",
+        container="mov",
+        width=1920,
+        height=1080,
+    )
+    mock_transcode.side_effect = _fake_transcode
+
+    entry = process_and_persist_media_file(project, "Ratece", new_original)
+    assert entry.status == CLEAN_STATUS_CLEAN
+    assert Path(entry.clean_path).name == "Ratece_Asset00012.mp4"
+    assert Path(entry.clean_path).read_bytes() == b"new-clean"
+    assert not old_clean.is_file()
+    assert prune_replaced_clean_outputs(project, "Ratece") == []
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+def test_inplace_newer_original_makes_clean_stale(_mock_validate, tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    original = project.project_root_path / "Florida Keys" / "clip.mp4"
+    clean = project.work_dir_path / "clean" / "Florida_Keys" / "clip.mp4"
+    clean.parent.mkdir(parents=True, exist_ok=True)
+    clean.write_bytes(b"old-preview-clean")
+    original.write_bytes(b"replacement-bytes")
+    newer = clean.stat().st_mtime_ns + 2_000_000_000
+    os.utime(original, ns=(newer, newer))
+
+    save_clean_media_manifest(
+        project.work_dir_path / "clean_media" / "Florida_Keys.json",
+        CleanMediaManifest(
+            project_id=project.id,
+            folder="Florida Keys",
+            entries=[
+                CleanMediaEntry(
+                    original_path=str(original.resolve()),
+                    clean_path=str(clean.resolve()),
+                    status=CLEAN_STATUS_CLEAN,
+                )
+            ],
+        ),
+    )
+    assert folder_clean_media_ready(project, "Florida Keys") is False
+    resolved = resolve_effective_media_path(project, "Florida Keys", original)
+    assert resolved == original.resolve()
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+def test_same_filename_size_change_invalidates_old_clean(_mock_validate, tmp_path: Path) -> None:
+    """Vorschau und Lizenzdatei können identisch heißen — erkannt an der Größe."""
+    project = _project(tmp_path)
+    original = project.project_root_path / "Florida Keys" / "clip.mp4"
+    clean = project.work_dir_path / "clean" / "Florida_Keys" / "clip.mp4"
+    clean.parent.mkdir(parents=True, exist_ok=True)
+    clean.write_bytes(b"old-preview-clean")
+    original.write_bytes(b"tiny")
+    save_clean_media_manifest(
+        project.work_dir_path / "clean_media" / "Florida_Keys.json",
+        CleanMediaManifest(
+            project_id=project.id,
+            folder="Florida Keys",
+            entries=[
+                CleanMediaEntry(
+                    original_path=str(original.resolve()),
+                    clean_path=str(clean.resolve()),
+                    status=CLEAN_STATUS_CLEAN,
+                    source_size=4,
+                    source_mtime_ns=original.stat().st_mtime_ns,
+                )
+            ],
+        ),
+    )
+    original.write_bytes(b"licensed-replacement-bytes")
+    older = clean.stat().st_mtime_ns - 2_000_000_000
+    os.utime(original, ns=(older, older))
+
+    assert folder_clean_media_ready(project, "Florida Keys") is False
+    counts = count_folder_clean_status(project, "Florida Keys")
+    assert counts[CLEAN_STATUS_PENDING] >= 1
+    resolved = resolve_effective_media_path(project, "Florida Keys", original)
+    assert resolved == original.resolve()
 
 
 @patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))

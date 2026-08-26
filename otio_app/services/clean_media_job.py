@@ -24,6 +24,7 @@ from otio_app.services.clean_media import (
 class CleanMediaJobMode(str, Enum):
     VALIDATE = "validate"
     PROCESS = "process"
+    PROCESS_FORCE = "process_force"
 
 
 class JobStatus(str, Enum):
@@ -178,8 +179,8 @@ class CleanMediaJobManager:
                     if should_cancel():
                         break
 
-                    # PROCESS: bereits grüne/bereite Ordner komplett überspringen
-                    # (VALIDATE prüft bewusst alles erneut).
+                    # PROCESS: bereits grüne/bereite Ordner komplett überspringen.
+                    # PROCESS_FORCE: Originale unter gleichem Namen neu transkodieren.
                     if mode == CleanMediaJobMode.PROCESS and folder_clean_media_ready(
                         current, folder_name, strict=False
                     ):
@@ -242,11 +243,16 @@ class CleanMediaJobManager:
                         if mode == CleanMediaJobMode.VALIDATE
                         else process_folder
                     )
+                    runner_kwargs: dict = {
+                        "should_cancel": should_cancel,
+                        "on_progress": on_progress,
+                    }
+                    if mode == CleanMediaJobMode.PROCESS_FORCE:
+                        runner_kwargs["force_transcode"] = True
                     manifest = runner(
                         current,
                         folder_name,
-                        should_cancel=should_cancel,
-                        on_progress=on_progress,
+                        **runner_kwargs,
                     )
                     manifests[folder_name] = manifest
 
