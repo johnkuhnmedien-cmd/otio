@@ -24,6 +24,16 @@ from otio_app.services.asset_analysis_signature import (
     try_build_analysis_signature,
 )
 from otio_app.services.frame_extract import extract_frames, list_existing_frame_jpegs
+from otio_app.services.asset_watermark_check import (
+    WATERMARK_BLOCK_ERROR,
+    WATERMARK_CHECK_VERSION,
+    StockWatermarkCheckResult,
+    check_frames_for_stock_watermark,
+    remove_watermark_review_item,
+    stock_watermark_from_v3_defects,
+    upsert_watermark_review_item,
+    watermark_check_is_current,
+)
 from otio_app.services.gemini_client import (
     ASSET_DESCRIPTION_PROMPT_VERSION,
     GeminiNotConfiguredError,
@@ -98,10 +108,9 @@ def _count_media_to_analyze(
 ) -> int:
     total = 0
     for folder_name in folder_names:
-        missing = list_assets_missing_successful_cache(
-            project, folder_name, model=model
+        total += len(
+            _list_media_needing_analysis_run(project, folder_name, model=model)
         )
-        total += len(missing)
         if include_supplements:
             total += _count_open_supplements(project, folder_name, model=model)
     return total
@@ -113,6 +122,76 @@ def _log(project: Project, message: str) -> None:
 
 def _is_cancelled(should_cancel: ShouldCancel | None) -> bool:
     return bool(should_cancel and should_cancel())
+
+
+def _list_media_needing_analysis_run(
+    project: Project,
+    folder_name: str,
+    *,
+    model: Optional[str] = None,
+) -> list[Path]:
+    """v3-Lücken plus aktuelle Caches ohne Stock-Wasserzeichen-Prüfung."""
+    missing = list_assets_missing_successful_cache(
+        project, folder_name, model=model
+    )
+    pending: list[Path] = []
+    missing_slugs = {media_stem_slug(path) for path in missing}
+    for media_path in discover_folder_media_paths(project, folder_name):
+        if media_stem_slug(media_path) in missing_slugs:
+            continue
+        if not has_successful_asset_cache(
+            project, folder_name, media_path, model=model
+        ):
+            continue
+        cached = load_cached_media_for_asset(project, folder_name, media_path)
+        if cached is None or watermark_check_is_current(cached):
+            continue
+        pending.append(media_path)
+    return missing + pending
+
+
+def _apply_watermark_fields(
+    entry: AssetMediaAnalysis,
+    result: StockWatermarkCheckResult,
+) -> None:
+    entry.watermark_blocked = False
+    entry.watermark_provider = result.provider
+    entry.watermark_note = result.note
+    if result.failed_open:
+        return
+    entry.watermark_check_version = WATERMARK_CHECK_VERSION
+
+
+def _persist_watermark_block(
+    *,
+    cache_file: Path,
+    entry: AssetMediaAnalysis,
+    result: StockWatermarkCheckResult,
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+) -> AssetMediaAnalysis:
+    entry.watermark_blocked = True
+    entry.watermark_check_version = WATERMARK_CHECK_VERSION
+    entry.watermark_provider = result.provider
+    entry.watermark_note = result.note
+    entry.error = WATERMARK_BLOCK_ERROR
+    entry.description = ""
+    entry.caption = ""
+    upsert_watermark_review_item(
+        project,
+        folder=folder_name,
+        media_path=media_path,
+        provider=result.provider,
+        note=result.note,
+    )
+    saved = _save_cached_media_safe(cache_file, entry)
+    _log(
+        project,
+        f"FAIL (Wasserzeichen) {folder_name}/{media_path.name} "
+        f"provider={result.provider or '?'}",
+    )
+    return saved
 
 
 def _analyze_single_media(
@@ -139,13 +218,13 @@ def _analyze_single_media(
 
     requested_model = (model or "").strip()
     resolved_model = resolve_gemini_model(model)
+    cached = load_cached_media_for_asset(
+        project, folder_name, resolved_path, scope=scope
+    )
 
     if has_successful_asset_cache(
         project, folder_name, resolved_path, model=resolved_model, scope=scope
-    ):
-        cached = load_cached_media_for_asset(
-            project, folder_name, resolved_path, scope=scope
-        )
+    ) and watermark_check_is_current(cached):
         assert cached is not None
         _log(project, f"SKIP (Cache ok) {folder_name}/{resolved_path.name}")
         return cached, "cache"
@@ -205,6 +284,54 @@ def _analyze_single_media(
         _log(project, f"ABBRUCH vor Gemini {folder_name}/{resolved_path.name}")
         raise AnalysisCancelledError()
     if use_api:
+        watermark_result = check_frames_for_stock_watermark(
+            frames,
+            media_name=resolved_path.name,
+            folder_name=folder_name,
+            model=resolved_model,
+        )
+        if watermark_result.failed_open:
+            _log(
+                project,
+                f"WARN (Wasserzeichen fail-open) {folder_name}/{resolved_path.name}: "
+                f"{watermark_result.note or 'Prüfung nicht auswertbar'}",
+            )
+        elif watermark_result.blocked:
+            return (
+                _persist_watermark_block(
+                    cache_file=cache_file,
+                    entry=entry,
+                    result=watermark_result,
+                    project=project,
+                    folder_name=folder_name,
+                    media_path=resolved_path,
+                ),
+                "fehler",
+            )
+        else:
+            _apply_watermark_fields(entry, watermark_result)
+            remove_watermark_review_item(
+                project, resolved_path, folder=folder_name
+            )
+
+        if has_successful_asset_cache(
+            project, folder_name, resolved_path, model=resolved_model, scope=scope
+        ):
+            cached_ok = load_cached_media_for_asset(
+                project, folder_name, resolved_path, scope=scope
+            )
+            if cached_ok is not None:
+                _apply_watermark_fields(cached_ok, watermark_result)
+                if not cached_ok.frames_used:
+                    cached_ok.frames_used = entry.frames_used
+                cached_ok = _save_cached_media_safe(cache_file, cached_ok)
+                _log(
+                    project,
+                    f"SKIP (Cache ok, Wasserzeichen geprüft) "
+                    f"{folder_name}/{resolved_path.name}",
+                )
+                return cached_ok, "cache"
+
         try:
             analysis = _analyze_frames_with_retry(
                 project,
@@ -255,6 +382,24 @@ def _analyze_single_media(
                 )
                 return entry, "fehler"
 
+            v3_watermark = stock_watermark_from_v3_defects(
+                analysis.defect_items, analysis.defects
+            )
+            if v3_watermark is not None and v3_watermark.blocked:
+                entry.defect_items = list(analysis.defect_items)
+                entry.defects = analysis.defects
+                return (
+                    _persist_watermark_block(
+                        cache_file=cache_file,
+                        entry=entry,
+                        result=v3_watermark,
+                        project=project,
+                        folder_name=folder_name,
+                        media_path=resolved_path,
+                    ),
+                    "fehler",
+                )
+
             entry.description = analysis.description
             entry.caption = analysis.caption
             entry.content_tags = list(analysis.content_tags)
@@ -274,6 +419,7 @@ def _analyze_single_media(
             # Erfolgreiche Parses speichern keine Rohantwort (kein JSON-Duplikat im Cache).
             entry.analysis_raw_response = ""
             entry.error = None
+            _apply_watermark_fields(entry, watermark_result)
             entry = _save_cached_media_safe(cache_file, entry)
             if entry.error and "Cache konnte nicht geschrieben werden" in entry.error:
                 _log(project, f"FAIL (Cache-Schreibfehler) {folder_name}/{resolved_path.name}: {entry.error}")
@@ -480,7 +626,7 @@ def _analyze_folder(
     analyze_supplements: bool = True,
 ) -> AssetFolderAnalysis:
     media_paths = discover_folder_media_paths(project, folder_name)
-    missing_cache = list_assets_missing_successful_cache(
+    to_process = _list_media_needing_analysis_run(
         project, folder_name, model=model
     )
     open_supplements = (
@@ -492,12 +638,12 @@ def _analyze_folder(
     _log(
         project,
         f"ORDNER {folder_name}: {len(media_paths)} Medien, "
-        f"{len(missing_cache)} ohne JSON: "
-        + ", ".join(path.name for path in missing_cache)
+        f"{len(to_process)} zu prüfen: "
+        + ", ".join(path.name for path in to_process)
         + (f" | {open_supplements} Supplements offen" if open_supplements else ""),
     )
 
-    if not missing_cache and not open_supplements:
+    if not to_process and not open_supplements:
         existing = should_skip_folder_analysis(project, folder_name, media_paths)
         if existing is not None:
             _log(project, f"ORDNER-SKIP {folder_name}: alle JSONs vorhanden")
@@ -520,19 +666,19 @@ def _analyze_folder(
             "folder": folder_name,
             "folder_index": folder_index,
             "folder_count": folder_count,
-            "media_count": len(missing_cache),
-            "missing_cache_count": len(missing_cache),
+            "media_count": len(to_process),
+            "missing_cache_count": len(to_process),
         },
     )
 
     analyzed: dict[str, AssetMediaAnalysis] = {}
     cancelled_mid_folder = False
-    for media_index, media_path in enumerate(missing_cache, start=1):
+    for media_index, media_path in enumerate(to_process, start=1):
         if _is_cancelled(should_cancel):
             cancelled_mid_folder = True
             _log(
                 project,
-                f"ORDNER-ABBRUCH {folder_name} nach {media_index - 1}/{len(missing_cache)} Assets",
+                f"ORDNER-ABBRUCH {folder_name} nach {media_index - 1}/{len(to_process)} Assets",
             )
             break
         on_progress(
@@ -541,7 +687,7 @@ def _analyze_folder(
                 "folder": folder_name,
                 "media_name": media_path.name,
                 "media_index": media_index,
-                "media_count": len(missing_cache),
+                "media_count": len(to_process),
                 "folder_index": folder_index,
                 "folder_count": folder_count,
                 "needs_analysis": True,
@@ -576,7 +722,7 @@ def _analyze_folder(
                     "folder": folder_name,
                     "media_name": media_path.name,
                     "media_index": media_index,
-                    "media_count": len(missing_cache),
+                    "media_count": len(to_process),
                     "folder_index": folder_index,
                     "folder_count": folder_count,
                     "outcome": outcome,
@@ -588,7 +734,7 @@ def _analyze_folder(
             _log(
                 project,
                 f"ORDNER-ABBRUCH {folder_name} während {media_path.name} "
-                f"({media_index - 1}/{len(missing_cache)} fertig)",
+                f"({media_index - 1}/{len(to_process)} fertig)",
             )
             break
         except GeminiNotConfiguredError:
@@ -614,7 +760,7 @@ def _analyze_folder(
                     "folder": folder_name,
                     "media_name": media_path.name,
                     "media_index": media_index,
-                    "media_count": len(missing_cache),
+                    "media_count": len(to_process),
                     "outcome": "fehler",
                     "error": str(exc),
                 },
@@ -645,7 +791,7 @@ def _analyze_folder(
     inventory_saved = sync_folder_inventory_with_status(project, folder_name)
     _log(
         project,
-        f"ORDNER-FERTIG {folder_name}: {len(missing_cache)} geplant, "
+        f"ORDNER-FERTIG {folder_name}: {len(to_process)} geplant, "
         f"{len(analyzed)} analysiert, inventory_saved={inventory_saved}"
         + (" (abgebrochen)" if cancelled_mid_folder else ""),
     )

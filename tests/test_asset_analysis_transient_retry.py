@@ -203,7 +203,11 @@ def test_supplements_return_after_a_failed_folder_run(tmp_path, frames, monkeypa
     analyze_asset_folders(project, [FOLDER], use_api=True)
 
     inventory_path = get_folder_inventory_path(project.work_dir_path, FOLDER)
-    assert not inventory_path.is_file(), "Ordner nicht grün → JSON entfernt"
+    assert inventory_path.is_file()
+    rows_partial = {a.path: a for a in load_folder_inventory(project, FOLDER).assets}
+    assert str(good) in rows_partial
+    assert str(supplement) in rows_partial
+    assert str(bad) not in rows_partial
     assert supplement.is_file(), "die Mediendatei bleibt in jedem Fall liegen"
 
     # Zweiter Lauf, diesmal ohne Fehler.

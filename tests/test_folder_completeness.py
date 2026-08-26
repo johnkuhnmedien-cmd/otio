@@ -55,12 +55,21 @@ def test_partial_folder_is_not_complete_with_stale_inventory(
 
     state = get_folder_analysis_state(project, "Grand Canyon")
     assert state == FolderAnalysisState.PARTIAL
-    # Status-Anzeige löscht stale Inventory nicht mehr; Sync räumt auf.
-    from otio_app.services.inventory_loader import sync_folder_inventory_with_status
+    from otio_app.services.inventory_loader import (
+        load_folder_inventory_file,
+        sync_folder_inventory_with_status,
+    )
+    from otio_app.services.inventory_prompt_view import slim_inventory_path_for
 
     assert project.folder_inventory_path("Grand Canyon").is_file()
     sync_folder_inventory_with_status(project, "Grand Canyon")
-    assert not project.folder_inventory_path("Grand Canyon").is_file()
+    inventory_path = project.folder_inventory_path("Grand Canyon")
+    assert inventory_path.is_file()
+    item = load_folder_inventory_file(inventory_path)
+    assert item is not None
+    assert [Path(asset.path).name for asset in item.assets] == ["clip.mp4"]
+    assert slim_inventory_path_for(inventory_path).is_file()
+    assert get_folder_analysis_state(project, "Grand Canyon") == FolderAnalysisState.PARTIAL
 
 
 def test_inventory_written_only_when_all_assets_done(

@@ -429,6 +429,12 @@ def _render_analysis_actions(
         st.divider()
 
     st.markdown("**Asset-Ordner** — Gemini analysiert nur Frame-Bilder (kostenpflichtig).")
+    st.caption(
+        "Vor der Beschreibung prüft der Lauf die Frames auf Stock-Wasserzeichen "
+        "(z. B. zentriertes Adobe-Stock-Logo). Getroffene Clips werden nicht als "
+        "analysiert übernommen; die Liste liegt als `watermark_review.txt` im "
+        "Arbeitsordner."
+    )
     if without_voiceover:
         st.caption(
             "Ohne Voice-Over: Hauptassets hier analysieren. Fehlende Cut-Plan-/"
@@ -498,6 +504,25 @@ def _render_analysis_actions(
             update_project_selection(project.id, folders)
             if _start_asset_analysis_background(project, folders, selected_model):
                 st.rerun()
+
+    from otio_app.services.asset_watermark_check import (
+        format_watermark_review_banner,
+        load_watermark_review_items,
+        watermark_review_txt_path,
+    )
+
+    watermark_review_items = load_watermark_review_items(project)
+    if watermark_review_items:
+        review_txt = watermark_review_txt_path(project)
+        st.warning(
+            format_watermark_review_banner(len(watermark_review_items), review_txt)
+        )
+        preview = watermark_review_items[:8]
+        for item in preview:
+            provider = item.provider.replace("_", " ") if item.provider else "Stock"
+            st.caption(f"• `{item.folder}` / `{item.filename}` — {provider}")
+        if len(watermark_review_items) > 8:
+            st.caption(f"… und {len(watermark_review_items) - 8} weitere")
 
     from otio_app.services.cut_plan_inventory_bridge import (
         analyze_and_import_missing_supplement_assets,
