@@ -82,6 +82,14 @@ from otio_app.services.without_voiceover_enhanced.script_prompts import (
     build_enhanced_folder_script_prompt,
     build_enhanced_script_revision_prompt,
 )
+from otio_app.services.without_voiceover_enhanced.script_options import (
+    is_asset_grounded_script_mode,
+    load_script_options,
+    normalize_script_mode,
+)
+from otio_app.services.without_voiceover_enhanced.script_asset_palette import (
+    build_chapter_visual_palette_text,
+)
 from otio_app.services.without_voiceover_enhanced.script_opening_inventory import (
     build_opening_inventory_prompt_block,
     clear_opening_inventory,
@@ -871,6 +879,7 @@ def generate_enhanced_script_for_folder(
     model: str = "gpt-5.4-mini",
     max_output_tokens: int | None = DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS,
     llm_callable: Callable[..., Any] | None = None,
+    script_mode: str | None = None,
 ) -> FolderScriptBuildResult:
     entries = list_enabled_dramaturgy_folders(project)
     if not entries:
@@ -893,6 +902,26 @@ def generate_enhanced_script_for_folder(
     target, min_words, max_words = _word_targets_for_folder(project, entry)
     folder_slug = safe_folder_slug(folder_name)
     existing_draft = load_script_draft(project)
+    resolved_mode = (
+        normalize_script_mode(script_mode)
+        if script_mode is not None
+        else load_script_options(project).script_mode
+    )
+    chapter_visual_palette_text = ""
+    if is_asset_grounded_script_mode(resolved_mode):
+        chapter_visual_palette_text = build_chapter_visual_palette_text(
+            project, folder_name
+        )
+        if not chapter_visual_palette_text.strip():
+            return FolderScriptBuildResult(
+                folder_name=folder_name,
+                status="FAIL",
+                error=(
+                    f"Kein Slim-Inventar für „{folder_name}“. "
+                    "Für Skript aus vorhandenem Material zuerst ① Analysen "
+                    "für diesen Ordner ausführen."
+                ),
+            )
     setting = _folder_voiceover_setting_for(project, folder_name)
     allow_from = bool(setting and setting.transition_from_previous)
     allow_to = bool(setting and setting.transition_to_next)
@@ -963,6 +992,7 @@ def generate_enhanced_script_for_folder(
                     next_folder_name=next_name,
                     language=project.language,
                 ),
+                chapter_visual_palette_text=chapter_visual_palette_text,
             )
 
             if llm_callable is not None:
@@ -1161,6 +1191,7 @@ def generate_all_enhanced_scripts(
     llm_callable: Callable[..., Any] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
     replace_existing: bool = True,
+    script_mode: str | None = None,
 ) -> list[FolderScriptBuildResult]:
     """Erzeugt alle aktiven Dramaturgie-Kapitel sequenziell (Reihenfolge = order_index).
 
@@ -1186,6 +1217,7 @@ def generate_all_enhanced_scripts(
                 model=model,
                 max_output_tokens=max_output_tokens,
                 llm_callable=llm_callable,
+                script_mode=script_mode,
             )
         )
     return results

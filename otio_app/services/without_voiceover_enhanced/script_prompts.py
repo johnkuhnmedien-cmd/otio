@@ -207,6 +207,66 @@ BAD: "Das Bild zeigt Berge bei Sonnenuntergang."
 GOOD: "Am Abend, wenn die Sonne hinter den Gipfeln verschwindet, beginnen die Felsen beinahe wie Kristalle zu funkeln."
 """
 
+ASSET_GROUNDED_SCRIPT_RULES = """\
+ASSET-GROUNDED SCRIPT MODE (BINDING)
+
+You receive CHAPTER VISUAL PALETTE for THIS folder only.
+It is a visual palette and a constraint — not a rundown, not a shot list,
+and not a checklist of files to mention.
+
+WHAT TO WRITE
+- A mini-documentary about this place: history, origin, development,
+  landmarks/sights (castle, church, named buildings), geographic and cultural
+  peculiarities, verified local facts.
+- Use ONLY PROJECT BRIEF + VERIFIED FACTS / METADATA for historical, geographic,
+  and cultural claims. Captions are not a source of years, legends, or superlatives.
+- Begin with the place or its defining sight — not with a picture description.
+- Go into the sights that belong to this chapter (for example a castle or a church):
+  dedication, origin, function, documented tradition. Do not stay at postcard level.
+
+WHAT NOT TO WRITE
+- Do NOT narrate the inventory or travel through the files.
+- Do NOT mention every asset. Do NOT stretch the text to use leftover files.
+- Do NOT repeat the same establishing motif in different words
+  (e.g. lake + island + castle as a postcard, then again, then again).
+- Do NOT describe an image just because it exists, and do not strain to paint
+  remaining clusters.
+- NEVER speak asset IDs, filenames, "aerial", "drone", "Luftaufnahme",
+  "im Vordergrund", "hier sehen wir", "das Bild zeigt", "als Nächstes".
+- Do NOT copy caption adjectives (malerisch, markant, atemberaubend).
+- Incidental people/activity in the palette is not a chapter topic unless it is
+  historically or culturally relevant.
+
+WHEN A VISUAL DETAIL MAY ENTER THE PROSE
+- Only when it truly fits a fact, a sight, or a cultural explanation you are
+  already making.
+- Prefer details that CHAPTER VISUAL PALETTE actually shows.
+- There is NO quota: no minimum and no maximum number of visual touches.
+  Use a visible detail only when it really fits; otherwise leave it unspoken.
+
+FACTS vs PICTURES
+- Prefer to stay with what the available material can show.
+- If a detail is important to the place or the sight (history, dedication,
+  origin, a well-known count of steps, a documented tradition), include it
+  even when no matching asset exists. Do not drop an important fact only
+  because the palette has no close-up of it.
+- Mark unverified legends as tradition / Überlieferung, never as hard fact.
+- Do NOT invent a close-up or interior the palette does not contain and then
+  describe it as if it were on screen.
+- If many files show one motif, collapse them: one motif → at most one spoken beat.
+
+DRAMATURGY remains silent editorial guidance (role, arc, order, CTAs, word count).
+Do not verbalize it. Do not turn it into journey/road narration.
+
+BAD:
+"Hier sehen wir zuerst die Burg auf dem Felsen, dann die Inselkirche im Abendlicht,
+danach die Pletnas am Steg."
+
+GOOD:
+"Die Burg Bled wird im Jahr eintausendelf urkundlich genannt. Die Marienkirche
+ist Mariä Himmelfahrt geweiht; der weiße Turm steht aus einem dichten Baumkranz."
+"""
+
 # Rückwärtskompatibel für Legacy-Prompts / Imports.
 _SHARED_SCRIPT_RULES = _SHARED_SCRIPT_CORE_RULES + "\n" + _DEFAULT_DOCUMENTARY_STYLE_RULES
 
@@ -435,8 +495,13 @@ def build_enhanced_folder_script_prompt(
     style_is_raw_chapter: bool = False,
     repair_instruction: str = "",
     chapter_end_cta_text: str = "",
+    chapter_visual_palette_text: str = "",
 ) -> str:
-    """Ein Dramaturgie-Kapitel / Ordner — nur gesprochene Narration (keine Assets)."""
+    """Ein Dramaturgie-Kapitel / Ordner — nur gesprochene Narration.
+
+    Ohne ``chapter_visual_palette_text``: Bilder erst im Cut.
+    Mit Palette: asset-grounded — Inventar als Motiv-Palette, kein Shotlist-Skript.
+    """
     forbidden = "\n".join(f'- "{p}"' for p in FORBIDDEN_PHRASES)
     id_prefix = f"{folder_slug}_"
 
@@ -485,6 +550,9 @@ def build_enhanced_folder_script_prompt(
     opening_inventory_block = _optional_block(opening_inventory_text)
     repair_block = _optional_block(repair_instruction)
     cta_block = _optional_block(chapter_end_cta_text)
+    palette_text = (chapter_visual_palette_text or "").strip()
+    asset_grounded_rules = ASSET_GROUNDED_SCRIPT_RULES if palette_text else ""
+    palette_block = _optional_block(palette_text)
 
     body_words_line = (
         f"- target_words: {target_words} (soft target; stay within {min_words}-{max_words})"
@@ -527,6 +595,7 @@ You are writing documentary narration for ONE chapter of a multi-location travel
 LANGUAGE: {language}
 
 {shared_rules}
+{asset_grounded_rules}
 {priority_block}{early_style_block}
 STRICTLY AVOID these phrases and patterns:
 {forbidden}
@@ -559,7 +628,7 @@ THIS CHAPTER DRAMATURGY:
 {late_style_block}
 VERIFIED FACTS / METADATA (only these may be stated as facts):
 {verified_facts_text}
-"""
+{palette_block}"""
 
 
 def build_rough_cut_prompt(

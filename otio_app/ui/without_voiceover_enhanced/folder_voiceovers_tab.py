@@ -32,6 +32,16 @@ from otio_app.services.without_voiceover_enhanced.script_author_service import (
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
     DEFAULT_ENHANCED_SCRIPT_REVISION_INSTRUCTIONS,
 )
+from otio_app.services.without_voiceover_enhanced.script_options import (
+    SCRIPT_MODE_CHOICES,
+    SCRIPT_MODE_LABELS_DE,
+    is_asset_grounded_script_mode,
+    load_script_options,
+    save_script_options,
+)
+from otio_app.services.without_voiceover_enhanced.script_asset_palette import (
+    folder_has_visual_palette,
+)
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     ScriptLockError,
     load_locked_script,
@@ -108,14 +118,43 @@ def _run_all_script_revisions(
     st.rerun()
 
 
-def _render_model_and_tokens(project) -> tuple[str, str, int]:
+def _render_script_mode(project) -> str:
+    stored = load_script_options(project)
+    key = f"enh_script_mode_{project.id}"
+    if key not in st.session_state:
+        st.session_state[key] = stored.script_mode
+    mode = st.radio(
+        "Skriptmodus",
+        options=list(SCRIPT_MODE_CHOICES),
+        format_func=lambda value: SCRIPT_MODE_LABELS_DE.get(value, value),
+        key=key,
+        help=(
+            "Freies Skript schreibt aus Brief und Dramaturgie; Bilder kommen erst im Cut. "
+            "Aus vorhandenem Material bekommt das LLM die Slim-Inventory dieses Kapitels "
+            "als Motiv-Palette: es erzählt den Ort und die Sehenswürdigkeiten, beschreibt "
+            "Bilder nur beiläufig wenn es wirklich passt, und lässt wichtige Details nicht "
+            "weg nur weil kein passendes Asset da ist."
+        ),
+    )
+    if mode != stored.script_mode:
+        save_script_options(project, stored.model_copy(update={"script_mode": mode}))
+    return str(mode)
+
+
+def _render_model_and_tokens(project) -> tuple[str, str, int, str]:
     settings = load_model_settings(project)
     with st.expander("⚙️ Modell für Skripterzeugung", expanded=True):
+        script_mode = _render_script_mode(project)
+        info_key = (
+            "enhanced_script_asset_grounded"
+            if is_asset_grounded_script_mode(script_mode)
+            else "enhanced_script"
+        )
         role_settings = render_llm_model_selectbox(
             label="Modell (LLM-Lauf 1)",
             role_settings=settings.voiceover_author,
             key=f"enh_script_model_{project.id}",
-            input_info=LLM_INPUT_INFO["enhanced_script"],
+            input_info=LLM_INPUT_INFO[info_key],
         )
         if st.button("Modell speichern", key=f"enh_script_model_save_{project.id}"):
             updated = settings.model_copy(update={"voiceover_author": role_settings})
@@ -136,7 +175,7 @@ def _render_model_and_tokens(project) -> tuple[str, str, int]:
             "Bei Truncation Limit erhöhen."
         ),
     )
-    return role_settings.provider, role_settings.model, int(max_tokens)
+    return role_settings.provider, role_settings.model, int(max_tokens), script_mode
 
 
 def _render_generation_controls(
@@ -145,6 +184,7 @@ def _render_generation_controls(
     provider: str,
     model: str,
     max_tokens: int,
+    script_mode: str,
 ) -> None:
     entries = list_enabled_dramaturgy_folders(project)
     if not entries:
@@ -170,6 +210,17 @@ def _render_generation_controls(
             f"{'✓' if name in present else '○'} · {name}"
         ),
     )
+    if is_asset_grounded_script_mode(script_mode):
+        if selected and not folder_has_visual_palette(project, selected):
+            st.warning(
+                f"Kein Slim-Inventar für „{selected}“. "
+                "Für diesen Modus zuerst ① Analysen für den Ordner ausführen."
+            )
+        else:
+            st.caption(
+                "Motiv-Palette aus der Slim-Inventory dieses Kapitels — "
+                "ähnliche Dateien sind zusammengefasst, keine Shotliste."
+            )
 
     col_one, col_all = st.columns(2)
     with col_one:
@@ -184,6 +235,7 @@ def _render_generation_controls(
                 provider=provider,
                 model=model,
                 max_tokens=max_tokens,
+                script_mode=script_mode,
             )
 
     with col_all:
@@ -203,6 +255,7 @@ def _render_generation_controls(
                     model=model,
                     max_output_tokens=max_tokens,
                     progress_callback=_progress,
+                    script_mode=script_mode,
                 )
             progress.empty()
             ok = [r for r in results if r.status == "PASS"]
@@ -242,6 +295,7 @@ def _run_chapter_generation(
     provider: str,
     model: str,
     max_tokens: int,
+    script_mode: str,
 ) -> None:
     with st.spinner(f"Skript für „{folder_name}“ wird erzeugt…"):
         result = generate_enhanced_script_for_folder(
@@ -250,6 +304,7 @@ def _run_chapter_generation(
             provider=provider,
             model=model,
             max_output_tokens=max_tokens,
+            script_mode=script_mode,
         )
     if result.status == "PASS":
         # Clear cached text widgets so the new narration shows immediately.
@@ -472,14 +527,23 @@ def _render_chapter_scripts(
 
 def render_enhanced_folder_voiceovers_page() -> None:
     st.header("④ Folder Voice-overs / Skripterzeugung (Enhanced)")
-    st.caption(
-        "Redaktionelle Narration pro Dramaturgie-Kapitel — "
-        "ein LLM-Call und ein Skript pro Kapitel (wie in der klassischen Pipeline). "
-        "Assets sind visuelle Ressource, keine Inhaltsgrenze."
-    )
     project = get_enhanced_project()
     if project is None:
         return
+
+    script_mode_preview = load_script_options(project).script_mode
+    if is_asset_grounded_script_mode(script_mode_preview):
+        st.caption(
+            "Redaktionelle Narration pro Dramaturgie-Kapitel. "
+            "Im Modus **Skript aus vorhandenem Material** kennt das LLM die "
+            "Slim-Inventory des Kapitels als Motiv-Palette — nicht als Shotliste."
+        )
+    else:
+        st.caption(
+            "Redaktionelle Narration pro Dramaturgie-Kapitel — "
+            "ein LLM-Call und ein Skript pro Kapitel (wie in der klassischen Pipeline). "
+            "Assets sind visuelle Ressource, keine Inhaltsgrenze."
+        )
 
     confirmed = load_confirmed_dramaturgy(project)
     if confirmed is None:
@@ -488,10 +552,14 @@ def render_enhanced_folder_voiceovers_page() -> None:
             "die Skripte folgen der bestätigten Kapitel-Reihenfolge."
         )
 
-    provider, model, max_tokens = _render_model_and_tokens(project)
+    provider, model, max_tokens, script_mode = _render_model_and_tokens(project)
     st.divider()
     _render_generation_controls(
-        project, provider=provider, model=model, max_tokens=max_tokens
+        project,
+        provider=provider,
+        model=model,
+        max_tokens=max_tokens,
+        script_mode=script_mode,
     )
 
     draft = load_script_draft(project)

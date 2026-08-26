@@ -18,6 +18,7 @@ EXPORTS_SUBDIR = "exports"
 PLACEHOLDERS_SUBDIR = "placeholders"
 STOCK_PROVIDERS_CONFIG_FILENAME = "stock_providers.json"
 CUT_PLAN_OPTIONS_FILENAME = "cut_plan_options.json"
+SCRIPT_OPTIONS_FILENAME = "script_options.json"
 
 SCRIPT_LOCKED_FILENAME = "script_locked.json"
 SCRIPT_DRAFT_FILENAME = "script_draft.json"
@@ -157,6 +158,10 @@ def stock_providers_config_path(project: Project) -> Path:
 
 def cut_plan_options_path(project: Project) -> Path:
     return config_dir(project) / CUT_PLAN_OPTIONS_FILENAME
+
+
+def script_options_path(project: Project) -> Path:
+    return config_dir(project) / SCRIPT_OPTIONS_FILENAME
 
 
 def maps_dir(project: Project) -> Path:
