@@ -1267,6 +1267,8 @@ def test_folder_script_prompt_binds_to_dramaturgy_chapter() -> None:
     assert "SPOKEN NUMBERS" in prompt
     assert "never Arabic digits" in prompt
     assert "LOCAL ASSETS" not in prompt
+    assert "CHAPTER VISUAL PALETTE" not in prompt
+    assert "ASSET-GROUNDED SCRIPT MODE" not in prompt
     assert "visual_intents" not in prompt
     for phrase in FORBIDDEN_PHRASES:
         assert phrase in prompt

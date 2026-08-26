@@ -62,7 +62,7 @@ def render_enhanced_auto_run_page() -> None:
     st.write(
         "Ein Klick startet **Schritt für Schritt** alles ab Project Brief "
         "bis zum gewählten Ziel: **Supplement-Funnel** oder **YouTube Publish**. "
-        "Kapitel-Skripte zuerst komplett, danach "
+        "Kapitel-Skripte zuerst komplett (Skriptmodus aus ④ Folder Voice-overs), danach "
         "Freitext-Nachbearbeitung, erst dann Script Lock. **⓪ Clean Media**, "
         "**① Analysen** und **SFX** bleiben manuell. Danach: Stocksuche (Wikimedia, Openverse, "
         "Archive.org) → alle offenen Gaps → (optional) Python Timing (Kapitel parallel) → "
@@ -179,7 +179,8 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
         st.subheader("▶ Auto-Lauf")
     st.caption(
         "Ein Button, **Schritt für Schritt**: Brief + Titel → Style → "
-        "Dramaturgie (auto-bestätigen) → Kapitel-Skripte → Freitext-Nachbearbeitung "
+        "Dramaturgie (auto-bestätigen) → Kapitel-Skripte (Skriptmodus aus ④) → "
+        "Freitext-Nachbearbeitung "
         "→ Script Lock → Intro (erste gültige Variante) → TTS → Intro-Cut → "
         "alle Kapitel-Cuts → Stocksuche (Wikimedia/Openverse/Archive.org) → "
         "alle offenen Gaps. **bis Funnel** stoppt dort; **bis YouTube** macht "

@@ -127,6 +127,13 @@ LLM_INPUT_INFO = {
         "Fakten/Metadaten. LLM liefert Skript + rhetoric_usage. "
         "Ein Call = nur dieses Kapitel — kein Inventar, keine Asset-Zuordnung."
     ),
+    "enhanced_script_asset_grounded": (
+        "Wie Freies Skript, plus Slim-Inventory dieses Kapitels als Motiv-Palette "
+        "(ähnliche Dateien sind zu Clustern zusammengefasst). "
+        "Dramaturgie bleibt stilles Gerüst. Keine Asset-IDs im gesprochenen Text. "
+        "Bilder nur beiläufig, wenn sie zu Geschichte/Sehenswürdigkeit passen; "
+        "wichtige Details nicht weglassen, nur weil kein passendes Asset da ist."
+    ),
     "enhanced_script_revision": (
         "Nur dein Freitext + das bereits erzeugte Kapitel-Skript "
         "(inkl. [pause N seconds]-Marker). "
