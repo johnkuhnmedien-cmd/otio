@@ -95,7 +95,8 @@ def render_enhanced_maps_page() -> None:
     st.header("③½ Karten")
     st.caption(
         "Plant Eröffnungs- und Übergangskarten aus der bestätigten Dramaturgie. "
-        "Rendern startet nur nach einem ausdrücklichen Klick."
+        "Rendern startet hier per Klick oder im Auto-Lauf nach dem Funnel "
+        "(Plan, Koordinaten prüfen/bestätigen, alle Karten rendern)."
     )
     project = get_enhanced_project()
     if project is None:

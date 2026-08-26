@@ -576,7 +576,9 @@ def test_packaged_renderer_has_no_thomas_paths() -> None:
             assert token not in text, f"{token} in {path}"
     assert "PAGE_MAPS" not in AUTO_RUN_STEPS[0]
     assert PAGE_MAPS not in VOICEOVER_GEN_WORKFLOW_PAGES
-    assert "maps" not in {step_id for step_id, _label in AUTO_RUN_STEPS}
+    ids = [step_id for step_id, _label in AUTO_RUN_STEPS]
+    assert "maps" in ids
+    assert ids.index("funnel") < ids.index("maps") < ids.index("timing")
 
 
 def test_map_render_job_read_path_does_not_migrate_or_mkdir(tmp_path: Path) -> None:
