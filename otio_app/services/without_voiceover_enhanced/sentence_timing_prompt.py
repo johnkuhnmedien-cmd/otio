@@ -13,6 +13,10 @@ from otio_app.services.without_voiceover_enhanced.models import (
     SentenceTiming,
 )
 from otio_app.services.without_voiceover_enhanced.paths import segment_timestamps_path
+from otio_app.services.without_voiceover_enhanced.cjk_timing_text import (
+    char_timing_run_class,
+    should_split_timing_run,
+)
 from otio_app.services.without_voiceover_enhanced.segment_alignment_service import (
     load_segment_alignments,
 )
@@ -77,7 +81,11 @@ def load_elevenlabs_alignment_for_segment(
 
 
 def words_from_elevenlabs_alignment(alignment: dict[str, Any]) -> list[dict[str, Any]]:
-    """Character-Timestamps → Wörter (Segment-relativ)."""
+    """Character-Timestamps → Wörter (Segment-relativ).
+
+    Latin: nur Whitespace (unverändert). JP/KR zusätzlich Phrase-Satzzeichen
+    (``、。`` …) und Schriftwechsel, damit Keyword Flow Innen-Onsets hat.
+    """
     chars = alignment.get("characters") or []
     starts = alignment.get("character_start_times_seconds") or []
     ends = alignment.get("character_end_times_seconds") or []
@@ -89,9 +97,10 @@ def words_from_elevenlabs_alignment(alignment: dict[str, Any]) -> list[dict[str,
     buf_chars: list[str] = []
     buf_start: float | None = None
     buf_end: float | None = None
+    prev_class: str | None = None
 
     def _flush() -> None:
-        nonlocal buf_chars, buf_start, buf_end
+        nonlocal buf_chars, buf_start, buf_end, prev_class
         text = "".join(buf_chars).strip()
         if text and buf_start is not None and buf_end is not None:
             words.append(
@@ -104,6 +113,7 @@ def words_from_elevenlabs_alignment(alignment: dict[str, Any]) -> list[dict[str,
         buf_chars = []
         buf_start = None
         buf_end = None
+        prev_class = None
 
     for index in range(n):
         ch = str(chars[index])
@@ -112,10 +122,21 @@ def words_from_elevenlabs_alignment(alignment: dict[str, Any]) -> list[dict[str,
         if ch.isspace():
             _flush()
             continue
+        run_class = char_timing_run_class(ch)
+        if run_class == "cjk_punct":
+            if buf_start is None:
+                buf_start = start
+            buf_chars.append(ch)
+            buf_end = end
+            _flush()
+            continue
+        if prev_class and should_split_timing_run(prev_class, run_class):
+            _flush()
         if buf_start is None:
             buf_start = start
         buf_chars.append(ch)
         buf_end = end
+        prev_class = run_class
     _flush()
     return words
 
