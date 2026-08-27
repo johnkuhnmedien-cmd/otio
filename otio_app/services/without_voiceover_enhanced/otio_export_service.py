@@ -1102,6 +1102,15 @@ def export_otio_from_resolved_timeline(
             source_duration=source_duration,
         )
         video_track.append(clip)
+        planned = max(
+            0.0,
+            float(shot.timeline_end_seconds) - float(shot.timeline_start_seconds),
+        )
+        remainder = planned - source_duration
+        if remainder > 1e-3:
+            video_track.append(
+                otio.schema.Gap(source_range=_time_range(remainder, fps))
+            )
         cursor = shot.timeline_end_seconds
 
     audio_cursor = 0.0
