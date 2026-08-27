@@ -1,4 +1,4 @@
-"""Keyword-Flow: deterministischer 9s-Map-Opener vor Kapitel-VO."""
+"""9s-Map-Opener vor Kapitel-VO — unabhängig vom Unified-Cut-Stil."""
 
 from __future__ import annotations
 
@@ -19,10 +19,14 @@ from otio_app.services.inventory_prompt_view import (
 from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
     is_intro_folder_name,
 )
+from otio_app.services.without_voiceover_enhanced.maps.models import MAP_FPS
 
 # ``EN_Skellig Michael_Map.mp4`` / ``FR_37_Dublin_Map.mp4``
 _LANG_PREFIX_RE = re.compile(r"^([A-Za-z]{2})_(?:(\d+)_)?(.*)$")
 _MAP_SUFFIX_RE = re.compile(r"_?map$", re.IGNORECASE)
+
+# ffprobe-Cache: (path, mtime_ns, size) → Probe-Ergebnis
+_PROBE_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 
 
 @dataclass
@@ -70,6 +74,74 @@ def _chapter_slug_matches(map_chapter_slug: str, chapter_slug: str) -> bool:
     if not left or not right:
         return False
     return left == right or left.startswith(right + "_") or right.startswith(left + "_")
+
+
+def _chapter_ids_match(left: str, right: str) -> bool:
+    a = (left or "").strip()
+    b = (right or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return _chapter_slug_matches(safe_folder_slug(a), safe_folder_slug(b))
+
+
+def map_opener_duration_slack_seconds(fps: float | None = None) -> float:
+    """Ein Frame plus Rundung — Remotion 225@25fps, ffprobe oft (n-1)/fps."""
+    rate = float(fps or MAP_FPS or 25.0)
+    return (1.0 / max(rate, 1.0)) + 1e-3
+
+
+def _parse_frame_rate(raw: object) -> float:
+    text = str(raw or "").strip()
+    if not text or text in {"0/0", "N/A"}:
+        return 0.0
+    if "/" in text:
+        numerator, denominator = text.split("/", 1)
+        try:
+            top = float(numerator)
+            bottom = float(denominator)
+        except ValueError:
+            return 0.0
+        if bottom == 0:
+            return 0.0
+        return top / bottom
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
+def duration_from_probe_payload(payload: dict[str, Any]) -> tuple[float, float]:
+    """Dauer und FPS aus ffprobe-JSON.
+
+    Nimmt das Maximum aus Stream, Format und ``nb_frames / fps``. Gerenderte
+    Karten haben 225 Frames bei 25 fps = 9.0s; die Stream-Dauer ist oft
+    ``224/25 = 8.96s`` (letzter PTS minus erster PTS).
+    """
+    streams = payload.get("streams") or []
+    stream = streams[0] if streams else {}
+    fmt = payload.get("format") or {}
+    fps = _parse_frame_rate(
+        stream.get("avg_frame_rate") or stream.get("r_frame_rate")
+    )
+    durations: list[float] = []
+    for raw in (stream.get("duration"), fmt.get("duration")):
+        try:
+            value = float(raw or 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value > 0:
+            durations.append(value)
+    nb_frames = stream.get("nb_frames")
+    try:
+        frames = int(nb_frames) if str(nb_frames).isdigit() else 0
+    except (TypeError, ValueError):
+        frames = 0
+    if frames > 0 and fps > 0:
+        durations.append(frames / fps)
+    duration = max(durations) if durations else 0.0
+    return duration, (fps or float(MAP_FPS))
 
 
 def _maps_folder_candidates(project: Project) -> list[str]:
@@ -144,7 +216,10 @@ def _list_enhanced_rendered_maps(
     found: list[dict[str, Any]] = []
     if plan is not None:
         for item in plan.maps:
-            if item.chapter_id != chapter_id:
+            if not (
+                _chapter_ids_match(item.chapter_id, chapter_id)
+                or _chapter_ids_match(item.original_chapter_label, chapter_id)
+            ):
                 continue
             path_text = str(item.output_path or "").strip()
             if not path_text:
@@ -325,6 +400,20 @@ def _probe_map_media(path: str) -> dict[str, Any]:
     if str(media).lower().startswith(("http://", "https://")):
         return {"ok": False, "reason": "HTTP-URL unzulässig"}
     try:
+        stat = media.stat()
+        cache_key = (str(media), int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        return {"ok": False, "reason": "Datei fehlt"}
+    cached = _PROBE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    result = _probe_map_media_uncached(media)
+    _PROBE_CACHE[cache_key] = result
+    return result
+
+
+def _probe_map_media_uncached(media: Path) -> dict[str, Any]:
+    try:
         import json
         import subprocess
 
@@ -336,7 +425,8 @@ def _probe_map_media(path: str) -> dict[str, Any]:
                 "-select_streams",
                 "v:0",
                 "-show_entries",
-                "stream=width,height,duration:format=duration",
+                "stream=width,height,duration,nb_frames,avg_frame_rate,r_frame_rate:"
+                "format=duration",
                 "-of",
                 "json",
                 str(media),
@@ -355,11 +445,7 @@ def _probe_map_media(path: str) -> dict[str, Any]:
         stream = streams[0]
         width = float(stream.get("width") or 0)
         height = float(stream.get("height") or 0)
-        duration = float(
-            stream.get("duration")
-            or (payload.get("format") or {}).get("duration")
-            or 0
-        )
+        duration, fps = duration_from_probe_payload(payload)
         if width <= 0 or height <= 0 or duration <= 0:
             return {"ok": False, "reason": "ungültige Geometrie/Dauer"}
         return {
@@ -367,6 +453,7 @@ def _probe_map_media(path: str) -> dict[str, Any]:
             "width": width,
             "height": height,
             "duration_seconds": duration,
+            "fps": fps,
         }
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "reason": f"Probe-Fehler: {exc}"}
@@ -419,7 +506,9 @@ def decide_map_opener(
             media_path=path or None,
         )
     duration = float(probe.get("duration_seconds") or item.get("duration_seconds") or 0.0)
-    if duration + 1e-9 < float(opener_seconds):
+    fps = float(probe.get("fps") or MAP_FPS)
+    slack = map_opener_duration_slack_seconds(fps)
+    if duration + slack < float(opener_seconds):
         return MapOpenerDecision(
             chapter_id=chapter_id,
             status="too_short",
@@ -436,6 +525,46 @@ def decide_map_opener(
         status="used",
         asset_id=str(item.get("asset_id") or "") or None,
         media_path=path,
-        source_duration_seconds=duration,
+        source_duration_seconds=max(duration, float(opener_seconds)),
         opener_seconds=float(opener_seconds),
     )
+
+
+def resolved_timeline_has_map_opener(resolved: Any, chapter_id: str) -> bool:
+    """True wenn die aufgelöste Timeline schon einen Map-Opener fürs Kapitel hat."""
+    if resolved is None:
+        return False
+    for shot in list(getattr(resolved, "shots", None) or []):
+        editorial = str(getattr(shot, "editorial_function", "") or "")
+        if editorial != "technical_chapter_map_opener":
+            continue
+        shot_chapter = str(
+            getattr(shot, "chapter_id", "") or getattr(shot, "folder_name", "") or ""
+        )
+        if _chapter_ids_match(shot_chapter, chapter_id):
+            return True
+        shot_id = str(getattr(shot, "shot_id", "") or "")
+        if shot_id.endswith("_map_opener") and _chapter_ids_match(
+            shot_id[: -len("_map_opener")],
+            safe_folder_slug(chapter_id),
+        ):
+            return True
+    return False
+
+
+def chapter_needs_map_opener_retiming(
+    project: Project,
+    chapter_id: str,
+    resolved: Any,
+) -> bool:
+    """True wenn eine gültige Karte existiert, die Timeline sie aber nicht enthält.
+
+    Skip-done von Python Timing / OTIO darf gerenderte Karten nicht liegen lassen.
+    """
+    if resolved is None:
+        return False
+    if resolved_timeline_has_map_opener(resolved, chapter_id):
+        return False
+    if not _list_map_media_for_chapter(project, chapter_id):
+        return False
+    return decide_map_opener(project, chapter_id).status == "used"

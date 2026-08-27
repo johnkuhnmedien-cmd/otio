@@ -1668,14 +1668,14 @@ def resolve_unified_timeline(
         closing_fallback_by_chapter=dict(plan.closing_fallback_by_chapter or {}),
         head_trim=head_trim,
         short_tolerance=short_tolerance,
-        enable_map_opener=keyword_flow,
-        map_decisions=map_decisions if keyword_flow else None,
+        enable_map_opener=True,
+        map_decisions=map_decisions,
         intro_opener_asset_id=plan.intro_opener_asset_id,
         intro_closing_asset_id=plan.intro_closing_asset_id,
     )
-    if keyword_flow and map_decisions:
+    if map_decisions:
         repairs.append(
-            "keyword_flow_map_decisions: "
+            "map_opener_decisions: "
             + ", ".join(
                 f"{cid}={info.get('status')}" for cid, info in map_decisions.items()
             )

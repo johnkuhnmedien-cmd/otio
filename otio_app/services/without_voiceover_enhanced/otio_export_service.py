@@ -511,12 +511,23 @@ def _ensure_shot_media_for_export(
     # Kein force_transcode im OTIO-Export — Clean gehört in Clean Media.
     # Vorhandenes Clean wird oben bevorzugt; sonst Embedded-TC-Fallback.
 
+    from otio_app.services.without_voiceover_enhanced.keyword_flow_maps import (
+        map_opener_duration_slack_seconds,
+    )
+
+    is_map_opener = (
+        str(shot.editorial_function or "") == "technical_chapter_map_opener"
+    )
+    range_slack = (
+        map_opener_duration_slack_seconds(fps) if is_map_opener else 1e-3
+    )
+
     if probe_avail <= _CAMERA_TC_THRESHOLD_SEC:
         # Clean / kein Kamera-TC: Resolve-sicher file-relativ ab 0.
         avail_start = 0.0
         source_start = content_offset
         source_end = content_offset + source_span
-        if source_end > media_dur + 1e-3:
+        if source_end > media_dur + range_slack:
             raise EnhancedOtioExportError(
                 f"{label}: Source-Range außerhalb der Mediendauer "
                 f"(file-relative {source_start:.3f}–{source_end:.3f}, "
@@ -529,7 +540,7 @@ def _ensure_shot_media_for_export(
         source_start = probe_avail + content_offset
         source_end = source_start + source_span
         avail_end = probe_avail + media_dur
-        if source_start < probe_avail - 1e-6 or source_end > avail_end + 1e-6:
+        if source_start < probe_avail - 1e-6 or source_end > avail_end + range_slack:
             raise EnhancedOtioExportError(
                 f"{label}: Source-Range außerhalb der realen verfügbaren Range "
                 f"(source {source_start:.3f}–{source_end:.3f}, "
@@ -1049,10 +1060,13 @@ def export_otio_from_resolved_timeline(
         _file_avail_start, file_dur, file_rate = _validate_video_file(
             media_path, label=f"{shot.shot_id}", fps=fps
         )
+        available_duration = file_dur
+        if str(shot.editorial_function or "") == "technical_chapter_map_opener":
+            available_duration = max(file_dur, source_duration + float(avail_start))
         media_ref = otio.schema.ExternalReference(
             target_url=str(media_path),
             available_range=_time_range(
-                file_dur, file_rate, start_sec=float(avail_start)
+                available_duration, file_rate, start_sec=float(avail_start)
             ),
         )
         clip = otio.schema.Clip(

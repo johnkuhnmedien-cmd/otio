@@ -439,6 +439,41 @@ def test_production_otio_has_map_and_no_keyword_flow_audio_gaps(tmp_path: Path) 
     assert first.duration().to_seconds() == pytest.approx(9.0, abs=0.08)
 
 
+def test_rhythm_style_inserts_rendered_map_opener(tmp_path: Path) -> None:
+    """Karten gehören in die Timeline unabhängig vom Unified-Stil."""
+    project, ids = _build_chapter_a_project(tmp_path)
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            cut_plan_mode=CUT_PLAN_MODE_UNIFIED,
+            unified_cut_style=UNIFIED_CUT_STYLE_RHYTHM,
+            shot_min_sec=4.0,
+            shot_max_sec=9.0,
+            voiceover_preroll_sec=1.0,
+            voiceover_postroll_sec=2.0,
+            video_head_trim_sec=0.0,
+            still_image_style_enabled=False,
+        ),
+    )
+    plan = _plan_with_pause_and_closing(ids)
+    resolved = resolve_unified_timeline(
+        project, plan, allow_open_gaps=False, persist=True
+    )
+    assert not resolved.errors, resolved.errors
+    assert any(
+        str(s.editorial_function or "") == "technical_chapter_map_opener"
+        for s in resolved.shots
+    )
+    map_shot = next(
+        s
+        for s in resolved.shots
+        if str(s.editorial_function or "") == "technical_chapter_map_opener"
+    )
+    assert map_shot.timeline_end_seconds - map_shot.timeline_start_seconds == pytest.approx(
+        9.0, abs=0.08
+    )
+
+
 def test_old_plan_with_pause_directives_blocks_resolve(tmp_path: Path) -> None:
     from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
         UnifiedTimelineError,

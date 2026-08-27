@@ -96,7 +96,10 @@ def render_enhanced_maps_page() -> None:
     st.caption(
         "Plant Eröffnungs- und Übergangskarten aus der bestätigten Dramaturgie. "
         "Rendern startet hier per Klick oder im Auto-Lauf nach dem Funnel "
-        "(Plan, Koordinaten prüfen/bestätigen, alle Karten rendern)."
+        "(Plan, Koordinaten prüfen/bestätigen, alle Karten rendern). "
+        "Python Timing setzt gültige Karten als 9s-Kapitelöffner in die Timeline "
+        "(unabhängig vom Unified-Stil); OTIO übernimmt sie von dort. "
+        "Wenn die Karten erst nach dem Timing gerendert wurden: Timing erneut."
     )
     project = get_enhanced_project()
     if project is None:

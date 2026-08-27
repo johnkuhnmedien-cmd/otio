@@ -1691,7 +1691,7 @@ def _apply_chapter_envelopes(
         chapter_preroll = float(preroll)
         chapter_postroll = float(postroll)
         map_shot: ResolvedShot | None = None
-        if enable_map_opener:
+        if enable_map_opener and not _is_intro_folder(chapter_id):
             from otio_app.services.without_voiceover_enhanced.keyword_flow_maps import (
                 decide_map_opener,
             )
@@ -1706,7 +1706,9 @@ def _apply_chapter_envelopes(
                     "source_duration_seconds": decision.source_duration_seconds,
                     "opener_seconds": decision.opener_seconds,
                 }
-            if decision.warning:
+            # ``missing`` ist der Normalfall ohne Karten — nicht jeder Rhythmus-
+            # Kapitel-Repair-Log mit „keine Map gefunden“ füllen.
+            if decision.warning and decision.status not in {"missing", "skipped_intro"}:
                 repairs.append(decision.warning)
             if decision.status == "used" and decision.media_path:
                 chapter_preroll = float(decision.opener_seconds)
@@ -1727,7 +1729,7 @@ def _apply_chapter_envelopes(
                         decision.source_duration_seconds or decision.opener_seconds
                     ),
                     asset_fit="strong",
-                    asset_fit_reason="keyword_flow map opener (audio ignored)",
+                    asset_fit_reason="map opener (audio ignored)",
                 )
                 repairs.append(
                     f"Kapitel {chapter_id}: Map-Opener {decision.opener_seconds:.1f}s "

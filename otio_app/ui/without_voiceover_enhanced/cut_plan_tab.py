@@ -2084,7 +2084,10 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         f"{chapter_count} Kapitel ohne Intro) → "
         "`cut/chapters/{slug}/unified_cut_plan.json`. "
         "**Python Timing parallel**. "
-        "**Alle** = jedes Kapitel erneut; **Offene** = nur fehlende."
+        "**Alle** = jedes Kapitel erneut; **Offene** = nur fehlende. "
+        "Gerenderte Karten werden beim Timing als 9s-Opener vor die Kapitel-VO "
+        "gesetzt — auch im Rhythmus-Stil. Nachträglich gerenderte Karten "
+        "öffnen das Timing wieder."
     )
     st.caption(
         f"Offen: {len(open_llm_names)} ohne LLM-Plan · "
