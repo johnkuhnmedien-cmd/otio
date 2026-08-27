@@ -219,7 +219,10 @@ def render_enhanced_maps_page() -> None:
     st.subheader("Koordinaten")
     st.caption(
         "Vorhandene Werte aus dem Projekt werden bevorzugt. "
-        "Schon gefundene Orte werden nicht erneut bei Nominatim abgefragt. "
+        "Die Prüfung fragt Nominatim (englischer Ländername, ISO-Code), "
+        "danach Photon und Wikipedia. Fehlt weiter ein Treffer, schreibt das "
+        "Brief-LLM einen OSM-Namen bzw. die Koordinaten der nächsten Stadt — "
+        "nie die Cut-Modelle. Schon gefundene Orte werden nicht erneut abgefragt. "
         "Unsichere Treffer rendern nicht automatisch — bitte mit "
         "„Koordinaten bestätigen“ oder „Koordinaten speichern“ freigeben."
     )
@@ -375,6 +378,7 @@ def render_enhanced_maps_page() -> None:
                 plan=plan,
                 coordinates=coordinates,
                 on_progress=on_progress,
+                llm_rewrite=True,
             )
             save_map_plan(project, rebuilt)
             found = sum(1 for item in seen if item.endswith(": gefunden"))

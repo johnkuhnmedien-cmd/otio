@@ -19,19 +19,26 @@ from otio_app.services.voiceover_generation.models import (
 from otio_app.services.without_voiceover_enhanced.maps import geocode_service as geocode_mod
 from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
     NOMINATIM_USER_AGENT,
+    LlmPlaceSuggestion,
     friendly_geocode_error,
+    geocode_query_variants,
     lookup_missing_coordinates,
     nominatim_geocode,
     reset_nominatim_client_for_tests,
 )
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     COORDINATE_STATUS_MANUAL,
+    COORDINATE_STATUS_NEEDS_REVIEW,
     MapCoordinatesDocument,
 )
 from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     build_map_plan,
     save_map_coordinates,
     update_coordinate_record,
+)
+from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
+    country_iso2,
+    country_label,
 )
 
 
@@ -313,3 +320,232 @@ def test_lookup_skips_chapter_that_already_has_coordinates(tmp_path: Path) -> No
         cache_path=tmp_path / "unused.json",
     )
     assert calls == ["Meteora"]
+
+
+def test_geocode_query_variants_prefer_english_country() -> None:
+    variants = geocode_query_variants("Baradla Cave", "Ungarn")
+    assert variants[0] == "Baradla Cave, Hungary"
+    assert "Baradla Cave, Ungarn" in variants
+    assert "Baradla Cave" in variants
+    numbered = geocode_query_variants("3: The Bat Colony", "Ungarn")
+    assert "The Bat Colony, Hungary" in numbered
+    assert "Bat Colony, Hungary" in numbered
+
+
+def test_geocode_query_variants_slowenien_and_german_landmarks() -> None:
+    variants = geocode_query_variants("Vintgar-Klamm", "Slowenien")
+    assert "Vintgar Gorge, Slovenia" in variants
+    assert "Vintgar-Klamm, Slovenia" in variants
+    assert variants[0] == "Vintgar Gorge, Slovenia"
+    castle = geocode_query_variants("Burg Predjama", "Slowenien")
+    assert "Predjama Castle, Slovenia" in castle
+    lake = geocode_query_variants("Jasna-See", "Slowenien")
+    assert "Jasna Lake, Slovenia" in lake
+    logar = geocode_query_variants("Logar-Tal", "Slowenien")
+    assert "Logarska dolina, Slovenia" in logar
+    bohinj = geocode_query_variants("Bohinjer See", "Slowenien")
+    assert "Bohinj Lake, Slovenia" in bohinj
+    assert bohinj[0] == "Bohinj Lake, Slovenia"
+    tolmin = geocode_query_variants("Tolminer Klammen", "Slowenien")
+    assert "Tolminska korita, Slovenia" in tolmin
+    assert "Tolmin Gorge, Slovenia" in tolmin
+    assert "Tolmin Gorges, Slovenia" in tolmin
+
+
+def test_nominatim_retries_next_variant_when_first_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queries: list[str] = []
+
+    def fake_get(*_args, **kwargs):
+        query = str(kwargs.get("params", {}).get("q") or "")
+        queries.append(query)
+        if query == "Mystery Place, Greece":
+            return _JsonResp([])
+        return _ok_resp()
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    hit = nominatim_geocode("Mystery Place", "Greece")
+    assert hit["latitude"] == 39.72
+    assert queries[0] == "Mystery Place, Greece"
+    assert "Mystery Place" in queries
+
+
+def test_nominatim_sends_countrycodes_for_known_country(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_get(*_args, **kwargs):
+        captured.update(kwargs.get("params") or {})
+        return _ok_resp()
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    nominatim_geocode("Baradla Cave", "Ungarn")
+    assert captured.get("q") == "Baradla Cave, Hungary"
+    assert captured.get("countrycodes") == "hu"
+
+
+def test_lookup_uses_photon_when_nominatim_is_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    folders = ["Baradla Cave"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Ungarn"})
+    _confirm(project, folders)
+
+    class _PhotonResp:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "features": [
+                    {
+                        "geometry": {"coordinates": [20.61, 48.47]},
+                        "properties": {"name": "Baradla", "countrycode": "HU"},
+                    }
+                ]
+            }
+
+    def fake_get(url, *_args, **_kwargs):
+        if "photon" in str(url):
+            return _PhotonResp()
+        if "wikipedia" in str(url):
+            return _JsonResp([])
+        return _JsonResp([])
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+    )
+    assert errors == []
+    assert coords.places["Baradla Cave"].latitude == pytest.approx(48.47)
+    assert coords.places["Baradla Cave"].source == "photon"
+
+
+def test_lookup_llm_rewrite_retries_nominatim(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    folders = ["The Bat Colony"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Ungarn"})
+    _confirm(project, folders)
+
+    def fake_get(url, *_args, **kwargs):
+        query = str((kwargs.get("params") or {}).get("q") or "")
+        if "nominatim" in str(url) and "Aggtelek" in query:
+            return _ok_resp("48.47", "20.63")
+        return _JsonResp([])
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        llm_rewrite=True,
+        rewrite_queries_fn=lambda _rows, _country: {
+            "The Bat Colony": "Aggtelek Karst"
+        },
+    )
+    assert errors == []
+    assert coords.places["The Bat Colony"].has_coordinates is True
+    assert coords.places["The Bat Colony"].latitude == pytest.approx(48.47)
+
+
+def test_lookup_uses_llm_nearest_city_coords_when_search_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    folders = ["Vintgar-Klamm"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Slowenien"})
+    _confirm(project, folders)
+
+    def fake_get(*_args, **_kwargs):
+        return _JsonResp([])
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        geocode_mod,
+        "rewrite_geocode_places_with_llm",
+        lambda *_args, **_kwargs: {
+            "Vintgar-Klamm": LlmPlaceSuggestion(
+                query="Bled",
+                latitude=46.3683,
+                longitude=14.1136,
+            )
+        },
+    )
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        llm_rewrite=True,
+    )
+    assert errors == []
+    assert coords.places["Vintgar-Klamm"].has_coordinates is True
+    assert coords.places["Vintgar-Klamm"].latitude == pytest.approx(46.3683)
+    assert coords.places["Vintgar-Klamm"].source == "llm-nearest-city"
+    assert coords.places["Vintgar-Klamm"].status == COORDINATE_STATUS_NEEDS_REVIEW
+
+
+def test_country_iso2_and_english_label_for_german_video_place() -> None:
+    assert country_iso2("Slowenien") == "si"
+    assert country_iso2("Ungarn") == "hu"
+    assert country_label("Slowenien", "EN") == "Slovenia"
+    assert country_label("Ungarn", "EN") == "Hungary"
+    assert country_label("Slowenien") == "Slowenien"
+
+
+def test_lookup_photon_skips_unrelated_same_country_pin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    folders = ["Logar-Tal"]
+    project = _project(tmp_path, folders)
+    project = project.model_copy(update={"video_place": "Slowenien"})
+    _confirm(project, folders)
+
+    class _PhotonResp:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "features": [
+                    {
+                        "geometry": {"coordinates": [14.51, 46.05]},
+                        "properties": {"name": "Ljubljana", "countrycode": "SI"},
+                    }
+                ]
+            }
+
+    def fake_get(url, *_args, **_kwargs):
+        if "photon" in str(url):
+            return _PhotonResp()
+        return _JsonResp([])
+
+    monkeypatch.setattr(geocode_mod.requests, "get", fake_get)
+    monkeypatch.setattr(geocode_mod, "_sleep", lambda _seconds: None)
+    coords, _plan, errors = lookup_missing_coordinates(
+        project,
+        plan=build_map_plan(project),
+        cache_path=tmp_path / "cache.json",
+        llm_rewrite=False,
+    )
+    record = coords.places.get("Logar-Tal")
+    assert record is None or record.has_coordinates is False
+    assert errors
+    assert "Logar-Tal" in errors[0]
