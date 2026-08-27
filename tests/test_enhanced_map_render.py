@@ -205,6 +205,8 @@ def test_selectable_maps_skip_blocked_and_missing_mode(tmp_path: Path) -> None:
 def test_view_bounds_usa_ireland_and_unknown() -> None:
     assert country_numeric_id("USA") == "840"
     assert country_numeric_id("Ireland") == "372"
+    assert country_numeric_id("Slowenien") == "705"
+    assert country_numeric_id("Ungarn") == "348"
     assert country_numeric_id("Atlantis") == "000"
     assert view_bounds("840", 0.0, 0.0, 1.0, 1.0) == [[-125.0, 24.0], [-66.0, 50.0]]
     assert view_bounds("372", 0.0, 0.0, 1.0, 1.0) == [[-11.2, 51.15], [-5.05, 55.85]]

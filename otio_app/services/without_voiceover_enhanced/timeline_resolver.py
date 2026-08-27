@@ -42,6 +42,7 @@ from otio_app.services.without_voiceover_enhanced.local_media_service import (
 )
 from otio_app.services.without_voiceover_enhanced.media_hold import (
     MediaHoldError,
+    ensure_last_frame_hold,
     ensure_still_hold_video,
     ensure_video_padded_hold,
 )
@@ -1333,6 +1334,61 @@ def _make_independent_envelope_shot(
     return shot
 
 
+def _make_last_frame_postroll_shot(
+    project: Project,
+    template: ResolvedShot,
+    *,
+    shot_id: str,
+    timeline_start: float,
+    timeline_end: float,
+    fps: float,
+    repairs: list[str],
+    errors: list[str],
+    label: str,
+) -> ResolvedShot | None:
+    """5s-Nachlauf als Freeze des letzten Bildes, wenn Motion-Video zu kurz ist."""
+    need = max(0.0, float(timeline_end) - float(timeline_start))
+    if need <= 1e-9:
+        return None
+    path = Path(str(template.resolved_media_path or "").strip())
+    if not path.is_file():
+        errors.append(
+            f"{label}: letzter Frame unmöglich — Medienpfad fehlt "
+            f"({template.resolved_media_path})."
+        )
+        return None
+    try:
+        hold = ensure_last_frame_hold(
+            project, path, duration_seconds=need, fps=fps
+        )
+    except MediaHoldError as exc:
+        errors.append(f"{label}: {exc}")
+        return None
+    shot = ResolvedShot(
+        shot_id=shot_id,
+        asset_id=str(template.asset_id or ""),
+        timeline_start_seconds=round(float(timeline_start), 6),
+        timeline_end_seconds=round(float(timeline_end), 6),
+        source_start_seconds=0.0,
+        source_end_seconds=round(need, 6),
+        editorial_function="technical_chapter_postroll",
+        folder_name=str(template.folder_name or template.chapter_id or ""),
+        chapter_id=str(template.chapter_id or template.folder_name or ""),
+        resolved_media_path=str(hold),
+        resolved_media_kind="video",
+        resolved_available_start_seconds=0.0,
+        resolved_media_duration_seconds=round(need, 6),
+        hold_mode="freeze_video",
+        asset_fit=template.asset_fit or "acceptable",
+        asset_fit_reason="chapter postroll (last frame hold)",
+        open_gap=False,
+    )
+    repairs.append(
+        f"{shot_id}: {label} — letzter Frame {need:.1f}s gehalten ({hold.name})."
+    )
+    return shot
+
+
 def _make_envelope_shot_from_asset_id(
     project: Project,
     *,
@@ -1691,7 +1747,7 @@ def _apply_chapter_envelopes(
         chapter_preroll = float(preroll)
         chapter_postroll = float(postroll)
         map_shot: ResolvedShot | None = None
-        if enable_map_opener:
+        if enable_map_opener and not _is_intro_folder(chapter_id):
             from otio_app.services.without_voiceover_enhanced.keyword_flow_maps import (
                 decide_map_opener,
             )
@@ -1706,7 +1762,9 @@ def _apply_chapter_envelopes(
                     "source_duration_seconds": decision.source_duration_seconds,
                     "opener_seconds": decision.opener_seconds,
                 }
-            if decision.warning:
+            # ``missing`` ist der Normalfall ohne Karten — nicht jeder Rhythmus-
+            # Kapitel-Repair-Log mit „keine Map gefunden“ füllen.
+            if decision.warning and decision.status not in {"missing", "skipped_intro"}:
                 repairs.append(decision.warning)
             if decision.status == "used" and decision.media_path:
                 chapter_preroll = float(decision.opener_seconds)
@@ -1727,7 +1785,7 @@ def _apply_chapter_envelopes(
                         decision.source_duration_seconds or decision.opener_seconds
                     ),
                     asset_fit="strong",
-                    asset_fit_reason="keyword_flow map opener (audio ignored)",
+                    asset_fit_reason="map opener (audio ignored)",
                 )
                 repairs.append(
                     f"Kapitel {chapter_id}: Map-Opener {decision.opener_seconds:.1f}s "
@@ -1968,6 +2026,7 @@ def _apply_chapter_envelopes(
             chapter_postroll > 1e-9
             and content_last.timeline_end_seconds < chapter_video_end - 1e-9
         ):
+            previous_end = float(content_last.timeline_end_seconds)
             content_last.timeline_end_seconds = round(chapter_video_end, 6)
             postroll_hold_id = content_last.shot_id
             try:
@@ -1978,8 +2037,40 @@ def _apply_chapter_envelopes(
                     repairs=repairs,
                     label=f"Kapitel-{chapter_id}-Nachlauf",
                 )
-            except TimelineResolveError as exc:
-                errors.append(str(exc))
+            except TimelineResolveError:
+                # Motion-Video darf nicht per tpad verlängert werden. Der
+                # Nachlauf muss trotzdem auf der Videospur liegen — sonst
+                # startet das nächste VO 5s nach der Map.
+                content_last.timeline_end_seconds = round(
+                    max(previous_end, chapter_audio_end), 6
+                )
+                postroll_shot = _make_last_frame_postroll_shot(
+                    project,
+                    content_last,
+                    shot_id=f"{slug}_postroll",
+                    timeline_start=chapter_audio_end,
+                    timeline_end=chapter_video_end,
+                    fps=fps,
+                    repairs=repairs,
+                    errors=errors,
+                    label=f"Kapitel-{chapter_id}-Nachlauf",
+                )
+                if postroll_shot is not None:
+                    if content_last.timeline_end_seconds > chapter_audio_end + 1e-9:
+                        content_last.timeline_end_seconds = round(
+                            chapter_audio_end, 6
+                        )
+                    ordered.append(postroll_shot)
+                    ch_shots.append(postroll_shot)
+                    postroll_hold_id = postroll_shot.shot_id
+                else:
+                    # Freeze ging nicht: Slot trotzdem bis Video-Ende belegen,
+                    # damit der OTIO-Export die 5s als Gap legt statt zu
+                    # verschieben.
+                    content_last.timeline_end_seconds = round(
+                        chapter_video_end, 6
+                    )
+                    postroll_hold_id = content_last.shot_id
         elif chapter_postroll > 1e-9:
             postroll_hold_id = content_last.shot_id
 

@@ -83,6 +83,7 @@ from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
     ChapterCutError,
     export_all_chapters_otio,
     generate_chapter_unified_cut,
+    list_body_chapter_names,
     list_chapters_needing_python_timing,
     list_chapters_needing_unified_cut,
     list_chapters_ready_for_python_timing,
@@ -130,6 +131,7 @@ from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     EnhancedOtioExportError,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
+    chapter_resolved_timeline_path,
     exports_dir,
     resolved_timeline_path,
 )
@@ -1085,7 +1087,29 @@ def intro_timing_complete(project: Project) -> bool:
 
 def otio_export_complete(project: Project) -> bool:
     path = exports_dir(project) / f"{project.name}_enhanced.otio"
-    return path.is_file()
+    if not path.is_file():
+        return False
+    if not intro_timing_complete(project):
+        return False
+    if list_chapters_needing_python_timing(project):
+        return False
+    try:
+        otio_mtime = path.stat().st_mtime
+    except OSError:
+        return False
+    candidates = [
+        intro_resolved_timeline_path(project),
+        resolved_timeline_path(project),
+    ]
+    for name in list_body_chapter_names(project):
+        candidates.append(chapter_resolved_timeline_path(project, name))
+    for candidate in candidates:
+        try:
+            if candidate.is_file() and candidate.stat().st_mtime > otio_mtime + 1e-6:
+                return False
+        except OSError:
+            continue
+    return True
 
 
 def youtube_publish_complete(project: Project) -> bool:

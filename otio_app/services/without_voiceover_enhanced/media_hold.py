@@ -433,3 +433,97 @@ def ensure_video_padded_hold(
         err = (result.stderr or b"").decode("utf-8", errors="replace")[:400]
         raise MediaHoldError(f"Video-Hold fehlgeschlagen: {err}")
     return out
+
+
+def ensure_last_frame_hold(
+    project: Project,
+    video_path: Path,
+    *,
+    duration_seconds: float,
+    fps: float,
+) -> Path:
+    """Letztes Videobild als eigenständiges Hold-MP4 (Kapitel-Nachlauf)."""
+    if duration_seconds <= 0:
+        raise MediaHoldError("Last-Frame-Hold-Dauer muss positiv sein.")
+    source = Path(video_path).expanduser().resolve()
+    if not source.is_file():
+        raise MediaHoldError(f"Video fehlt: {source}")
+    if is_image_media(source) and not is_video_media(source):
+        return ensure_still_hold_video(
+            project, source, duration_seconds=duration_seconds, fps=fps
+        )
+    if not is_video_media(source):
+        raise MediaHoldError(
+            f"Last-Frame-Hold erwartet Video oder Foto, nicht {source.name}."
+        )
+    rate = max(1.0, float(fps) or 25.0)
+    key = _cache_key(
+        str(source), f"{duration_seconds:.3f}", f"{rate:.3f}", "lastframe_v1"
+    )
+    cache = _hold_cache_dir(project)
+    frame = cache / f"lastframe_{key}.png"
+    out = cache / f"lastframe_hold_{key}.mp4"
+    if out.is_file() and out.stat().st_size > 0:
+        return out
+
+    def _extract(cmd: list[str]) -> bool:
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, check=False, timeout=120
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+        return result.returncode == 0 and frame.is_file() and frame.stat().st_size > 0
+
+    if frame.is_file():
+        frame.unlink()
+    extracted = _extract(
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-sseof",
+            "-0.12",
+            "-i",
+            str(source),
+            "-frames:v",
+            "1",
+            str(frame),
+        ]
+    )
+    if not extracted:
+        if frame.is_file():
+            frame.unlink()
+        extracted = _extract(
+            [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(source),
+                "-update",
+                "1",
+                "-frames:v",
+                "1",
+                str(frame),
+            ]
+        )
+    if not extracted:
+        raise MediaHoldError(f"Letzter Frame nicht lesbar: {source.name}")
+    hold = ensure_still_hold_video(
+        project, frame, duration_seconds=duration_seconds, fps=fps
+    )
+    if not hold.is_file() or hold.stat().st_size <= 0:
+        raise MediaHoldError(f"Last-Frame-Hold fehlgeschlagen: {source.name}")
+    if hold.resolve() != out.resolve():
+        try:
+            if out.exists():
+                out.unlink()
+            out.hardlink_to(hold)
+        except OSError:
+            return hold
+    return out

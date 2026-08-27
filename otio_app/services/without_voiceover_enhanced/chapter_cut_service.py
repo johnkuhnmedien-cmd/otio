@@ -318,10 +318,19 @@ def get_chapter_cut_status(
     # Alte Cuts nach Skript-Neu-Erzeugung / Pause-Directives zählen nicht als fertig.
     has_plan = plan_present and plan_version_ok and not unsupported_pauses
     has_resolved = resolved_present and resolved_version_ok and not unsupported_pauses
+    from otio_app.services.without_voiceover_enhanced.keyword_flow_maps import (
+        chapter_needs_map_opener_retiming,
+    )
+
+    map_stale = bool(
+        has_resolved
+        and chapter_needs_map_opener_retiming(project, folder_name, resolved)
+    )
     matches = (
         has_plan
         and has_resolved
         and chapter_resolved_matches_plan(plan, resolved)
+        and not map_stale
     )
     stale = bool(
         (plan_present and not plan_version_ok)
@@ -333,6 +342,11 @@ def get_chapter_cut_status(
             mismatch_detail = "Timing fehlt"
         elif stale:
             mismatch_detail = "Timing veraltet (Skript geändert)"
+        elif map_stale:
+            mismatch_detail = (
+                "Karten gerendert — Python Timing erneut, damit die Map "
+                "in die Timeline kommt"
+            )
         else:
             mismatch_detail = chapter_timing_mismatch_detail(plan, resolved) or (
                 "Timing passt nicht zum Plan"

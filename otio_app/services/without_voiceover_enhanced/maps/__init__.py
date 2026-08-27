@@ -28,6 +28,7 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
     MapRenderSettings,
 )
 from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
+    GeocodeCancelled,
     GeocodeError,
     GeocodeProgress,
     friendly_geocode_error,
@@ -94,6 +95,7 @@ __all__ = [
     "MapCoordinateRecord",
     "MapCoordinatesDocument",
     "MapPlanDocument",
+    "GeocodeCancelled",
     "GeocodeError",
     "GeocodeProgress",
     "NOMINATIM_USER_AGENT",

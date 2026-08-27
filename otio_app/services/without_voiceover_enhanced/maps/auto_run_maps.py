@@ -13,6 +13,7 @@ from otio_app.services.voiceover_generation.dramaturgy_service import (
 )
 from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
     lookup_missing_coordinates,
+    GeocodeCancelled,
 )
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     RENDER_STATUS_BLOCKED,
@@ -352,13 +353,18 @@ def run_maps_for_auto_run(
             item_total=int(getattr(event, "total", 0) or 0),
         )
 
-    _coords, plan, geocode_errors = lookup_missing_coordinates(
-        project,
-        settings=settings,
-        plan=plan,
-        geocode_fn=geocode_fn,
-        on_progress=on_geocode,
-    )
+    try:
+        _coords, plan, geocode_errors = lookup_missing_coordinates(
+            project,
+            settings=settings,
+            plan=plan,
+            geocode_fn=geocode_fn,
+            on_progress=on_geocode,
+            should_cancel=cancelled,
+            llm_rewrite=geocode_fn is None,
+        )
+    except GeocodeCancelled as exc:
+        raise MapRenderCancelled(str(exc) or "Auto-Lauf gestoppt.") from exc
     save_map_plan(project, plan)
 
     if cancelled():
