@@ -405,12 +405,35 @@ def list_chapter_cut_statuses(project: Project) -> list[ChapterCutStatus]:
 
 
 def list_chapters_needing_unified_cut(project: Project) -> list[str]:
-    """Körper-Kapitel ohne Unified-Plan (offene LLM Cuts)."""
-    return [
-        status.folder_name
-        for status in list_chapter_cut_statuses(project)
-        if not status.has_plan
-    ]
+    """Körper-Kapitel ohne gültigen Unified-Plan (offene LLM Cuts).
+
+    Liest nur die Kapitelpläne — kein Gap-Status, keine Resolved-Timelines.
+    """
+    names = list_body_chapter_names(project)
+    if not names:
+        return []
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        load_cut_plan_options,
+        plan_has_unsupported_keyword_flow_pause_directives,
+        uses_keyword_onset_timing_rules,
+    )
+
+    check_pauses = uses_keyword_onset_timing_rules(load_cut_plan_options(project))
+    needed: list[str] = []
+    for name in names:
+        plan = load_chapter_unified_plan(project, name)
+        if plan is None or not plan.slots:
+            needed.append(name)
+            continue
+        if not _artifact_matches_locked_script_version(
+            project, getattr(plan, "script_version", None)
+        ):
+            needed.append(name)
+            continue
+        if check_pauses and plan_has_unsupported_keyword_flow_pause_directives(plan):
+            needed.append(name)
+            continue
+    return needed
 
 
 def list_chapters_needing_python_timing(project: Project) -> list[str]:

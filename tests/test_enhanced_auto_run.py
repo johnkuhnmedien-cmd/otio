@@ -1128,6 +1128,74 @@ def test_auto_run_status_overview_covers_every_step(tmp_path: Path) -> None:
     assert by_id["otio"].done is False
 
 
+def test_summarize_auto_run_stage_does_not_scan_later_checkers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    monkeypatch.setattr(
+        auto_run,
+        "maps_complete",
+        lambda _project: (_ for _ in ()).throw(AssertionError("maps should not run")),
+    )
+    monkeypatch.setattr(
+        auto_run,
+        "timing_complete",
+        lambda _project: (_ for _ in ()).throw(AssertionError("timing should not run")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        auto_run,
+        "_music_targets_complete",
+        lambda _project: (_ for _ in ()).throw(AssertionError("music should not run")),
+    )
+    monkeypatch.setattr(
+        auto_run,
+        "otio_export_complete",
+        lambda _project: (_ for _ in ()).throw(AssertionError("otio should not run")),
+    )
+    monkeypatch.setattr(
+        auto_run,
+        "youtube_publish_complete",
+        lambda _project: (_ for _ in ()).throw(AssertionError("youtube should not run")),
+    )
+    summary = auto_run.summarize_auto_run_stage(project)
+    assert summary.next_label == "Brief"
+    assert summary.funnel_done is False
+
+
+def test_list_auto_run_step_statuses_full_scan_still_runs_later_checkers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    called = {"maps": 0}
+    monkeypatch.setattr(
+        auto_run,
+        "maps_complete",
+        lambda _project: called.__setitem__("maps", called["maps"] + 1) or False,
+    )
+    rows = auto_run.list_auto_run_step_statuses(project)
+    assert called["maps"] == 1
+    assert any(row.step_id == "maps" and row.done is False for row in rows)
+
+
+def test_summarize_auto_run_stage_cache_skips_second_scan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    calls = {"n": 0}
+    real_list = auto_run.list_auto_run_step_statuses
+
+    def counting_list(item, **kwargs):
+        calls["n"] += 1
+        return real_list(item, **kwargs)
+
+    monkeypatch.setattr(auto_run, "list_auto_run_step_statuses", counting_list)
+    first = auto_run.summarize_auto_run_stage(project)
+    second = auto_run.summarize_auto_run_stage(project)
+    assert first == second
+    assert calls["n"] == 1
+
+
 def test_auto_run_cancel_between_steps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

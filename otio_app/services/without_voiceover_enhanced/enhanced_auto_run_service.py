@@ -20,10 +20,13 @@ from dataclasses import dataclass, field
 from otio_app.defaults import ENHANCED_CHAPTER_TIMING_MAX_WORKERS
 from otio_app.models import Project
 from otio_app.project_layout import (
+    get_dramaturgy_plan_confirmed_path,
     get_dramaturgy_settings_path,
+    get_intro_hook_confirmed_path,
     get_intro_hook_settings_path,
     get_project_brief_path,
     get_voiceover_style_references_path,
+    get_youtube_metadata_path,
 )
 from otio_app.services.plan_llm_client import DEFAULT_MAX_OUTPUT_TOKENS
 from otio_app.services.voiceover_generation.dramaturgy_defaults_service import (
@@ -131,9 +134,18 @@ from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     EnhancedOtioExportError,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
+    UNIFIED_CUT_PLAN_FILENAME,
+    accepted_supplements_path,
     chapter_resolved_timeline_path,
+    chapters_cut_dir,
+    coverage_gaps_path,
     exports_dir,
+    map_plan_path,
     resolved_timeline_path,
+    script_draft_path,
+    script_locked_path,
+    segment_timings_path,
+    supplement_funnel_report_path,
 )
 from otio_app.services.youtube_publish_service import (
     build_youtube_publish_context_from_resolved,
@@ -340,6 +352,45 @@ class AutoRunStageSummary:
     next_label: str
     funnel_done: bool
     youtube_done: bool
+
+
+_AUTO_RUN_STAGE_CACHE: dict[tuple[str, str], tuple[tuple[object, ...], AutoRunStageSummary]] = {}
+
+
+def _path_stamp(path) -> tuple[str, int, int]:
+    try:
+        stat = path.stat()
+        return (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        return (str(path), 0, 0)
+
+
+def _auto_run_stage_fingerprint(project: Project) -> tuple[object, ...]:
+    """MTimes der Pipeline-Artefakte — ohne JSON zu parsen."""
+    lang = project.language_work_dir_path
+    paths = [
+        get_project_brief_path(lang),
+        get_voiceover_style_references_path(lang),
+        get_dramaturgy_plan_confirmed_path(lang),
+        get_intro_hook_confirmed_path(lang),
+        get_youtube_metadata_path(lang),
+        script_draft_path(project),
+        script_locked_path(project),
+        segment_timings_path(project),
+        intro_unified_cut_plan_path(project),
+        coverage_gaps_path(project),
+        supplement_funnel_report_path(project),
+        accepted_supplements_path(project),
+        map_plan_path(project),
+        exports_dir(project) / f"{project.name}_enhanced.otio",
+    ]
+    try:
+        cuts = chapters_cut_dir(project)
+        if cuts.is_dir():
+            paths.extend(sorted(cuts.glob(f"*/{UNIFIED_CUT_PLAN_FILENAME}")))
+    except (OSError, ValueError):
+        pass
+    return tuple(_path_stamp(path) for path in paths)
 
 
 @dataclass
@@ -1139,8 +1190,16 @@ def _music_targets_complete(project: Project) -> bool:
     return True
 
 
-def list_auto_run_step_statuses(project: Project) -> list[AutoRunStepStatus]:
-    """Skip-done-Stand je Auto-Lauf-Schritt für die Statusübersicht."""
+def list_auto_run_step_statuses(
+    project: Project,
+    *,
+    stop_after_first_open: bool = False,
+) -> list[AutoRunStepStatus]:
+    """Skip-done-Stand je Auto-Lauf-Schritt für die Statusübersicht.
+
+    ``stop_after_first_open``: nach dem ersten offenen Schritt keine weiteren
+    Disk-Checks (für die Projektliste). Spätere Zeilen gelten als offen.
+    """
 
     def _safe(checker: Callable[[], bool]) -> bool:
         try:
@@ -1201,6 +1260,14 @@ def list_auto_run_step_statuses(project: Project) -> list[AutoRunStepStatus]:
             project
         )
 
+    funnel_gaps_done: bool | None = None
+
+    def gaps_done_cached() -> bool:
+        nonlocal funnel_gaps_done
+        if funnel_gaps_done is None:
+            funnel_gaps_done = gaps_done()
+        return funnel_gaps_done
+
     checkers: dict[str, Callable[[], bool]] = {
         "brief": brief_done,
         "style": style_done,
@@ -1212,8 +1279,8 @@ def list_auto_run_step_statuses(project: Project) -> list[AutoRunStepStatus]:
         "tts": tts_done,
         "intro_cut": intro_cut_done,
         "chapter_cuts": chapter_cuts_done,
-        "stock": gaps_done,
-        "funnel": gaps_done,
+        "stock": gaps_done_cached,
+        "funnel": gaps_done_cached,
         "maps": lambda: maps_complete(project),
         "timing": timing_done,
         "music": lambda: _music_targets_complete(project),
@@ -1221,14 +1288,21 @@ def list_auto_run_step_statuses(project: Project) -> list[AutoRunStepStatus]:
         "youtube": lambda: youtube_publish_complete(project),
     }
     rows: list[AutoRunStepStatus] = []
+    found_open = False
     for step_id, label in AUTO_RUN_STEPS:
         checker = checkers.get(step_id, lambda: False)
+        if stop_after_first_open and found_open:
+            done = False
+        else:
+            done = _safe(checker)
+            if not done:
+                found_open = True
         rows.append(
             AutoRunStepStatus(
                 step_id=step_id,
                 label=label,
                 short_label=AUTO_RUN_STEP_SHORT_LABELS.get(step_id, step_id),
-                done=_safe(checker),
+                done=done,
             )
         )
     return rows
@@ -1240,7 +1314,7 @@ def pipeline_complete_through(
 ) -> bool:
     """True wenn jeder Schritt bis einschließlich Funnel bzw. YouTube erledigt ist."""
     return _complete_through_rows(
-        list_auto_run_step_statuses(project),
+        list_auto_run_step_statuses(project, stop_after_first_open=True),
         stop_after,
     )
 
@@ -1260,7 +1334,16 @@ def _complete_through_rows(
 
 def summarize_auto_run_stage(project: Project) -> AutoRunStageSummary:
     """Konsekutiver Pipeline-Stand für die Statusübersicht je Sprache."""
-    rows = list_auto_run_step_statuses(project)
+    cache_key = (str(project.id), str(project.work_dir))
+    try:
+        fingerprint = _auto_run_stage_fingerprint(project)
+    except Exception:  # noqa: BLE001 — Cache ist optional
+        fingerprint = None
+    if fingerprint is not None:
+        hit = _AUTO_RUN_STAGE_CACHE.get(cache_key)
+        if hit is not None and hit[0] == fingerprint:
+            return hit[1]
+    rows = list_auto_run_step_statuses(project, stop_after_first_open=True)
     last_done: AutoRunStepStatus | None = None
     next_open: AutoRunStepStatus | None = None
     consecutive = 0
@@ -1278,7 +1361,7 @@ def summarize_auto_run_stage(project: Project) -> AutoRunStageSummary:
         next_label = next_open.short_label
     else:
         next_label = AUTO_RUN_STEP_SHORT_LABELS.get("brief", "Brief")
-    return AutoRunStageSummary(
+    summary = AutoRunStageSummary(
         done_count=consecutive,
         step_total=len(rows),
         last_done_id=last_done.step_id if last_done else None,
@@ -1288,6 +1371,9 @@ def summarize_auto_run_stage(project: Project) -> AutoRunStageSummary:
         funnel_done=_complete_through_rows(rows, AUTO_RUN_STOP_AFTER_FUNNEL),
         youtube_done=_complete_through_rows(rows, AUTO_RUN_STOP_AFTER_YOUTUBE),
     )
+    if fingerprint is not None:
+        _AUTO_RUN_STAGE_CACHE[cache_key] = (fingerprint, summary)
+    return summary
 
 
 def _run_stock_and_funnel(
