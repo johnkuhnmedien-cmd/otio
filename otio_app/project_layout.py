@@ -22,6 +22,10 @@ from otio_app.defaults import (
 LANGUAGE_FOLDER_NAMES: dict[str, str] = {
     "de": "DE",
     "en": "EN",
+    "ja": "JP",
+    "jp": "JP",
+    "ko": "KR",
+    "kr": "KR",
 }
 
 VOICE_OVER_NAME_HINTS: tuple[str, ...] = (

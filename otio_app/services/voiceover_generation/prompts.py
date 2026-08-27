@@ -52,12 +52,18 @@ _LANGUAGE_DISPLAY_NAMES: dict[str, str] = {
     "ES": "Spanish",
     "PT": "Portuguese",
     "IT": "Italian",
+    "JP": "Japanese",
+    "KR": "Korean",
     "de": "German",
     "en": "English",
     "fr": "French",
     "es": "Spanish",
     "pt": "Portuguese",
     "it": "Italian",
+    "jp": "Japanese",
+    "ja": "Japanese",
+    "kr": "Korean",
+    "ko": "Korean",
 }
 
 

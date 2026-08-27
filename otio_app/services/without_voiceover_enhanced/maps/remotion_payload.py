@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 
+from otio_app.project_layout import language_folder_name
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     ENGINE_STYLE_VERSION,
     MAP_ANIMATION_OPENING,
@@ -125,6 +126,77 @@ _COUNTRY_ENGLISH: dict[str, str] = {
     "usa": "United States",
 }
 
+_EAST_ASIAN_COUNTRY_LABELS: dict[str, dict[str, str]] = {
+    "JP": {
+        "albania": "アルバニア",
+        "austria": "オーストリア",
+        "belgium": "ベルギー",
+        "bulgaria": "ブルガリア",
+        "croatia": "クロアチア",
+        "cyprus": "キプロス",
+        "czechia": "チェコ",
+        "denmark": "デンマーク",
+        "egypt": "エジプト",
+        "finland": "フィンランド",
+        "france": "フランス",
+        "germany": "ドイツ",
+        "greece": "ギリシャ",
+        "hungary": "ハンガリー",
+        "iceland": "アイスランド",
+        "ireland": "アイルランド",
+        "italy": "イタリア",
+        "malta": "マルタ",
+        "montenegro": "モンテネグロ",
+        "morocco": "モロッコ",
+        "netherlands": "オランダ",
+        "norway": "ノルウェー",
+        "poland": "ポーランド",
+        "portugal": "ポルトガル",
+        "romania": "ルーマニア",
+        "slovenia": "スロベニア",
+        "spain": "スペイン",
+        "sweden": "スウェーデン",
+        "switzerland": "スイス",
+        "turkey": "トルコ",
+        "united kingdom": "イギリス",
+        "united states": "アメリカ",
+    },
+    "KR": {
+        "albania": "알바니아",
+        "austria": "오스트리아",
+        "belgium": "벨기에",
+        "bulgaria": "불가리아",
+        "croatia": "크로아티아",
+        "cyprus": "키프로스",
+        "czechia": "체코",
+        "denmark": "덴마크",
+        "egypt": "이집트",
+        "finland": "핀란드",
+        "france": "프랑스",
+        "germany": "독일",
+        "greece": "그리스",
+        "hungary": "헝가리",
+        "iceland": "아이슬란드",
+        "ireland": "아일랜드",
+        "italy": "이탈리아",
+        "malta": "몰타",
+        "montenegro": "몬테네그로",
+        "morocco": "모로코",
+        "netherlands": "네덜란드",
+        "norway": "노르웨이",
+        "poland": "폴란드",
+        "portugal": "포르투갈",
+        "romania": "루마니아",
+        "slovenia": "슬로베니아",
+        "spain": "스페인",
+        "sweden": "스웨덴",
+        "switzerland": "스위스",
+        "turkey": "터키",
+        "united kingdom": "영국",
+        "united states": "미국",
+    },
+}
+
 _ISO2_BY_ENGLISH: dict[str, str] = {
     "albania": "al",
     "austria": "at",
@@ -190,12 +262,17 @@ def country_iso2(country: str) -> str:
 
 
 def country_label(country: str, language: str | None = None) -> str:
-    """Karten-Overlay: Rohname. Mit ``language='EN'``: englischer Nominatim-Name."""
+    """Karten-Overlay: Rohname. Mit Sprache: EN/JP/KR-Ländername, sonst Rohname."""
     raw = str(country or "").strip() or "Map"
     if language is None:
         return raw[:100]
-    if str(language).strip().upper() == "EN":
-        mapped = _COUNTRY_ENGLISH.get(raw.casefold())
+    lang = language_folder_name(str(language).strip() or "DE")
+    english = _COUNTRY_ENGLISH.get(raw.casefold(), "")
+    if lang == "EN":
+        return (english or raw)[:100]
+    if lang in _EAST_ASIAN_COUNTRY_LABELS:
+        key = (english or raw).casefold()
+        mapped = _EAST_ASIAN_COUNTRY_LABELS[lang].get(key)
         return (mapped or raw)[:100]
     return raw[:100]
 
@@ -258,7 +335,7 @@ def remotion_payload(item: MapPlanItem) -> dict:
         },
         "exportLabel": _clip_label(item.original_chapter_label, 200),
         "countryNumericId": numeric_id,
-        "countryLabel": country_label(item.country),
+        "countryLabel": country_label(item.country, item.language),
         "language": (str(item.language or "DE").strip().upper()[:20] or "DE"),
         "chapterOrdinal": int(item.chapter_ordinal),
         "chapterCount": int(item.chapter_count),

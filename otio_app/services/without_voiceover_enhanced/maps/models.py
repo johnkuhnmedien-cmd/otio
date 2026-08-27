@@ -66,6 +66,8 @@ MAP_HEADING_BY_LANGUAGE: dict[str, str] = {
     "IT": "Itinerario",
     "ES": "Ruta de viaje",
     "PT": "Rota de viagem",
+    "JP": "旅行ルート",
+    "KR": "여행 경로",
 }
 
 
