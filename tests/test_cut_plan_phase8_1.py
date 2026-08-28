@@ -279,8 +279,10 @@ def test_with_voiceover_pages_unchanged_by_cut_plan_addition(_fake_streamlit_pag
     titles = [page.title for page in pages]
     assert nav.PAGE_CUT_PLAN not in titles
     assert titles == [
+        "Adobe Stock Import",
         "Neues Projekt",
         "Gespeicherte Projekte",
+        "Sprachstandards",
         "⓪ Clean Media",
         "① Analysen",
         "② Zuordnung",

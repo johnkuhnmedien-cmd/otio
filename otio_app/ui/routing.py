@@ -29,6 +29,9 @@ from otio_app.ui.voiceover_generation.dramaturgy_tab import render_dramaturgy_pa
 from otio_app.ui.voiceover_generation.final_output_tab import render_final_output_page
 from otio_app.ui.voiceover_generation.folder_voiceovers_tab import render_folder_voiceovers_page
 from otio_app.ui.voiceover_generation.intro_tab import render_intro_page
+from otio_app.ui.voiceover_generation.language_defaults_hub import (
+    render_language_defaults_hub_page,
+)
 from otio_app.ui.voiceover_generation.project_brief_tab import render_project_brief_page
 from otio_app.ui.voiceover_generation.style_references_tab import render_style_references_page
 from otio_app.ui.without_voiceover_enhanced.audio_tab import render_enhanced_audio_page
@@ -116,6 +119,7 @@ def _build_with_voiceover_pages(
         PAGE_NEW,
         PAGE_STATUS,
         PAGE_SUPPLEMENT,
+        PAGE_LANGUAGE_DEFAULTS,
     )
 
     return [
@@ -138,6 +142,15 @@ def _build_with_voiceover_pages(
             _wrap_page(PAGE_LIST, render_project_list, show_auto_run_panel=False),
             title=PAGE_LIST,
             url_path="projekte",
+        ),
+        st.Page(
+            _wrap_page(
+                PAGE_LANGUAGE_DEFAULTS,
+                render_language_defaults_hub_page,
+                show_auto_run_panel=False,
+            ),
+            title=PAGE_LANGUAGE_DEFAULTS,
+            url_path="sprachstandards",
         ),
         st.Page(
             _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, jobs_banner_skip=("clean",)),
@@ -200,6 +213,7 @@ def _build_without_voiceover_pages(
         PAGE_FINAL_OUTPUT,
         PAGE_FOLDER_VOICEOVERS,
         PAGE_INTRO,
+        PAGE_LANGUAGE_DEFAULTS,
         PAGE_LIST,
         PAGE_NEW,
         PAGE_PROJECT_BRIEF,
@@ -227,6 +241,15 @@ def _build_without_voiceover_pages(
             _wrap_page(PAGE_LIST, render_project_list, show_auto_run_panel=False),
             title=PAGE_LIST,
             url_path="projekte",
+        ),
+        st.Page(
+            _wrap_page(
+                PAGE_LANGUAGE_DEFAULTS,
+                render_language_defaults_hub_page,
+                show_auto_run_panel=False,
+            ),
+            title=PAGE_LANGUAGE_DEFAULTS,
+            url_path="sprachstandards",
         ),
         st.Page(
             _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, jobs_banner_skip=("clean",)),
@@ -311,6 +334,7 @@ def _build_without_voiceover_enhanced_pages(
         PAGE_FINAL_OUTPUT_ENHANCED,
         PAGE_FOLDER_VOICEOVERS,
         PAGE_INTRO,
+        PAGE_LANGUAGE_DEFAULTS,
         PAGE_LIST,
         PAGE_MAPS,
         PAGE_NEW,
@@ -339,6 +363,15 @@ def _build_without_voiceover_enhanced_pages(
             _wrap_page(PAGE_LIST, render_project_list, show_auto_run_panel=False),
             title=PAGE_LIST,
             url_path="projekte",
+        ),
+        st.Page(
+            _wrap_page(
+                PAGE_LANGUAGE_DEFAULTS,
+                render_language_defaults_hub_page,
+                show_auto_run_panel=False,
+            ),
+            title=PAGE_LANGUAGE_DEFAULTS,
+            url_path="sprachstandards",
         ),
         st.Page(
             _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, jobs_banner_skip=("clean",)),
@@ -529,6 +562,7 @@ def _run_legacy_pages(
         PAGE_FINAL_OUTPUT_ENHANCED,
         PAGE_FOLDER_VOICEOVERS,
         PAGE_INTRO,
+        PAGE_LANGUAGE_DEFAULTS,
         PAGE_LIST,
         PAGE_MAPS,
         PAGE_MAPPING,
@@ -578,6 +612,12 @@ def _run_legacy_pages(
         _wrap_page(PAGE_NEW, render_new_project, show_auto_run_panel=False)()
     elif page == PAGE_LIST:
         _wrap_page(PAGE_LIST, render_project_list, show_auto_run_panel=False)()
+    elif page == PAGE_LANGUAGE_DEFAULTS:
+        _wrap_page(
+            PAGE_LANGUAGE_DEFAULTS,
+            render_language_defaults_hub_page,
+            show_auto_run_panel=False,
+        )()
     elif page == PAGE_CLEAN_MEDIA:
         _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, jobs_banner_skip=("clean",))()
     elif page == PAGE_ANALYSIS:

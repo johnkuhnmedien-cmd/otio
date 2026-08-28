@@ -1461,6 +1461,8 @@ def test_auto_run_progress_fraction_includes_chapter_item() -> None:
 def test_enhanced_navigation_includes_auto_run_page() -> None:
     from otio_app.ui.navigation import (
         PAGE_AUTO_RUN,
+        PAGE_LANGUAGE_DEFAULTS,
+        PAGE_LIST,
         VOICEOVER_GEN_ENHANCED_NAVIGATION_OPTIONS,
         VOICEOVER_GEN_NAVIGATION_OPTIONS,
     )
@@ -1468,3 +1470,8 @@ def test_enhanced_navigation_includes_auto_run_page() -> None:
     assert PAGE_AUTO_RUN == "▶ Auto-Lauf"
     assert PAGE_AUTO_RUN in VOICEOVER_GEN_ENHANCED_NAVIGATION_OPTIONS
     assert PAGE_AUTO_RUN not in VOICEOVER_GEN_NAVIGATION_OPTIONS
+    assert PAGE_LANGUAGE_DEFAULTS == "Sprachstandards"
+    assert PAGE_LANGUAGE_DEFAULTS in VOICEOVER_GEN_ENHANCED_NAVIGATION_OPTIONS
+    assert PAGE_LANGUAGE_DEFAULTS in VOICEOVER_GEN_NAVIGATION_OPTIONS
+    options = VOICEOVER_GEN_ENHANCED_NAVIGATION_OPTIONS
+    assert options.index(PAGE_LANGUAGE_DEFAULTS) == options.index(PAGE_LIST) + 1
