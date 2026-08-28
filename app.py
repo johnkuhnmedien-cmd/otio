@@ -636,7 +636,9 @@ def render_project_list_page() -> None:
 
     st.caption(
         "Enhanced-Projekte desselben Medienordners stehen auf **einer** Karte — "
-        "mit Stand je Sprache und Auto-Lauf bis Supplement-Funnel oder YouTube."
+        "mit Stand je Sprache und Auto-Lauf bis Supplement-Funnel oder YouTube. "
+        "Brief, Style, Dramaturgie, Intro, Stimme und Cut Plan für jede Sprache "
+        "stehen unter **Sprachstandards** (nächster Navigationspunkt)."
     )
     for group in group_saved_projects(projects):
         with st.container(border=True):

@@ -39,6 +39,7 @@ __all__ = [
     "resolve_dramaturgy_planning_mode",
     "save_dramaturgy_defaults",
     "save_language_dramaturgy_word_defaults",
+    "delete_language_dramaturgy_word_defaults",
     "word_defaults_from_settings",
 ]
 
@@ -144,6 +145,16 @@ def save_language_dramaturgy_word_defaults(
     updated[key] = entry
     save_dramaturgy_defaults(document.model_copy(update={"by_language": updated}))
     return entry
+
+
+def delete_language_dramaturgy_word_defaults(language: str) -> None:
+    key = normalize_brief_language(language)
+    document = load_dramaturgy_defaults()
+    if key not in document.by_language:
+        return
+    updated = dict(document.by_language)
+    del updated[key]
+    save_dramaturgy_defaults(document.model_copy(update={"by_language": updated}))
 
 
 def resolve_dramaturgy_planning_mode(explicit: str | None = None) -> str:
