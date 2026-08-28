@@ -80,9 +80,12 @@ from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
 from otio_app.services.without_voiceover_enhanced.paths import (
     chapter_resolved_timeline_path,
     chapter_unified_cut_plan_path,
+    legacy_music_wav_path,
     music_request_path,
     music_result_path,
+    music_wav_filename,
     music_wav_path,
+    resolve_existing_music_wav_path,
     script_locked_path,
 )
 
@@ -364,8 +367,12 @@ def test_d_chapter_and_intro_prompts() -> None:
     assert "No vocals" in ch
     assert "No lyrics" in ch
     assert "No spoken words" in ch
+    assert "start immediately at 0.00 seconds" in ch
+    assert "8–10 second fade-in" in ch
+    assert "8–10 seconds before the end" in ch
     assert intro_text in intro
     assert "Gradually build energy" in intro
+    assert "start immediately at 0.00 seconds" in intro
     assert "anticipatory" in intro
     assert "No vocals" in intro
 
@@ -1286,6 +1293,9 @@ def test_r2_chapter_prompt_contains_narration_end_and_outro_rules() -> None:
     ) in prompt
     assert "Only after the narration has finished" in prompt
     assert "very short and concise closing cadence" in prompt
+    assert "start immediately at 0.00 seconds" in prompt
+    assert "8–10 second fade-in" in prompt
+    assert "8–10 seconds before the end" in prompt
     assert "Rocamadour rises above the Alzou canyon." in prompt
 
 
@@ -1302,34 +1312,18 @@ def test_r2_chapter_prompt_short_postroll_still_defers_outro() -> None:
     assert "extremely short rather than starting the outro during the voice-over" in prompt
 
 
-def test_r2_intro_prompt_unchanged_from_pre_r2() -> None:
-    """Intro prompt text must stay identical to the R1 / pre-R2 contract."""
-    intro = build_intro_music_prompt(narration_text="Welcome to the parks.")
-    expected = """\
-Create instrumental documentary opening music for the following intro narration.
-
-Match the location, atmosphere, cultural or historical character, and emotional tone of the narration.
-
-Begin atmospheric and restrained.
-Gradually build energy and forward momentum.
-The ending should feel more open and anticipatory so it leads naturally into the first chapter.
-
-The music must support spoken narration without dominating it.
-
-No vocals.
-No spoken words.
-No lyrics.
-Avoid exaggerated trailer-style drama.
-
-Any [pause …] markers describe narration pacing only; they must not be spoken or sung.
-
-End cleanly within the requested duration.
-
-INTRO NARRATION:
-
-Welcome to the parks.
-"""
-    assert intro == expected
+def test_r2_intro_prompt_starts_immediately_and_fills_duration() -> None:
+    intro = build_intro_music_prompt(
+        narration_text="Welcome to the parks.",
+        total_duration_seconds=18.0,
+    )
+    assert "start immediately at 0.00 seconds" in intro
+    assert "Do not begin with silence" in intro
+    assert "8–10 second fade-in" in intro
+    assert "already present from 0.00 seconds" in intro
+    assert "Total track duration: 18.00 seconds." in intro
+    assert "8–10 seconds before the end" in intro
+    assert "End cleanly at the requested duration, not earlier." in intro
     assert "Narration ends at:" not in intro
     assert "while the narrator is still speaking" not in intro
 
@@ -1383,3 +1377,82 @@ def test_r2_music_length_ms_still_from_total_only(tmp_path: Path) -> None:
     assert "Narration ends at: 4.50 seconds." in captured["prompt"]
     assert "Total track duration: 5.00 seconds." in captured["prompt"]
     assert "while the narrator is still speaking" in captured["prompt"]
+    assert "start immediately at 0.00 seconds" in captured["prompt"]
+    assert Path(result.music_path).name == "Music_Yosemite.wav"
+
+
+def test_music_wav_filename_includes_chapter() -> None:
+    assert music_wav_filename(scope="intro") == "Music_Intro.wav"
+    assert (
+        music_wav_filename(scope="chapter", folder_name="Grand Canyon")
+        == "Music_Grand_Canyon.wav"
+    )
+
+
+def test_music_wav_path_uses_chapter_filename(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    chapter_wav = music_wav_path(project, scope="chapter", folder_name="Yosemite")
+    intro_wav = music_wav_path(project, scope="intro")
+    assert chapter_wav.name == "Music_Yosemite.wav"
+    assert chapter_wav.parent.name == "Yosemite"
+    assert intro_wav.name == "Music_Intro.wav"
+    assert intro_wav.parent.name == "intro"
+
+
+def test_legacy_music_wav_still_resolved(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    folder = "Yosemite"
+    legacy = legacy_music_wav_path(project, scope="chapter", folder_name=folder)
+    _make_wav(legacy, 3.0)
+    found = resolve_existing_music_wav_path(
+        project, scope="chapter", folder_name=folder
+    )
+    assert found == legacy
+    canonical = music_wav_path(project, scope="chapter", folder_name=folder)
+    _make_wav(canonical, 3.0)
+    found = resolve_existing_music_wav_path(
+        project, scope="chapter", folder_name=folder
+    )
+    assert found == canonical
+
+
+def test_generate_writes_named_wav_and_removes_legacy(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _write_locked(project)
+    folder = "Yosemite"
+    write_json(chapter_unified_cut_plan_path(project, folder), _plan(folder))
+    write_json(
+        chapter_resolved_timeline_path(project, folder),
+        _resolved_chapter(folder, duration=3.0),
+    )
+    legacy = legacy_music_wav_path(project, scope="chapter", folder_name=folder)
+    _make_wav(legacy, 3.0)
+
+    def _compose(**_kwargs):
+        return ElevenLabsMusicResult(audio_bytes=_make_mp3_bytes(3.0))
+
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.is_elevenlabs_music_configured",
+            return_value=True,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.list_body_chapter_names",
+            return_value=["Yosemite", "Caddo", "Zion", "Bryce"],
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.elevenlabs_music_service.list_chapter_cut_statuses",
+            return_value=[
+                SimpleNamespace(folder_name=folder, has_resolved=True, matches=True)
+            ],
+        ),
+    ):
+        result = generate_music_for_chapter(
+            project, folder, compose_callable=_compose
+        )
+    assert result.status == "completed"
+    named = music_wav_path(project, scope="chapter", folder_name=folder)
+    assert named.name == "Music_Yosemite.wav"
+    assert named.is_file()
+    assert Path(result.music_path) == named
+    assert not legacy.is_file()

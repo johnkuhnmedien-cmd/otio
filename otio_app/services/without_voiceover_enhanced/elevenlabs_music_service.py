@@ -65,7 +65,9 @@ from otio_app.services.without_voiceover_enhanced.music_prompt import (
     music_prompt_within_limit,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
+    legacy_music_wav_path,
     music_wav_path,
+    resolve_existing_music_wav_path,
 )
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
     chapter_display_text_for_folder,
@@ -331,7 +333,7 @@ def validate_final_music_wav(
     target_duration_seconds: float,
 ) -> float:
     if not path.is_file():
-        raise MusicServiceError("Finale music.wav fehlt.")
+        raise MusicServiceError("Finale Music-WAV fehlt.")
     # Reject fake WAV (e.g. raw bytes renamed).
     header = path.read_bytes()[:12]
     if len(header) < 12 or header[0:4] != b"RIFF" or header[8:12] != b"WAVE":
@@ -390,6 +392,20 @@ def _ffprobe_audio_stream(path: Path) -> dict[str, Any] | None:
     return streams[0] if streams else None
 
 
+def _remove_legacy_music_wav(
+    project: Project, *, scope: str, folder_name: str
+) -> None:
+    """Drop old ``music.wav`` once ``Music_<Kapitel>.wav`` is written."""
+    canonical = music_wav_path(project, scope=scope, folder_name=folder_name)
+    legacy = legacy_music_wav_path(project, scope=scope, folder_name=folder_name)
+    if legacy == canonical or not legacy.is_file():
+        return
+    try:
+        legacy.unlink()
+    except OSError:
+        return
+
+
 def _write_failed_result(
     project: Project,
     *,
@@ -404,7 +420,7 @@ def _write_failed_result(
 ) -> MusicGenerationResult:
     """Persist failed only when no canonical completed Music exists.
 
-    If a successful ``music_result.json`` + ``music.wav`` already exist (current
+    If a successful ``music_result.json`` + WAV already exist (current
     or stale fingerprints), keep them untouched so OTIO usability / staleness
     is not destroyed by a failed regeneration.
     """
@@ -412,12 +428,12 @@ def _write_failed_result(
     preserved = canonical_completed_music_result(
         project, scope=scope_lit, folder_name=folder_name
     )
-    wav = music_wav_path(project, scope=scope, folder_name=folder_name)
+    wav = resolve_existing_music_wav_path(project, scope=scope, folder_name=folder_name)
     if preserved is not None:
         return MusicGenerationResult(
             status="failed",
             message=message,
-            music_path=str(wav) if wav.is_file() else "",
+            music_path=str(wav) if wav is not None else "",
             target_duration_seconds=target_duration_seconds,
             music_length_ms=music_length_ms,
             actual_duration_seconds=(
@@ -617,6 +633,7 @@ def _generate(
         tmp_final = final_wav.with_suffix(".wav.tmp")
         shutil.copy2(normalized_path, tmp_final)
         os.replace(tmp_final, final_wav)
+        _remove_legacy_music_wav(project, scope=scope, folder_name=folder_name)
 
         song_id = getattr(api_result, "song_id", None)
         save_music_result(
@@ -643,7 +660,7 @@ def _generate(
         )
         return MusicGenerationResult(
             status="completed",
-            message=f"✅ ElevenLabs Music · {actual:.2f}s WAV",
+            message=f"✅ ElevenLabs Music · {final_wav.name} · {actual:.2f}s",
             music_path=str(final_wav),
             target_duration_seconds=target,
             music_length_ms=length_ms,
@@ -666,12 +683,16 @@ def generate_music_for_intro(
     plan = load_intro_unified_plan(project)
     if plan is None:
         raise MusicServiceError("Intro-Cut-Plan fehlt.")
+    total = resolve_music_target_duration_seconds(resolved)
     return _generate(
         project,
         scope="intro",
         folder_name=ENHANCED_INTRO_FOLDER_NAME,
         resolved=resolved,
-        prompt_builder=lambda text: build_intro_music_prompt(narration_text=text),
+        prompt_builder=lambda text: build_intro_music_prompt(
+            narration_text=text,
+            total_duration_seconds=total,
+        ),
         compose_callable=compose_callable,
     )
 
