@@ -15,7 +15,7 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     music_intro_dir,
     music_request_path,
     music_result_path,
-    music_wav_path,
+    resolve_existing_music_wav_path,
 )
 
 MusicScope = Literal["intro", "chapter"]
@@ -104,8 +104,8 @@ def canonical_completed_music_result(
         return None
     if str(result.get("status") or "") != "completed":
         return None
-    wav = music_wav_path(project, scope=scope, folder_name=folder_name)
-    if not wav.is_file():
+    wav = resolve_existing_music_wav_path(project, scope=scope, folder_name=folder_name)
+    if wav is None:
         return None
     return result
 
@@ -128,9 +128,11 @@ def music_status_for_scope(
     Missing API key must not hide a current completed Music artefact; callers
     disable Generate separately.
     """
-    wav = music_wav_path(project, scope=scope, folder_name=folder_name)
+    wav = resolve_existing_music_wav_path(
+        project, scope=scope, folder_name=folder_name
+    )
     result = load_json_if_present(music_result_path(project, scope=scope, folder_name=folder_name))
-    if result is None and not wav.is_file():
+    if result is None and wav is None:
         if not api_key_present:
             return {
                 "status": "unavailable",
@@ -147,7 +149,8 @@ def music_status_for_scope(
     stored_script = str((result or {}).get("script_fingerprint") or "")
     stored_timing = str((result or {}).get("resolved_timing_fingerprint") or "")
     status = str((result or {}).get("status") or "")
-    if wav.is_file() and status == "completed":
+    wav_path = str(wav) if wav is not None else ""
+    if wav is not None and status == "completed":
         if stored_script != script_fingerprint or stored_timing != resolved_timing_fingerprint:
             return {
                 "status": "stale",
@@ -155,17 +158,20 @@ def music_status_for_scope(
                     "⚠ Music veraltet — Python Timing oder Skript hat sich geändert. "
                     "Bitte ElevenLabs Music neu erzeugen."
                 ),
-                "music_path": str(wav),
+                "music_path": wav_path,
                 "actual_duration_seconds": (result or {}).get("actual_duration_seconds"),
             }
         return {
             "status": "completed",
-            "message": f"✅ ElevenLabs Music · {float((result or {}).get('actual_duration_seconds') or 0):.2f}s WAV",
-            "music_path": str(wav),
+            "message": (
+                f"✅ ElevenLabs Music · {Path(wav_path).name} · "
+                f"{float((result or {}).get('actual_duration_seconds') or 0):.2f}s"
+            ),
+            "music_path": wav_path,
             "actual_duration_seconds": (result or {}).get("actual_duration_seconds"),
         }
     if status == "failed":
-        if not api_key_present and not wav.is_file():
+        if not api_key_present and wav is None:
             return {
                 "status": "unavailable",
                 "message": "ElevenLabs Music nicht verfügbar – API-Key fehlt.",
@@ -175,14 +181,14 @@ def music_status_for_scope(
         return {
             "status": "failed",
             "message": str((result or {}).get("message") or "Music fehlgeschlagen"),
-            "music_path": str(wav) if wav.is_file() else "",
+            "music_path": wav_path,
             "actual_duration_seconds": (result or {}).get("actual_duration_seconds"),
         }
-    if wav.is_file():
+    if wav is not None:
         return {
             "status": "stale",
             "message": "⚠ Music veraltet — bitte neu erzeugen.",
-            "music_path": str(wav),
+            "music_path": wav_path,
             "actual_duration_seconds": (result or {}).get("actual_duration_seconds"),
         }
     if not api_key_present:

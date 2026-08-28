@@ -49,7 +49,9 @@ GAP_MERGE_REPORT_FILENAME = "gap_merge_report.json"
 MUSIC_SUBDIR = "music"
 MUSIC_INTRO_SUBDIR = "intro"
 MUSIC_CHAPTERS_SUBDIR = "chapters"
-MUSIC_WAV_FILENAME = "music.wav"
+MUSIC_WAV_FILENAME = "music.wav"  # legacy; new files use Music_<chapter>.wav
+MUSIC_INTRO_WAV_FILENAME = "Music_Intro.wav"
+MUSIC_WAV_NAME_PREFIX = "Music_"
 MUSIC_REQUEST_FILENAME = "music_request.json"
 MUSIC_RESULT_FILENAME = "music_result.json"
 SOUND_EFFECTS_SUBDIR = "sound_effects"
@@ -372,10 +374,46 @@ def music_chapter_dir(project: Project, folder_name: str) -> Path:
     return music_chapters_dir(project) / slug
 
 
-def music_wav_path(project: Project, *, scope: str, folder_name: str = "") -> Path:
+def music_wav_filename(*, scope: str, folder_name: str = "") -> str:
+    """WAV-Name mit Kapitel, z. B. ``Music_Intro.wav`` / ``Music_Grand_Canyon.wav``."""
+    from otio_app.project_layout import safe_folder_slug
+
     if str(scope).strip().lower() == "intro":
-        return music_intro_dir(project) / MUSIC_WAV_FILENAME
-    return music_chapter_dir(project, folder_name) / MUSIC_WAV_FILENAME
+        return MUSIC_INTRO_WAV_FILENAME
+    slug = safe_folder_slug((folder_name or "").strip() or "chapter")
+    return f"{MUSIC_WAV_NAME_PREFIX}{slug}.wav"
+
+
+def music_scope_dir(project: Project, *, scope: str, folder_name: str = "") -> Path:
+    if str(scope).strip().lower() == "intro":
+        return music_intro_dir(project)
+    return music_chapter_dir(project, folder_name)
+
+
+def music_wav_path(project: Project, *, scope: str, folder_name: str = "") -> Path:
+    """Canonical write path: ``Music_<Kapitel>.wav`` im Sprach-/Kapitelordner."""
+    return music_scope_dir(
+        project, scope=scope, folder_name=folder_name
+    ) / music_wav_filename(scope=scope, folder_name=folder_name)
+
+
+def legacy_music_wav_path(
+    project: Project, *, scope: str, folder_name: str = ""
+) -> Path:
+    return music_scope_dir(project, scope=scope, folder_name=folder_name) / MUSIC_WAV_FILENAME
+
+
+def resolve_existing_music_wav_path(
+    project: Project, *, scope: str, folder_name: str = ""
+) -> Path | None:
+    """Bevorzugt ``Music_<Kapitel>.wav``, fällt auf altes ``music.wav`` zurück."""
+    canonical = music_wav_path(project, scope=scope, folder_name=folder_name)
+    if canonical.is_file():
+        return canonical
+    legacy = legacy_music_wav_path(project, scope=scope, folder_name=folder_name)
+    if legacy.is_file():
+        return legacy
+    return None
 
 
 def music_request_path(project: Project, *, scope: str, folder_name: str = "") -> Path:

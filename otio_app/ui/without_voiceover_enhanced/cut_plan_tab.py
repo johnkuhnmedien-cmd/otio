@@ -1481,16 +1481,37 @@ def _music_button_label(ui_status: dict) -> str:
     if status == "completed":
         dur = ui_status.get("actual_duration_seconds")
         if dur is not None:
-            return f"✅ ElevenLabs Music · {float(dur):.2f}s WAV"
-        return "✅ ElevenLabs Music"
+            return f"Music neu erzeugen · {float(dur):.2f}s"
+        return "Music neu erzeugen"
     if status == "stale":
-        return "⚠ Music veraltet"
+        return "⚠ Music veraltet — neu erzeugen"
     if status == "unavailable":
         msg = str(ui_status.get("message") or "")
         if "nur Intro" in msg or "Kapitel 1" in msg:
             return msg
         return "Music nicht verfügbar"
     return "ElevenLabs Music"
+
+
+def _music_help_text(ui_status: dict) -> str:
+    status = str(ui_status.get("status") or "")
+    path = str(ui_status.get("music_path") or "").strip()
+    if status == "completed" and path:
+        return (
+            f"Erneut klicken überschreibt die WAV. Datei: `{path}`"
+        )
+    if path:
+        return f"{ui_status.get('help') or ui_status.get('message') or ''} Datei: `{path}`".strip()
+    return str(ui_status.get("help") or "ElevenLabs Music (optional).")
+
+
+def _render_music_file_caption(ui_status: dict) -> None:
+    path = str(ui_status.get("music_path") or "").strip()
+    status = str(ui_status.get("status") or "")
+    if path:
+        st.caption(f"Datei: `{path}`")
+    elif status in {"stale", "unavailable", "failed"}:
+        st.caption(str(ui_status.get("message") or ""))
 
 
 def _sfx_button_label(ui_status: dict) -> str:
@@ -1592,10 +1613,9 @@ def _render_intro_cut_section(
             key=f"enh_intro_cut_music_{project.id}",
             use_container_width=True,
             disabled=not bool(music_ui.get("enabled")),
-            help=str(music_ui.get("help") or "ElevenLabs Music (optional)."),
+            help=_music_help_text(music_ui),
         )
-        if music_ui.get("status") in {"stale", "unavailable", "failed"}:
-            st.caption(str(music_ui.get("message") or ""))
+        _render_music_file_caption(music_ui)
     with col_sfx:
         run_intro_sfx = st.button(
             _sfx_button_label(sfx_ui),
@@ -1925,10 +1945,9 @@ def _render_chapter_cut_rows(
                 key=f"enh_ch_music_{key_base}",
                 use_container_width=True,
                 disabled=not bool(music_ui.get("enabled")),
-                help=str(music_ui.get("help") or "ElevenLabs Music (optional)."),
+                help=_music_help_text(music_ui),
             )
-            if music_ui.get("status") in {"stale", "unavailable", "failed"}:
-                st.caption(str(music_ui.get("message") or ""))
+            _render_music_file_caption(music_ui)
         with sfx_col:
             run_sfx = st.button(
                 _sfx_button_label(sfx_ui),
@@ -2281,15 +2300,17 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             help=(
                 "ElevenLabs Music für Intro und die ersten Körper-Kapitel "
                 "laut Cut Plan Settings (Anzahl inkl. Intro). "
-                "Fertige, nicht veraltete WAVs werden übersprungen "
-                "(kein Re-Billing)."
+                "Fertige, nicht veraltete WAVs werden hier übersprungen "
+                "(kein Re-Billing). Zum Überschreiben den Kapitel-Button "
+                "„Music neu erzeugen“ nutzen."
             ),
         )
     with col_music_help:
         st.caption(
             "Anzahl in Cut Plan Settings → ElevenLabs Music speichern. "
             "Default 4 = Intro + erste 3 Kapitel. "
-            "Fertige Music-WAVs werden übersprungen."
+            "Dieser Sammel-Button überspringt fertige Music. "
+            "Neu erzeugen: Button am Intro bzw. am Kapitel."
         )
 
     batch_flash_key = f"_enh_llm_batch_flash_{project.id}"
