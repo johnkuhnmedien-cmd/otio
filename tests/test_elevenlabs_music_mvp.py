@@ -1467,3 +1467,26 @@ def test_generate_writes_named_wav_and_removes_legacy(tmp_path: Path) -> None:
     assert named.is_file()
     assert Path(result.music_path) == named
     assert not legacy.is_file()
+
+
+def test_music_button_label_completed_offers_regenerate() -> None:
+    from otio_app.ui.without_voiceover_enhanced.cut_plan_tab import (
+        _music_button_label,
+        _music_help_text,
+    )
+
+    label = _music_button_label(
+        {"status": "completed", "actual_duration_seconds": 12.5}
+    )
+    assert "neu erzeugen" in label.lower()
+    help_text = _music_help_text(
+        {
+            "status": "completed",
+            "music_path": (
+                "/proj/_otio_enhanced/DE/voiceover_generation/music/"
+                "chapters/Yosemite/Music_Yosemite.wav"
+            ),
+        }
+    )
+    assert "Music_Yosemite.wav" in help_text
+    assert "überschreibt" in help_text
