@@ -95,18 +95,22 @@ Create instrumental documentary opening music for the following intro narration.
 
 Match the location, atmosphere, cultural or historical character, and emotional tone of the narration.
 
+Musical direction: classical orchestral (symphony, strings, brass, woodwinds).
+The intro may feel epic and grand — a classical, cinematic opening, not a quiet pad.
+Do not use modern trailer music, hybrid-epic percussion, electronic drops, or exaggerated Hollywood trailer drama.
+Key: begin in E minor. Later make a shift into major (parallel E major or a bright major cadence) so the ending opens and lifts.
+
 {_START_IMMEDIATELY_NOTE}
 
-Start atmospheric and restrained, but already present from 0.00 seconds.
+Start already present from 0.00 seconds, with an epic classical character.
 Gradually build energy and forward momentum.
 The ending should feel more open and anticipatory so it leads naturally into the first chapter.
 
-The music must support spoken narration without dominating it.
+The music may be more elevated than a chapter underscore, but must still leave space for spoken narration.
 
 No vocals.
 No spoken words.
 No lyrics.
-Avoid exaggerated trailer-style drama.
 
 {_PAUSE_NOTE}
 {duration_block}

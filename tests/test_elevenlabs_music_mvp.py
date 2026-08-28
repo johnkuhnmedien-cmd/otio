@@ -373,8 +373,14 @@ def test_d_chapter_and_intro_prompts() -> None:
     assert intro_text in intro
     assert "Gradually build energy" in intro
     assert "start immediately at 0.00 seconds" in intro
+    assert "classical orchestral" in intro
+    assert "epic and grand" in intro
+    assert "E minor" in intro
+    assert "shift into major" in intro
     assert "anticipatory" in intro
     assert "No vocals" in intro
+    assert "trailer-style drama" in ch
+    assert "modern trailer music" in intro
 
 
 # --- E prompt limit --------------------------------------------------------
@@ -1321,6 +1327,11 @@ def test_r2_intro_prompt_starts_immediately_and_fills_duration() -> None:
     assert "Do not begin with silence" in intro
     assert "8–10 second fade-in" in intro
     assert "already present from 0.00 seconds" in intro
+    assert "classical orchestral" in intro
+    assert "epic and grand" in intro
+    assert "modern trailer music" in intro
+    assert "E minor" in intro
+    assert "shift into major" in intro
     assert "Total track duration: 18.00 seconds." in intro
     assert "8–10 seconds before the end" in intro
     assert "End cleanly at the requested duration, not earlier." in intro
