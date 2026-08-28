@@ -836,6 +836,61 @@ def test_auto_run_python_timing_runs_chapters_in_parallel(
     assert max_seen <= len(folders)
 
 
+def test_auto_run_llm_cuts_use_prefix_and_standard_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+        save_cut_plan_options,
+    )
+
+    project = _project(tmp_path)
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            llm_cut_model="openai:gpt-5.6-terra",
+            llm_cut_prefix_count=2,
+            llm_cut_prefix_model="openai:gpt-5.6-sol",
+        ),
+    )
+    intro: list[tuple[str, str]] = []
+    chapters: list[tuple[str, str, str]] = []
+
+    def fake_intro(_project, **kwargs):
+        intro.append((kwargs["provider"], kwargs["model"]))
+        return MagicMock(slot_count=1, gap_count=0)
+
+    def fake_chapter(_project, folder_name, **kwargs):
+        chapters.append((folder_name, kwargs["provider"], kwargs["model"]))
+        return MagicMock()
+
+    monkeypatch.setattr(auto_run, "generate_intro_unified_cut", fake_intro)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", fake_chapter)
+    monkeypatch.setattr(
+        auto_run, "list_chapters_needing_unified_cut", lambda _p: ["Athens", "Győr"]
+    )
+    monkeypatch.setattr(auto_run, "refresh_merged_unified_cut_plan", lambda _p: None)
+
+    auto_run._run_intro_cut(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        finish=lambda *_a, **_k: None,
+    )
+    auto_run._run_chapter_cuts(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        checkpoint=lambda _step: None,
+        finish=lambda *_a, **_k: None,
+    )
+    assert intro == [("openai", "gpt-5.6-sol")]
+    assert chapters == [
+        ("Athens", "openai", "gpt-5.6-sol"),
+        ("Győr", "openai", "gpt-5.6-terra"),
+    ]
+
+
 def test_auto_run_revises_existing_scripts_before_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

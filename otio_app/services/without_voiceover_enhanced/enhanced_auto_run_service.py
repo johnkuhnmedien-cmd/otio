@@ -429,9 +429,22 @@ def _style_has_content(refs: VoiceoverStyleReferences) -> bool:
     return any(str(chunk or "").strip() for chunk in chunks)
 
 
-def llm_cut_provider_model(project: Project) -> tuple[str, str]:
-    """Provider/Modell für Intro- und Kapitel-LLM-Cuts (Sprachstandard zuerst)."""
-    return split_llm_model_id(resolve_llm_cut_model_id(project))
+def llm_cut_provider_model(
+    project: Project,
+    *,
+    folder_name: str | None = None,
+    is_intro: bool = False,
+) -> tuple[str, str]:
+    """Provider/Modell für Intro- und Kapitel-LLM-Cuts (Sprachstandard zuerst).
+
+    Ohne Ziel: immer das Standard-Modell. Intro zählt als Index 0, danach
+    Körper-Kapitel — die ersten N können ein Prefix-Modell nutzen.
+    """
+    return split_llm_model_id(
+        resolve_llm_cut_model_id(
+            project, folder_name=folder_name, is_intro=is_intro
+        )
+    )
 
 
 def run_enhanced_auto_pipeline(
@@ -504,7 +517,6 @@ def run_enhanced_auto_pipeline(
 
     try:
         models = load_model_settings(project)
-        cut_provider, cut_model = llm_cut_provider_model(project)
 
         checkpoint("brief")
         _run_brief(
@@ -579,8 +591,6 @@ def run_enhanced_auto_pipeline(
             project,
             skip_done=skip_done,
             emit=emit,
-            provider=cut_provider,
-            model=cut_model,
             finish=finish_step,
         )
 
@@ -590,8 +600,6 @@ def run_enhanced_auto_pipeline(
             skip_done=skip_done,
             emit=emit,
             checkpoint=checkpoint,
-            provider=cut_provider,
-            model=cut_model,
             finish=finish_step,
         )
 
@@ -1051,8 +1059,6 @@ def _run_intro_cut(
     *,
     skip_done: bool,
     emit: Callable[..., None],
-    provider: str,
-    model: str,
     finish: Callable[..., None],
 ) -> None:
     existing = load_model(
@@ -1062,7 +1068,8 @@ def _run_intro_cut(
         emit("intro_cut", "Intro LLM Cut vorhanden — übersprungen.", skipped=True)
         finish("intro_cut", skipped=True)
         return
-    emit("intro_cut", "Intro LLM Cut…")
+    provider, model = llm_cut_provider_model(project, is_intro=True)
+    emit("intro_cut", f"Intro LLM Cut ({provider}:{model})…")
     result = generate_intro_unified_cut(
         project, provider=provider, model=model
     )
@@ -1079,8 +1086,6 @@ def _run_chapter_cuts(
     skip_done: bool,
     emit: Callable[..., None],
     checkpoint: Callable[[str], None],
-    provider: str,
-    model: str,
     finish: Callable[..., None],
 ) -> None:
     names = list_chapters_needing_unified_cut(project) if skip_done else [
@@ -1108,11 +1113,14 @@ def _run_chapter_cuts(
             item_total=total,
         )
         try:
+            chapter_provider, chapter_model = llm_cut_provider_model(
+                project, folder_name=name
+            )
             generate_chapter_unified_cut(
                 project,
                 name,
-                provider=provider,
-                model=model,
+                provider=chapter_provider,
+                model=chapter_model,
                 refresh_merged=False,
             )
             generated += 1
