@@ -127,6 +127,7 @@ VOICEOVER_PROJECT_PLAN_JSON_FILENAME = "voiceover_project_plan.json"
 VOICEOVER_PROJECT_PLAN_MD_FILENAME = "voiceover_project_plan.md"
 VOICEOVER_PROJECT_PLAN_CSV_FILENAME = "voiceover_project_plan.csv"
 YOUTUBE_METADATA_FILENAME = "youtube_metadata.json"
+YOUTUBE_METADATA_TEXT_FILENAME = "youtube_metadata.txt"
 
 # YouTube Publish limits (UI + post-LLM clamp)
 # Body bewusst unter YouTube-Hardcap (5000), damit Kapitel-Timestamps Platz haben.

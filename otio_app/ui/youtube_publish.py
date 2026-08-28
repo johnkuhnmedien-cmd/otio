@@ -28,6 +28,7 @@ from otio_app.services.youtube_publish_service import (
     generate_youtube_quizzes_from_context,
     load_youtube_metadata,
     youtube_metadata_path,
+    youtube_project_metadata_path,
 )
 from otio_app.ui.activity import log_heavy_operation
 from otio_app.ui.voiceover_generation._shared import (
@@ -142,6 +143,13 @@ def _render_copyable_results(
                     opt.text,
                     key=f"{key_prefix}_yt_a_{project_id}_{run}_{quiz.order_index}_{opt_index}",
                 )
+
+
+def _render_saved_paths(project: Project) -> None:
+    st.caption(
+        f"Intern: `{youtube_metadata_path(project)}`  \n"
+        f"Projektordner (Sprache): `{youtube_project_metadata_path(project)}`"
+    )
 
 
 def render_youtube_publish_block(
@@ -273,7 +281,7 @@ def render_youtube_publish_block(
         project_id=project.id,
         key_prefix=key_prefix,
     )
-    st.caption(f"Gespeichert: `{youtube_metadata_path(project)}`")
+    _render_saved_paths(project)
 
 
 def render_enhanced_youtube_publish_block(
@@ -397,4 +405,4 @@ def render_enhanced_youtube_publish_block(
         project_id=project.id,
         key_prefix=key_prefix,
     )
-    st.caption(f"Gespeichert: `{youtube_metadata_path(project)}`")
+    _render_saved_paths(project)

@@ -14,7 +14,11 @@ from otio_app.defaults import (
     YOUTUBE_QUIZ_OPTION_COUNT,
 )
 from otio_app.models import Project
-from otio_app.project_layout import get_youtube_metadata_path
+from otio_app.project_layout import (
+    get_project_youtube_metadata_path,
+    get_project_youtube_metadata_text_path,
+    get_youtube_metadata_path,
+)
 from otio_app.services.gemini_client import _extract_json
 from otio_app.services.otio_exporter import (
     MergedEditPlanResult,
@@ -64,6 +68,8 @@ __all__ = [
     "load_youtube_metadata",
     "quiz_count_for_duration",
     "save_youtube_metadata",
+    "youtube_metadata_path",
+    "youtube_project_metadata_path",
 ]
 
 
@@ -407,6 +413,50 @@ def _parse_quizzes(
     return quizzes
 
 
+def _format_youtube_metadata_text(document: YouTubeMetadataDocument) -> str:
+    """Lesbare Kopie für den Sprachordner im Projekt (YouTube Studio)."""
+    sections: list[str] = []
+    title = (document.title or "").strip()
+    if title:
+        sections.append(f"Titel\n{title}")
+    wonders = document.formatted_wonders_title()
+    if wonders:
+        sections.append(f"Videotitel\n{wonders}")
+    description = (document.description or "").strip()
+    if description:
+        sections.append(f"Beschreibung\n{description}")
+    hashtags = _normalize_hashtags(document.hashtags)
+    if hashtags:
+        sections.append(f"Hashtags\n{hashtags}")
+    if document.chapters:
+        chapter_lines = "\n".join(
+            f"{chapter.display_title} - {chapter.timestamp}"
+            for chapter in document.chapters
+        )
+        sections.append(f"Kapitel\n{chapter_lines}")
+    return "\n\n".join(sections).rstrip() + ("\n" if sections else "")
+
+
+def _export_youtube_metadata_to_project_folder(
+    project: Project,
+    document: YouTubeMetadataDocument,
+    json_payload: str,
+) -> None:
+    json_path = get_project_youtube_metadata_path(
+        project.project_root_path,
+        project.voice_over_subdir,
+        project.language,
+    )
+    text_path = get_project_youtube_metadata_text_path(
+        project.project_root_path,
+        project.voice_over_subdir,
+        project.language,
+    )
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json_payload, encoding="utf-8")
+    text_path.write_text(_format_youtube_metadata_text(document), encoding="utf-8")
+
+
 def save_youtube_metadata(
     project: Project,
     document: YouTubeMetadataDocument,
@@ -414,7 +464,9 @@ def save_youtube_metadata(
     path = get_youtube_metadata_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     normalized = document.model_copy(update={"project_id": project.id})
-    path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
+    payload = normalized.model_dump_json(indent=2)
+    path.write_text(payload, encoding="utf-8")
+    _export_youtube_metadata_to_project_folder(project, normalized, payload)
     return normalized
 
 
@@ -824,3 +876,12 @@ def generate_youtube_quizzes(
 
 def youtube_metadata_path(project: Project) -> Path:
     return get_youtube_metadata_path(project.language_work_dir_path)
+
+
+def youtube_project_metadata_path(project: Project) -> Path:
+    """Sprachordner im Projektroot, z. B. ``Voice over/PT/youtube_metadata.json``."""
+    return get_project_youtube_metadata_path(
+        project.project_root_path,
+        project.voice_over_subdir,
+        project.language,
+    )
