@@ -32,6 +32,8 @@ from otio_app.project_layout import (
     get_folder_voiceover_audio_dir,
     get_tts_run_dir,
     get_voice_analysis_path,
+    get_project_youtube_metadata_path,
+    get_project_youtube_metadata_text_path,
     get_voice_over_dir,
     get_voiceover_audio_manifest_path,
     get_voiceover_generation_audio_dir,
@@ -60,6 +62,18 @@ def test_get_voice_over_dir(temp_project_layout: dict[str, Path]) -> None:
     project_root = temp_project_layout["project_root"]
     voice_dir = get_voice_over_dir(project_root, "Voice over", "de")
     assert voice_dir == project_root / "Voice over" / "DE"
+
+
+def test_project_youtube_metadata_path_uses_language_folder(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project_root = temp_project_layout["project_root"]
+    assert get_project_youtube_metadata_path(
+        project_root, "Voice over", "pt"
+    ) == project_root / "Voice over" / "PT" / "youtube_metadata.json"
+    assert get_project_youtube_metadata_text_path(
+        project_root, "Voice over", "ja"
+    ) == project_root / "Voice over" / "JP" / "youtube_metadata.txt"
 
 
 def test_output_paths(temp_project_layout: dict[str, Path]) -> None:

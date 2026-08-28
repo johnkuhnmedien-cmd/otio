@@ -324,6 +324,31 @@ def get_youtube_metadata_path(work_dir: Path) -> Path:
     return get_voiceover_generation_dir(work_dir) / YOUTUBE_METADATA_FILENAME
 
 
+def get_project_youtube_metadata_path(
+    project_root: Path,
+    voice_over_subdir: str,
+    language: str,
+) -> Path:
+    """Kopie der YouTube-Metadaten im sprachspezifischen Projektordner.
+
+    Beispiel: ``USA/Voice over/PT/youtube_metadata.json``.
+    """
+    from otio_app.defaults import YOUTUBE_METADATA_FILENAME
+
+    return get_voice_over_dir(project_root, voice_over_subdir, language) / YOUTUBE_METADATA_FILENAME
+
+
+def get_project_youtube_metadata_text_path(
+    project_root: Path,
+    voice_over_subdir: str,
+    language: str,
+) -> Path:
+    """Lesbare YouTube-Metadaten (Titel/Beschreibung) im Sprachordner des Projekts."""
+    from otio_app.defaults import YOUTUBE_METADATA_TEXT_FILENAME
+
+    return get_voice_over_dir(project_root, voice_over_subdir, language) / YOUTUBE_METADATA_TEXT_FILENAME
+
+
 def get_voiceover_generation_audio_dir(work_dir: Path) -> Path:
     """Wurzel aller erzeugten Audiodateien (TTS) dieser Pipeline."""
     from otio_app.defaults import VOICEOVER_GENERATION_AUDIO_SUBDIR

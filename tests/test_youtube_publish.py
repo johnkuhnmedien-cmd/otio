@@ -31,6 +31,7 @@ from otio_app.services.youtube_publish_service import (
     load_youtube_metadata,
     quiz_count_for_duration,
     save_youtube_metadata,
+    youtube_project_metadata_path,
 )
 from otio_app.services.youtube_publish_models import (
     YouTubeMetadataDocument,
@@ -39,7 +40,7 @@ from otio_app.services.youtube_publish_models import (
 )
 
 
-def _project(tmp_path: Path) -> Project:
+def _project(tmp_path: Path, *, language: str = "de") -> Project:
     root = tmp_path / "USA"
     work = root / "_otio"
     (root / "Antelope Canyon").mkdir(parents=True)
@@ -50,7 +51,7 @@ def _project(tmp_path: Path) -> Project:
         name="USA Roadtrip",
         project_root=str(root),
         work_dir=str(work),
-        language="de",
+        language=language,
         asset_subdir_names=["Antelope Canyon", "Grand Canyon"],
         selected_asset_subdirs=["Antelope Canyon", "Grand Canyon"],
     )
@@ -523,6 +524,45 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.title == "T"
     assert loaded.chapters[0].display_title == "Intro"
+
+    export_json = youtube_project_metadata_path(project)
+    assert export_json == Path(project.project_root) / "Voice over" / "DE" / "youtube_metadata.json"
+    assert export_json.is_file()
+    exported = YouTubeMetadataDocument.model_validate_json(
+        export_json.read_text(encoding="utf-8")
+    )
+    assert exported.title == "T"
+    export_txt = export_json.with_suffix(".txt")
+    assert export_txt.is_file()
+    text = export_txt.read_text(encoding="utf-8")
+    assert "Titel\nT" in text
+    assert "Beschreibung\nD\n\nIntro - 00:00" in text
+    assert "Hashtags\na, b" in text
+    assert "Intro - 00:00" in text
+
+
+def test_save_youtube_metadata_uses_language_folder(tmp_path: Path) -> None:
+    project = _project(tmp_path, language="pt")
+    save_youtube_metadata(
+        project,
+        YouTubeMetadataDocument(
+            project_id=project.id,
+            language="PT",
+            title="As maravilhas dos EUA",
+            wonders_title_formula="As maravilhas de",
+            wonders_title_place="EUA",
+            description="Um filme sobre canyons.",
+            hashtags="EUA, Natureza",
+        ),
+    )
+    export_json = youtube_project_metadata_path(project)
+    assert export_json == Path(project.project_root) / "Voice over" / "PT" / "youtube_metadata.json"
+    assert export_json.is_file()
+    text = export_json.with_suffix(".txt").read_text(encoding="utf-8")
+    assert "As maravilhas dos EUA" in text
+    assert "As maravilhas de\nEUA" in text
+    de_copy = Path(project.project_root) / "Voice over" / "DE" / "youtube_metadata.json"
+    assert not de_copy.exists()
 
 
 def test_parse_wonders_title_two_fields_and_newline_fallback() -> None:
