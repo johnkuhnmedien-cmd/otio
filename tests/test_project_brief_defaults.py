@@ -54,6 +54,10 @@ def brief_defaults_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_normalize_brief_language() -> None:
     assert normalize_brief_language("pt") == "PT"
     assert normalize_brief_language("DE") == "DE"
+    assert normalize_brief_language("ja") == "JP"
+    assert normalize_brief_language("jp") == "JP"
+    assert normalize_brief_language("ko") == "KR"
+    assert normalize_brief_language("KR") == "KR"
     assert normalize_brief_language("xx") == "DE"
 
 

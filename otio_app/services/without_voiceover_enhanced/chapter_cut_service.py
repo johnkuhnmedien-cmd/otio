@@ -405,12 +405,35 @@ def list_chapter_cut_statuses(project: Project) -> list[ChapterCutStatus]:
 
 
 def list_chapters_needing_unified_cut(project: Project) -> list[str]:
-    """Körper-Kapitel ohne Unified-Plan (offene LLM Cuts)."""
-    return [
-        status.folder_name
-        for status in list_chapter_cut_statuses(project)
-        if not status.has_plan
-    ]
+    """Körper-Kapitel ohne gültigen Unified-Plan (offene LLM Cuts).
+
+    Liest nur die Kapitelpläne — kein Gap-Status, keine Resolved-Timelines.
+    """
+    names = list_body_chapter_names(project)
+    if not names:
+        return []
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        load_cut_plan_options,
+        plan_has_unsupported_keyword_flow_pause_directives,
+        uses_keyword_onset_timing_rules,
+    )
+
+    check_pauses = uses_keyword_onset_timing_rules(load_cut_plan_options(project))
+    needed: list[str] = []
+    for name in names:
+        plan = load_chapter_unified_plan(project, name)
+        if plan is None or not plan.slots:
+            needed.append(name)
+            continue
+        if not _artifact_matches_locked_script_version(
+            project, getattr(plan, "script_version", None)
+        ):
+            needed.append(name)
+            continue
+        if check_pauses and plan_has_unsupported_keyword_flow_pause_directives(plan):
+            needed.append(name)
+            continue
+    return needed
 
 
 def list_chapters_needing_python_timing(project: Project) -> list[str]:
@@ -589,6 +612,7 @@ def generate_all_chapter_unified_cuts(
     progress_callback: Callable[[str, int, int], None] | None = None,
     chapter_names: list[str] | None = None,
     only_open: bool = False,
+    options: Any | None = None,
 ) -> list[ChapterCutGenerateResult]:
     """Körper-Kapitel **strikt sequenziell** (immer genau 1 LLM-Call gleichzeitig).
 
@@ -597,6 +621,8 @@ def generate_all_chapter_unified_cuts(
 
     ``only_open=True``: nur Kapitel ohne bestehenden Unified-Plan.
     ``chapter_names``: explizite Teilmenge (Dramaturgie-Filter bleibt außen).
+    Pro Kapitel kommt das Modell aus ``resolve_llm_cut_model_id`` (optionales
+    Prefix für Intro + erste Körper-Kapitel, sonst Standard).
 
     Einzelne Kapitel-Fehler brechen den Batch nicht ab — erfolgreiche Kapitel
     werden gespeichert; am Ende fliegt ``ChapterCutError`` nur wenn mindestens
@@ -614,20 +640,33 @@ def generate_all_chapter_unified_cuts(
             if only_open
             else "Keine Körper-Kapitel für den Unified Cut."
         )
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        split_llm_model_id,
+    )
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        resolve_llm_cut_model_id,
+    )
+
     out: list[ChapterCutGenerateResult] = []
     errors: list[str] = []
     total = len(names)
     for index, name in enumerate(names, start=1):
         if progress_callback is not None:
             progress_callback(name, index, total)
+        resolved_id = resolve_llm_cut_model_id(
+            project, folder_name=name, options=options
+        )
+        chapter_provider, chapter_model = split_llm_model_id(resolved_id)
+        if not chapter_model:
+            chapter_provider, chapter_model = provider, model
         # Merge erst am Ende — sonst N× volle Merge-Kosten.
         try:
             out.append(
                 generate_chapter_unified_cut(
                     project,
                     name,
-                    provider=provider,
-                    model=model,
+                    provider=chapter_provider,
+                    model=chapter_model,
                     llm_callable=llm_callable,
                     refresh_merged=False,
                 )

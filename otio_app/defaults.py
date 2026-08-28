@@ -308,7 +308,7 @@ STYLE_PROFILE_LIBRARY_FILENAME = "style_profile_library.json"
 RAW_STYLE_LIBRARY_FILENAME = "raw_style_library.json"
 
 # --- Project Brief: feste Auswahllisten ---
-BRIEF_LANGUAGE_CHOICES = ("DE", "EN", "FR", "ES", "PT", "IT")
+BRIEF_LANGUAGE_CHOICES = ("DE", "EN", "FR", "ES", "PT", "IT", "JP", "KR")
 BRIEF_TONE_TAG_CHOICES = (
     "cinematic",
     "documentary",

@@ -7,7 +7,6 @@ Index unter ``audio/segment_alignments.json`` für spätere Cut-/LLM-Nutzung.
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from otio_app.models import Project
@@ -19,6 +18,9 @@ from otio_app.services.without_voiceover_enhanced.models import (
     SegmentAlignment,
     SegmentAlignmentsDocument,
     SentenceTiming,
+)
+from otio_app.services.without_voiceover_enhanced.cjk_timing_text import (
+    split_cjk_aware_sentences,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
     alignments_dir,
@@ -38,17 +40,15 @@ __all__ = [
     "split_segment_into_sentences",
 ]
 
-# Satzgrenzen: Punkt/Frage/Ausruf/Ellipse, danach Whitespace.
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
-
 
 def split_segment_into_sentences(text: str) -> list[str]:
-    """Teilt Segmenttext in Satz-/Beat-Chunks für Alignment."""
-    cleaned = (text or "").strip()
-    if not cleaned:
-        return []
-    parts = [part.strip() for part in _SENTENCE_SPLIT_RE.split(cleaned) if part.strip()]
-    return parts or [cleaned]
+    """Teilt Segmenttext in Satz-/Beat-Chunks für Alignment.
+
+    Westlich: ``.!?…`` plus Leerzeichen. JP/KR zusätzlich ``。！？``
+    (Space optional) und lateinischer Punkt direkt vor Hangul/Kana/Kanji.
+    Reine ``[pause …]``-Tags hängen am vorausgehenden Satz.
+    """
+    return split_cjk_aware_sentences(text)
 
 
 def rebase_alignment_to_slice(

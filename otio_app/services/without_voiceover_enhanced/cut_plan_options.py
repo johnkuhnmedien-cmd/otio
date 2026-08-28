@@ -129,6 +129,9 @@ DEFAULT_LLM_CUT_MODEL = (
 DEFAULT_ELEVENLABS_MUSIC_COUNT = 4
 ELEVENLABS_MUSIC_COUNT_MIN = 1
 ELEVENLABS_MUSIC_COUNT_MAX = 40
+# Optional LLM-Cut prefix: Intro counts as 1, then body chapters. 0 = off.
+LLM_CUT_PREFIX_COUNT_MIN = 0
+LLM_CUT_PREFIX_COUNT_MAX = 40
 
 
 class CutPlanOptions(BaseModel):
@@ -145,6 +148,14 @@ class CutPlanOptions(BaseModel):
     unified_mini_repair_threshold: float = Field(default=0.20, ge=0.0, le=1.0)
     # Combined id (openai:gpt-5.6-terra). Empty = inherit from model_settings.
     llm_cut_model: str = ""
+    # Optional: first N LLM cuts (Intro = 1, then body chapters) use another model.
+    # 0 or empty prefix model = off (everyone uses llm_cut_model).
+    llm_cut_prefix_count: int = Field(
+        default=0,
+        ge=LLM_CUT_PREFIX_COUNT_MIN,
+        le=LLM_CUT_PREFIX_COUNT_MAX,
+    )
+    llm_cut_prefix_model: str = ""
     # ElevenLabs SFX MVP: planner model (independent of Final/Unified Cut model).
     sfx_planner_model: str = DEFAULT_SFX_PLANNER_MODEL
     # Hard maximum per chapter/intro scope — not a target. Prefer fewer.
@@ -457,6 +468,13 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             hi=1.0,
         ),
         llm_cut_model=str(raw.get("llm_cut_model") or "").strip(),
+        llm_cut_prefix_count=_clamp_int(
+            raw.get("llm_cut_prefix_count", defaults.llm_cut_prefix_count),
+            default=defaults.llm_cut_prefix_count,
+            lo=LLM_CUT_PREFIX_COUNT_MIN,
+            hi=LLM_CUT_PREFIX_COUNT_MAX,
+        ),
+        llm_cut_prefix_model=str(raw.get("llm_cut_prefix_model") or "").strip(),
         sfx_planner_model=str(
             raw.get("sfx_planner_model", defaults.sfx_planner_model)
             or defaults.sfx_planner_model
@@ -757,12 +775,71 @@ def _fallback_llm_cut_model_id(project: Project) -> str:
     return DEFAULT_LLM_CUT_MODEL
 
 
-def resolve_llm_cut_model_id(project: Project) -> str:
-    """Unified/Intro/Kapitel-LLM-Cut: CutPlanOptions, sonst model_settings."""
-    configured = str(load_cut_plan_options(project).llm_cut_model or "").strip()
-    if configured:
-        return configured
-    return _fallback_llm_cut_model_id(project)
+def _body_chapter_names_for_llm_cut(project: Project) -> list[str]:
+    try:
+        from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+            list_body_chapter_names,
+        )
+
+        return list(list_body_chapter_names(project))
+    except Exception:  # noqa: BLE001 — Settings/UI vor Script-Lock
+        return [
+            str(name).strip()
+            for name in (project.selected_asset_subdirs or [])
+            if str(name).strip()
+        ]
+
+
+def _llm_cut_target_index(
+    project: Project,
+    *,
+    folder_name: str | None,
+    is_intro: bool,
+) -> int | None:
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        is_intro_folder_name,
+    )
+
+    if is_intro or is_intro_folder_name(folder_name or ""):
+        return 0
+    target = str(folder_name or "").strip()
+    if not target:
+        return None
+    for index, name in enumerate(_body_chapter_names_for_llm_cut(project)):
+        if name == target or name.casefold() == target.casefold():
+            return 1 + index
+    return None
+
+
+def resolve_llm_cut_model_id(
+    project: Project,
+    *,
+    folder_name: str | None = None,
+    is_intro: bool = False,
+    options: CutPlanOptions | None = None,
+) -> str:
+    """Unified/Intro/Kapitel-LLM-Cut: CutPlanOptions, sonst model_settings.
+
+    Ohne ``folder_name``/``is_intro`` kommt immer das Standard-Modell.
+    Mit Ziel: die ersten ``llm_cut_prefix_count`` Cuts (Intro = 1, dann
+    Körper-Kapitel) nutzen ``llm_cut_prefix_model``, der Rest das Standard-Modell.
+    """
+    opts = options or load_cut_plan_options(project)
+    standard = str(opts.llm_cut_model or "").strip() or _fallback_llm_cut_model_id(
+        project
+    )
+    prefix_model = str(opts.llm_cut_prefix_model or "").strip()
+    try:
+        prefix_count = int(opts.llm_cut_prefix_count or 0)
+    except (TypeError, ValueError):
+        prefix_count = 0
+    if prefix_model and prefix_count > 0:
+        index = _llm_cut_target_index(
+            project, folder_name=folder_name, is_intro=is_intro
+        )
+        if index is not None and index < prefix_count:
+            return prefix_model
+    return standard
 
 
 def persist_cut_plan_options(project: Project, options: CutPlanOptions) -> CutPlanOptions:

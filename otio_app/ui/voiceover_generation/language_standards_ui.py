@@ -23,8 +23,9 @@ def render_language_standards_expander(*, expanded: bool = False) -> None:
     with st.expander("📂 Wo liegen die Sprach-Standards?", expanded=expanded):
         st.caption(
             f"Gemeinsamer Ordner: `{language_standards_dir()}`. "
-            "Pro Sprache ein Eintrag unter `by_language` (z. B. PT, EN, FR, IT). "
-            "Der Videotitel und erzeugte Texte bleiben im Projekt."
+            "Pro Sprache ein Eintrag unter `by_language` (z. B. PT, EN, FR, IT, JP, KR). "
+            "Der Videotitel und erzeugte Texte bleiben im Projekt. "
+            "Fehlende Sprachen in der Projektliste löschen diese Dateien nicht."
         )
         for item in list_language_standard_files():
             st.markdown(f"**{item.tab}** — `{item.filename}`")

@@ -734,9 +734,35 @@ def test_open_batch_helpers_skip_finished_chapters(tmp_path) -> None:
         "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_chapter_cut_statuses",
         return_value=statuses,
     ):
-        assert list_chapters_needing_unified_cut(object()) == ["NeedLLM"]  # type: ignore[arg-type]
         assert list_chapters_needing_python_timing(object()) == ["NeedTiming"]  # type: ignore[arg-type]
         assert "OpenGaps" not in list_chapters_needing_python_timing(object())  # type: ignore[arg-type]
+
+    project = _project(tmp_path)
+    for name in ("Done", "NeedTiming", "OpenGaps"):
+        write_json(chapter_unified_cut_plan_path(project, name), _plan(name.lower(), slots=1))
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_body_chapter_names",
+        return_value=["Done", "NeedLLM", "NeedTiming", "OpenGaps"],
+    ):
+        assert list_chapters_needing_unified_cut(project) == ["NeedLLM"]
+
+
+def test_list_chapters_needing_unified_cut_skips_gap_status(tmp_path, monkeypatch) -> None:
+    from otio_app.services.without_voiceover_enhanced import chapter_cut_service as svc
+
+    project = _project(tmp_path)
+    write_json(chapter_unified_cut_plan_path(project, "A"), _plan("a", slots=1))
+    monkeypatch.setattr(svc, "list_body_chapter_names", lambda _p: ["A", "B"])
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.gap_status_service.summarize_gap_status",
+        lambda _p: (_ for _ in ()).throw(AssertionError("gap scan")),
+    )
+    monkeypatch.setattr(
+        svc,
+        "load_chapter_resolved",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("resolved scan")),
+    )
+    assert svc.list_chapters_needing_unified_cut(project) == ["B"]
 
 
 def test_generate_all_only_open_filters_names(tmp_path) -> None:
@@ -815,6 +841,55 @@ def test_generate_all_continues_after_one_chapter_fails(tmp_path) -> None:
             assert "Bad:" in message
 
     assert called == ["Good", "Bad", "AlsoGood"]
+
+
+def test_generate_all_resolves_prefix_model_per_chapter(tmp_path) -> None:
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        ChapterCutGenerateResult,
+        generate_all_chapter_unified_cuts,
+    )
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+        save_cut_plan_options,
+    )
+
+    project = _project(tmp_path)
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            llm_cut_model="openai:gpt-5.6-terra",
+            llm_cut_prefix_count=2,
+            llm_cut_prefix_model="openai:gpt-5.6-sol",
+        ),
+    )
+    seen: list[tuple[str, str, str]] = []
+
+    def fake_generate(_project, folder_name, **kwargs):
+        seen.append((folder_name, kwargs["provider"], kwargs["model"]))
+        plan = _plan(folder_name.lower(), slots=1)
+        return ChapterCutGenerateResult(
+            folder_name=folder_name,
+            plan=plan,
+            slot_count=1,
+            gap_count=0,
+        )
+
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_body_chapter_names",
+        return_value=["Yosemite", "Caddo"],
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.generate_chapter_unified_cut",
+        side_effect=fake_generate,
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.refresh_merged_unified_cut_plan",
+        return_value=None,
+    ):
+        generate_all_chapter_unified_cuts(project, only_open=False)
+
+    assert seen == [
+        ("Yosemite", "openai", "gpt-5.6-sol"),
+        ("Caddo", "openai", "gpt-5.6-terra"),
+    ]
 
 
 def test_resolve_all_timelines_runs_parallel_and_keeps_order(tmp_path) -> None:

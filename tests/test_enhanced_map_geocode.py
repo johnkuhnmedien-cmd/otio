@@ -505,6 +505,9 @@ def test_country_iso2_and_english_label_for_german_video_place() -> None:
     assert country_label("Slowenien", "EN") == "Slovenia"
     assert country_label("Ungarn", "EN") == "Hungary"
     assert country_label("Slowenien") == "Slowenien"
+    assert country_label("Griechenland", "JP") == "ギリシャ"
+    assert country_label("Greece", "KR") == "그리스"
+    assert country_label("Greece", "ja") == "ギリシャ"
 
 
 def test_lookup_photon_skips_unrelated_same_country_pin(

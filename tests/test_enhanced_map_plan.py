@@ -231,6 +231,9 @@ def test_visible_heading_is_localized_filename_keeps_original_json_name(
     assert map_heading("ES") == "Ruta de viaje"
     assert map_heading("PT") == "Rota de viagem"
     assert map_heading("EN") == "Travel Route"
+    assert map_heading("JP") == "旅行ルート"
+    assert map_heading("KR") == "여행 경로"
+    assert map_heading("ja") == "旅行ルート"
 
 
 def test_hd_and_4k_parallel_caps() -> None:

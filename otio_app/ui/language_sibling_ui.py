@@ -55,6 +55,11 @@ def render_enhanced_saved_family(group: SavedProjectGroup) -> None:
         f"Land/Region: {representative.video_place or '—'}"
     )
     _render_language_stage_table(siblings)
+    st.caption(
+        "„anlegen“ heißt: diese Sprache ist am Ordner noch kein Projekt. "
+        "Die globalen Sprach-Standards (Brief, Stimme, Cut Plan …) unter `data/` "
+        "bleiben davon unberührt."
+    )
     _render_open_language_buttons(siblings, family_id=representative.id)
     render_language_sibling_actions(representative, siblings=siblings)
     _render_family_details(group)

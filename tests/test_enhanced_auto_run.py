@@ -836,6 +836,61 @@ def test_auto_run_python_timing_runs_chapters_in_parallel(
     assert max_seen <= len(folders)
 
 
+def test_auto_run_llm_cuts_use_prefix_and_standard_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+        save_cut_plan_options,
+    )
+
+    project = _project(tmp_path)
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            llm_cut_model="openai:gpt-5.6-terra",
+            llm_cut_prefix_count=2,
+            llm_cut_prefix_model="openai:gpt-5.6-sol",
+        ),
+    )
+    intro: list[tuple[str, str]] = []
+    chapters: list[tuple[str, str, str]] = []
+
+    def fake_intro(_project, **kwargs):
+        intro.append((kwargs["provider"], kwargs["model"]))
+        return MagicMock(slot_count=1, gap_count=0)
+
+    def fake_chapter(_project, folder_name, **kwargs):
+        chapters.append((folder_name, kwargs["provider"], kwargs["model"]))
+        return MagicMock()
+
+    monkeypatch.setattr(auto_run, "generate_intro_unified_cut", fake_intro)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", fake_chapter)
+    monkeypatch.setattr(
+        auto_run, "list_chapters_needing_unified_cut", lambda _p: ["Athens", "Győr"]
+    )
+    monkeypatch.setattr(auto_run, "refresh_merged_unified_cut_plan", lambda _p: None)
+
+    auto_run._run_intro_cut(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        finish=lambda *_a, **_k: None,
+    )
+    auto_run._run_chapter_cuts(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        checkpoint=lambda _step: None,
+        finish=lambda *_a, **_k: None,
+    )
+    assert intro == [("openai", "gpt-5.6-sol")]
+    assert chapters == [
+        ("Athens", "openai", "gpt-5.6-sol"),
+        ("Győr", "openai", "gpt-5.6-terra"),
+    ]
+
+
 def test_auto_run_revises_existing_scripts_before_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1126,6 +1181,74 @@ def test_auto_run_status_overview_covers_every_step(tmp_path: Path) -> None:
     assert by_id["maps"].short_label == "Karten"
     assert by_id["youtube"].done is False
     assert by_id["otio"].done is False
+
+
+def test_summarize_auto_run_stage_does_not_scan_later_checkers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    monkeypatch.setattr(
+        auto_run,
+        "maps_complete",
+        lambda _project: (_ for _ in ()).throw(AssertionError("maps should not run")),
+    )
+    monkeypatch.setattr(
+        auto_run,
+        "timing_complete",
+        lambda _project: (_ for _ in ()).throw(AssertionError("timing should not run")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        auto_run,
+        "_music_targets_complete",
+        lambda _project: (_ for _ in ()).throw(AssertionError("music should not run")),
+    )
+    monkeypatch.setattr(
+        auto_run,
+        "otio_export_complete",
+        lambda _project: (_ for _ in ()).throw(AssertionError("otio should not run")),
+    )
+    monkeypatch.setattr(
+        auto_run,
+        "youtube_publish_complete",
+        lambda _project: (_ for _ in ()).throw(AssertionError("youtube should not run")),
+    )
+    summary = auto_run.summarize_auto_run_stage(project)
+    assert summary.next_label == "Brief"
+    assert summary.funnel_done is False
+
+
+def test_list_auto_run_step_statuses_full_scan_still_runs_later_checkers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    called = {"maps": 0}
+    monkeypatch.setattr(
+        auto_run,
+        "maps_complete",
+        lambda _project: called.__setitem__("maps", called["maps"] + 1) or False,
+    )
+    rows = auto_run.list_auto_run_step_statuses(project)
+    assert called["maps"] == 1
+    assert any(row.step_id == "maps" and row.done is False for row in rows)
+
+
+def test_summarize_auto_run_stage_cache_skips_second_scan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    calls = {"n": 0}
+    real_list = auto_run.list_auto_run_step_statuses
+
+    def counting_list(item, **kwargs):
+        calls["n"] += 1
+        return real_list(item, **kwargs)
+
+    monkeypatch.setattr(auto_run, "list_auto_run_step_statuses", counting_list)
+    first = auto_run.summarize_auto_run_stage(project)
+    second = auto_run.summarize_auto_run_stage(project)
+    assert first == second
+    assert calls["n"] == 1
 
 
 def test_auto_run_cancel_between_steps(
