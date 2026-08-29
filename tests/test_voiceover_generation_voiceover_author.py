@@ -789,10 +789,11 @@ def test_generate_missing_api_key_returns_fail(tmp_path: Path) -> None:
     with patch(
         f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
         side_effect=PlanLlmNotConfiguredError("ANTHROPIC_API_KEY ist nicht gesetzt."),
-    ):
+    ) as mock_llm:
         result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
     assert result.status == STATUS_FAIL
     assert result.draft is None
+    assert mock_llm.call_count == 2
 
 
 def test_generate_generic_llm_exception_returns_fail_status(tmp_path: Path) -> None:
@@ -802,12 +803,47 @@ def test_generate_generic_llm_exception_returns_fail_status(tmp_path: Path) -> N
     with patch(
         f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
         side_effect=TimeoutError("LLM-Anfrage hat das Zeitlimit überschritten."),
-    ):
+    ) as mock_llm:
         result = generate_folder_voiceover(
             project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5"
         )
     assert result.status == STATUS_FAIL
     assert result.draft is None
+    assert mock_llm.call_count == 2
+
+
+def test_generate_retries_llm_timeout_then_succeeds(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        side_effect=[
+            TimeoutError("LLM-Anfrage hat das Zeitlimit überschritten."),
+            _fake_response(),
+        ],
+    ) as mock_llm:
+        result = generate_folder_voiceover(
+            project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5"
+        )
+    assert result.status == STATUS_PASS
+    assert result.draft is not None
+    assert mock_llm.call_count == 2
+
+
+def test_generate_retries_parse_error_then_succeeds(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        side_effect=[
+            _fake_response("not valid json {{"),
+            _fake_response(),
+        ],
+    ) as mock_llm:
+        result = generate_folder_voiceover(
+            project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5"
+        )
+    assert result.status == STATUS_PASS
+    assert result.draft is not None
+    assert mock_llm.call_count == 2
 
 
 def test_generate_invalid_json_does_not_overwrite_existing_draft(tmp_path: Path) -> None:
@@ -818,11 +854,12 @@ def test_generate_invalid_json_does_not_overwrite_existing_draft(tmp_path: Path)
     with patch(
         f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
         return_value=_fake_response("not valid json {{"),
-    ):
+    ) as mock_llm:
         second = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
 
     assert second.status == STATUS_PARSE_FAILED
     assert second.draft is None
+    assert mock_llm.call_count == 2
 
     document = load_folder_voiceovers_draft(project)
     assert document.items[0].voiceover_text_full == first.draft.voiceover_text_full
