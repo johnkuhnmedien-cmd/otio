@@ -421,6 +421,77 @@ def test_generate_fails_after_two_link_violations_without_persist(tmp_path: Path
     assert draft is None or not draft.segments
 
 
+def test_generate_retries_llm_exception_then_succeeds(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _seed_two_chapters(project)
+    calls: list[str] = []
+
+    def llm_callable(*, prompt: str, model: str, max_output_tokens: int | None = None):
+        del prompt, model, max_output_tokens
+        calls.append("call")
+        if len(calls) == 1:
+            raise TimeoutError("LLM-Anfrage hat das Zeitlimit überschritten.")
+        return _ok_payload(
+            "Dublin lies at the mouth of the River Liffey and has served as "
+            "Ireland’s political and cultural center for centuries."
+        )
+
+    result = generate_enhanced_script_for_folder(
+        project, "Dublin", llm_callable=llm_callable
+    )
+    assert result.status == "PASS", result.error
+    assert len(calls) == 2
+    draft = load_script_draft(project)
+    assert draft is not None
+    assert "Dublin lies at the mouth" in draft.narration_full
+
+
+def test_generate_fails_after_two_llm_exceptions(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _seed_two_chapters(project)
+    calls: list[str] = []
+
+    def llm_callable(*, prompt: str, model: str, max_output_tokens: int | None = None):
+        del prompt, model, max_output_tokens
+        calls.append("call")
+        raise TimeoutError("LLM-Anfrage hat das Zeitlimit überschritten.")
+
+    result = generate_enhanced_script_for_folder(
+        project, "Dublin", llm_callable=llm_callable
+    )
+    assert result.status == "FAIL"
+    assert len(calls) == 2
+    assert "Zeitlimit" in (result.error or "")
+    draft = load_script_draft(project)
+    assert draft is None or not draft.segments
+
+
+def test_generate_retries_empty_segments_then_succeeds(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _seed_two_chapters(project)
+    calls: list[str] = []
+
+    def llm_callable(*, prompt: str, model: str, max_output_tokens: int | None = None):
+        del model, max_output_tokens
+        calls.append(prompt)
+        if len(calls) == 1:
+            return json.dumps({"narration_full": "", "segments": []})
+        return _ok_payload(
+            "Dublin lies at the mouth of the River Liffey and has served as "
+            "Ireland’s political and cultural center for centuries."
+        )
+
+    result = generate_enhanced_script_for_folder(
+        project, "Dublin", llm_callable=llm_callable
+    )
+    assert result.status == "PASS", result.error
+    assert len(calls) == 2
+    assert "RETRY REQUIRED" in calls[1]
+    draft = load_script_draft(project)
+    assert draft is not None
+    assert "Dublin lies at the mouth" in draft.narration_full
+
+
 def test_transition_from_previous_allows_short_bridge(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _seed_two_chapters(project)

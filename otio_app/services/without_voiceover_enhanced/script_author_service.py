@@ -113,6 +113,8 @@ from otio_app.services.without_voiceover_enhanced.script_rhetoric import (
 
 DEFAULT_ENHANCED_SCRIPT_MODEL = "openai:gpt-5.4-mini"
 DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS = 100_000
+# Ein automatischer Zweitversuch bei LLM-/Validierungsfehlern; danach FAIL.
+ENHANCED_SCRIPT_LLM_ATTEMPTS = 2
 
 
 @dataclass
@@ -664,6 +666,18 @@ Do not write pause labels inside spoken text.
 Return the complete JSON again.
 """
 
+GENERIC_SCRIPT_RETRY_INSTRUCTION = """\
+RETRY REQUIRED. The previous draft failed this check: {reason}
+
+Produce a complete new JSON draft that still satisfies every rule in the
+system prompt. Keep the same facts, timeline, and inventory IDs.
+Return the complete required JSON again.
+"""
+
+
+def _generic_script_retry_instruction(*, reason: str) -> str:
+    return GENERIC_SCRIPT_RETRY_INSTRUCTION.replace("{reason}", reason.strip())
+
 
 def _validate_chapter_link_usage_audit(
     payload: dict[str, Any] | None,
@@ -881,6 +895,11 @@ def generate_enhanced_script_for_folder(
     llm_callable: Callable[..., Any] | None = None,
     script_mode: str | None = None,
 ) -> FolderScriptBuildResult:
+    """Erzeugt das Kapitelskript für EINEN aktiven Ordner.
+
+    Schlägt der LLM-Aufruf oder die Validierung fehl, folgt genau ein
+    automatischer Zweitversuch. Schlägt auch der fehl, gilt das Kapitel als FAIL.
+    """
     entries = list_enabled_dramaturgy_folders(project)
     if not entries:
         return FolderScriptBuildResult(
@@ -957,7 +976,8 @@ def generate_enhanced_script_for_folder(
     repair_instruction = ""
     last_error = "Skripterzeugung fehlgeschlagen."
     try:
-        for attempt in range(2):
+        for attempt in range(ENHANCED_SCRIPT_LLM_ATTEMPTS):
+            can_retry = attempt + 1 < ENHANCED_SCRIPT_LLM_ATTEMPTS
             prompt = build_enhanced_folder_script_prompt(
                 project_brief_text=_brief_text(project),
                 film_context_text=_film_context_text(plan),
@@ -995,28 +1015,43 @@ def generate_enhanced_script_for_folder(
                 chapter_visual_palette_text=chapter_visual_palette_text,
             )
 
-            if llm_callable is not None:
-                raw = llm_callable(
-                    prompt=prompt,
-                    model=model_id,
-                    max_output_tokens=max_output_tokens,
+            try:
+                if llm_callable is not None:
+                    raw = llm_callable(
+                        prompt=prompt,
+                        model=model_id,
+                        max_output_tokens=max_output_tokens,
+                    )
+                    raw_text = (
+                        raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+                    )
+                else:
+                    raw_text = generate_plan_text_with_metadata(
+                        prompt=prompt,
+                        model=model_id,
+                        max_output_tokens=max_output_tokens,
+                    ).raw_text
+                partial = parse_enhanced_script_response(
+                    raw_text,
+                    folder_name=folder_name,
+                    folder_order_index=entry.order_index,
                 )
-                raw_text = (
-                    raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+            except Exception as exc:  # noqa: BLE001 — LLM-/Parse-Fehler einmal retryen
+                last_error = str(exc)
+                if can_retry:
+                    continue
+                return FolderScriptBuildResult(
+                    folder_name=folder_name,
+                    status="FAIL",
+                    error=last_error,
                 )
-            else:
-                raw_text = generate_plan_text_with_metadata(
-                    prompt=prompt,
-                    model=model_id,
-                    max_output_tokens=max_output_tokens,
-                ).raw_text
-            partial = parse_enhanced_script_response(
-                raw_text,
-                folder_name=folder_name,
-                folder_order_index=entry.order_index,
-            )
             if not partial.segments:
                 last_error = "LLM-Antwort enthielt keine Segmente."
+                if can_retry:
+                    repair_instruction = _generic_script_retry_instruction(
+                        reason=last_error
+                    )
+                    continue
                 return FolderScriptBuildResult(
                     folder_name=folder_name,
                     status="FAIL",
@@ -1036,10 +1071,16 @@ def generate_enhanced_script_for_folder(
                 narration_full=partial.narration_full,
             )
             if rhetoric_errors:
+                last_error = "Rhetoric-Ledger: " + " ".join(rhetoric_errors)
+                if can_retry:
+                    repair_instruction = _generic_script_retry_instruction(
+                        reason=last_error
+                    )
+                    continue
                 return FolderScriptBuildResult(
                     folder_name=folder_name,
                     status="FAIL",
-                    error="Rhetoric-Ledger: " + " ".join(rhetoric_errors),
+                    error=last_error,
                 )
 
             opening_for_validation = remove_opening_for_folder(
@@ -1051,10 +1092,16 @@ def generate_enhanced_script_for_folder(
                 folder_name=folder_name,
             )
             if opening_errors:
+                last_error = "Satzanfang-Inventar: " + " ".join(opening_errors)
+                if can_retry:
+                    repair_instruction = _generic_script_retry_instruction(
+                        reason=last_error
+                    )
+                    continue
                 return FolderScriptBuildResult(
                     folder_name=folder_name,
                     status="FAIL",
-                    error="Satzanfang-Inventar: " + " ".join(opening_errors),
+                    error=last_error,
                 )
 
             link_errors = detect_chapter_link_violations(
@@ -1085,7 +1132,7 @@ def generate_enhanced_script_for_folder(
 
             if link_errors or style_errors:
                 last_error = " ".join(link_errors + style_errors)
-                if attempt == 0:
+                if can_retry:
                     pause_errs = [
                         err
                         for err in style_errors

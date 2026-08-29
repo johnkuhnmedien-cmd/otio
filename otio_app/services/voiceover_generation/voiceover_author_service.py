@@ -771,6 +771,10 @@ class FolderVoiceoverBuildResult:
     model: str
 
 
+# Ein automatischer Zweitversuch bei LLM-/Parse-Fehlern; danach FAIL.
+FOLDER_VOICEOVER_LLM_ATTEMPTS = 2
+
+
 def generate_folder_voiceover(
     project: Project,
     folder_name: str,
@@ -781,7 +785,10 @@ def generate_folder_voiceover(
     """Erzeugt den Voice-over-Entwurf für EINEN aktiven Ordner.
 
     Voraussetzung: Der Ordner ist Teil der bestätigten Dramaturgie und dort
-    enabled=true. Überschreibt einen bestehenden Draft nur bei Erfolg."""
+    enabled=true. Überschreibt einen bestehenden Draft nur bei Erfolg.
+
+    Schlägt der LLM-Aufruf oder das Parsen fehl, folgt genau ein automatischer
+    Zweitversuch. Schlägt auch der fehl, gilt das Kapitel als FAIL."""
     plan = load_confirmed_dramaturgy(project)
     if plan is None:
         raise ValueError("Keine bestätigte Dramaturgie vorhanden.")
@@ -813,7 +820,6 @@ def generate_folder_voiceover(
     previous_name, next_name = _previous_and_next_folder(plan, folder_name)
     inventory_assets = build_inventory_asset_context(project, folder_name)
 
-    run_id, run_dir = create_llm_run_dir(project, STAGE_FOLDER_VOICEOVER)
     from otio_app.services.voiceover_generation.style_reference_service import (
         style_context_text_for_prompts,
     )
@@ -830,46 +836,106 @@ def generate_folder_voiceover(
         all_dramaturgy_entries=list(plan.recommended_folder_order),
     )
     prompt_hash = content_hash(prompt)
-    write_llm_prompt(run_dir, prompt)
-
     model_id = resolve_llm_model_id(provider, model)
+    last_fail: FolderVoiceoverBuildResult | None = None
 
-    try:
-        llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
-    except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
-        # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
-        # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).
-        write_llm_raw_response(run_dir, raw_text=f"ERROR: {exc}", provider=provider, model=model)
-        write_llm_parsed_response(run_dir, {"parse_error": str(exc)})
-        write_llm_manifest(
+    for _attempt in range(FOLDER_VOICEOVER_LLM_ATTEMPTS):
+        run_id, run_dir = create_llm_run_dir(project, STAGE_FOLDER_VOICEOVER)
+        write_llm_prompt(run_dir, prompt)
+        try:
+            llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
+        except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
+            # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
+            # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).
+            write_llm_raw_response(run_dir, raw_text=f"ERROR: {exc}", provider=provider, model=model)
+            write_llm_parsed_response(run_dir, {"parse_error": str(exc)})
+            write_llm_manifest(
+                run_dir,
+                LlmRunManifest(
+                    run_id=run_id,
+                    stage=STAGE_FOLDER_VOICEOVER,
+                    provider=provider,
+                    model=model,
+                    prompt_hash=prompt_hash,
+                    status=STATUS_FAIL,
+                ),
+            )
+            last_fail = FolderVoiceoverBuildResult(
+                status=STATUS_FAIL, draft=None, error=str(exc), llm_run_id=run_id,
+                provider=provider, model=model,
+            )
+            continue
+
+        write_llm_raw_response(
             run_dir,
-            LlmRunManifest(
-                run_id=run_id,
-                stage=STAGE_FOLDER_VOICEOVER,
-                provider=provider,
-                model=model,
-                prompt_hash=prompt_hash,
-                status=STATUS_FAIL,
-            ),
-        )
-        return FolderVoiceoverBuildResult(
-            status=STATUS_FAIL, draft=None, error=str(exc), llm_run_id=run_id,
-            provider=provider, model=model,
+            raw_text=llm_response.raw_text,
+            provider=llm_response.provider,
+            model=llm_response.model,
+            latency_ms=llm_response.latency_ms,
+            token_usage=llm_response.token_usage,
         )
 
-    write_llm_raw_response(
-        run_dir,
-        raw_text=llm_response.raw_text,
-        provider=llm_response.provider,
-        model=llm_response.model,
-        latency_ms=llm_response.latency_ms,
-        token_usage=llm_response.token_usage,
-    )
+        try:
+            payload = parse_folder_voiceover_response(llm_response.raw_text)
+        except (ValueError, TypeError) as exc:
+            write_llm_parsed_response(run_dir, {"parse_error": str(exc)})
+            write_llm_manifest(
+                run_dir,
+                LlmRunManifest(
+                    run_id=run_id,
+                    stage=STAGE_FOLDER_VOICEOVER,
+                    provider=llm_response.provider,
+                    model=llm_response.model,
+                    prompt_hash=prompt_hash,
+                    status=STATUS_PARSE_FAILED,
+                    latency_ms=llm_response.latency_ms,
+                    token_usage=llm_response.token_usage,
+                ),
+            )
+            last_fail = FolderVoiceoverBuildResult(
+                status=STATUS_PARSE_FAILED, draft=None, error=str(exc), llm_run_id=run_id,
+                provider=llm_response.provider, model=llm_response.model,
+            )
+            continue
 
-    try:
-        payload = parse_folder_voiceover_response(llm_response.raw_text)
-    except (ValueError, TypeError) as exc:
-        write_llm_parsed_response(run_dir, {"parse_error": str(exc)})
+        valid_asset_ids = {asset["asset_id"] for asset in inventory_assets}
+        sentence_items = _sanitize_sentence_items(
+            _parse_sentence_items(payload.get("sentence_items", [])), valid_asset_ids
+        )
+        closing_visual_plan = _sanitize_closing_visual_plan(
+            _parse_closing_visual_plan(payload.get("closing_visual_plan")), valid_asset_ids
+        )
+        voiceover_text_full = str(payload.get("voiceover_text_full", ""))
+
+        draft = FolderVoiceoverDraft(
+            project_id=project.id,
+            folder_name=folder_name,
+            order_index=entry.order_index,
+            language=project_brief.language,
+            target_words=setting.target_words,
+            min_words=setting.min_words,
+            max_words=setting.max_words,
+            voiceover_text_full=voiceover_text_full,
+            word_count=_count_words(voiceover_text_full),
+            sentence_items=sentence_items,
+            closing_visual_plan=closing_visual_plan,
+            transition_from_previous_used=bool(payload.get("transition_from_previous_used", False)),
+            transition_to_next_used=bool(payload.get("transition_to_next_used", False)),
+            callback_to_previous_used=bool(payload.get("callback_to_previous_used", False)),
+            contrast_or_commonality_used=bool(payload.get("contrast_or_commonality_used", False)),
+            used_asset_evidence=[item.primary_asset_id for item in sentence_items if item.primary_asset_id],
+            author_run_id=run_id,
+            status=VOICEOVER_STATUS_DRAFT,
+            risks=as_str_list(payload.get("risks")),
+            project_brief_hash=content_hash_of_model(project_brief),
+            style_profile_hash=content_hash_of_model(style_profile),
+            dramaturgy_hash=content_hash_of_model(plan),
+            settings_hash=content_hash_of_model(setting),
+            inventory_hash=content_hash(json.dumps(inventory_assets, sort_keys=True)),
+        )
+        upsert_folder_voiceover_draft_item(project, draft)
+
+        write_llm_parsed_response(run_dir, draft.model_dump(mode="json"))
         write_llm_manifest(
             run_dir,
             LlmRunManifest(
@@ -878,71 +944,20 @@ def generate_folder_voiceover(
                 provider=llm_response.provider,
                 model=llm_response.model,
                 prompt_hash=prompt_hash,
-                status=STATUS_PARSE_FAILED,
+                status=STATUS_PASS,
                 latency_ms=llm_response.latency_ms,
                 token_usage=llm_response.token_usage,
             ),
         )
+
         return FolderVoiceoverBuildResult(
-            status=STATUS_PARSE_FAILED, draft=None, error=str(exc), llm_run_id=run_id,
+            status=STATUS_PASS, draft=draft, error=None, llm_run_id=run_id,
             provider=llm_response.provider, model=llm_response.model,
         )
 
-    valid_asset_ids = {asset["asset_id"] for asset in inventory_assets}
-    sentence_items = _sanitize_sentence_items(
-        _parse_sentence_items(payload.get("sentence_items", [])), valid_asset_ids
-    )
-    closing_visual_plan = _sanitize_closing_visual_plan(
-        _parse_closing_visual_plan(payload.get("closing_visual_plan")), valid_asset_ids
-    )
-    voiceover_text_full = str(payload.get("voiceover_text_full", ""))
-
-    draft = FolderVoiceoverDraft(
-        project_id=project.id,
-        folder_name=folder_name,
-        order_index=entry.order_index,
-        language=project_brief.language,
-        target_words=setting.target_words,
-        min_words=setting.min_words,
-        max_words=setting.max_words,
-        voiceover_text_full=voiceover_text_full,
-        word_count=_count_words(voiceover_text_full),
-        sentence_items=sentence_items,
-        closing_visual_plan=closing_visual_plan,
-        transition_from_previous_used=bool(payload.get("transition_from_previous_used", False)),
-        transition_to_next_used=bool(payload.get("transition_to_next_used", False)),
-        callback_to_previous_used=bool(payload.get("callback_to_previous_used", False)),
-        contrast_or_commonality_used=bool(payload.get("contrast_or_commonality_used", False)),
-        used_asset_evidence=[item.primary_asset_id for item in sentence_items if item.primary_asset_id],
-        author_run_id=run_id,
-        status=VOICEOVER_STATUS_DRAFT,
-        risks=as_str_list(payload.get("risks")),
-        project_brief_hash=content_hash_of_model(project_brief),
-        style_profile_hash=content_hash_of_model(style_profile),
-        dramaturgy_hash=content_hash_of_model(plan),
-        settings_hash=content_hash_of_model(setting),
-        inventory_hash=content_hash(json.dumps(inventory_assets, sort_keys=True)),
-    )
-    upsert_folder_voiceover_draft_item(project, draft)
-
-    write_llm_parsed_response(run_dir, draft.model_dump(mode="json"))
-    write_llm_manifest(
-        run_dir,
-        LlmRunManifest(
-            run_id=run_id,
-            stage=STAGE_FOLDER_VOICEOVER,
-            provider=llm_response.provider,
-            model=llm_response.model,
-            prompt_hash=prompt_hash,
-            status=STATUS_PASS,
-            latency_ms=llm_response.latency_ms,
-            token_usage=llm_response.token_usage,
-        ),
-    )
-
-    return FolderVoiceoverBuildResult(
-        status=STATUS_PASS, draft=draft, error=None, llm_run_id=run_id,
-        provider=llm_response.provider, model=llm_response.model,
+    return last_fail or FolderVoiceoverBuildResult(
+        status=STATUS_FAIL, draft=None, error="Skripterzeugung fehlgeschlagen.",
+        llm_run_id="", provider=provider, model=model,
     )
 
 
