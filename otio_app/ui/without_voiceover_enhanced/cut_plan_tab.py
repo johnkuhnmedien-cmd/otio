@@ -2198,7 +2198,13 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
     open_llm_names = list_chapters_needing_unified_cut(project)
     open_timing_names = list_chapters_needing_python_timing(project)
     ready_timing_names = list_chapters_ready_for_python_timing(project)
-    blocked_timing = max(0, chapter_count - len(ready_timing_names))
+    chapter_statuses = list_chapter_cut_statuses(project)
+    blocked_gap_statuses = [
+        status
+        for status in chapter_statuses
+        if status.has_plan and status.open_gap_count
+    ]
+    blocked_timing = len(blocked_gap_statuses)
     st.caption(
         f"**LLM Cuts strikt sequenziell** (immer nur 1 Call gleichzeitig, "
         f"{chapter_count} Kapitel ohne Intro) → "
@@ -2214,6 +2220,21 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         f"{len(open_timing_names)} ohne passendes Python-Timing · "
         f"{blocked_timing} Timing blockiert (offene Gaps)."
     )
+    if blocked_gap_statuses:
+        preview = ", ".join(
+            status.folder_name for status in blocked_gap_statuses[:8]
+        )
+        more = (
+            f" (+{len(blocked_gap_statuses) - 8})"
+            if len(blocked_gap_statuses) > 8
+            else ""
+        )
+        gap_n = sum(status.open_gap_count for status in blocked_gap_statuses)
+        st.warning(
+            f"Python Timing blockiert für: **{preview}{more}** "
+            f"({gap_n} Coverage-Gaps). Dieselben Gaps stehen unter "
+            "„2. Supplements / Funnel“ — dort schließen, dann Timing."
+        )
     if open_timing_names:
         preview = ", ".join(open_timing_names[:8])
         more = (

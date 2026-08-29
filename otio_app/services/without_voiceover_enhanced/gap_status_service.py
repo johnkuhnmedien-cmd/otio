@@ -19,7 +19,9 @@ from otio_app.services.without_voiceover_enhanced.models import (
     UnifiedCutPlanDocument,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
+    UNIFIED_CUT_PLAN_FILENAME,
     accepted_supplements_path,
+    chapters_cut_dir,
     coverage_gaps_path,
     gap_merge_report_path,
     stock_candidate_download_dir,
@@ -36,6 +38,7 @@ __all__ = [
     "rebind_gap_fills_to_current_run",
     "sanitize_stale_user_confirmed_weak",
     "summarize_gap_status",
+    "sync_missing_plan_gaps_into_coverage",
 ]
 
 
@@ -164,6 +167,149 @@ def compute_cut_plan_run_id_from_path(path: Path) -> str:
     if not isinstance(payload, dict):
         return ""
     return compute_cut_plan_run_id(payload)
+
+
+_PLAN_GAP_SYNC_DEPTH = 0
+
+
+def _coverage_gap_from_plan_slot(slot: object) -> CoverageGap | None:
+    """Coverage-Gap aus einem Kapitel-Plan-Slot (weak/none, keine Bridges)."""
+    from otio_app.services.without_voiceover_enhanced.models import GAP_FIT_VALUES
+
+    fit = str(getattr(slot, "asset_fit", "") or "").strip().lower()
+    slot_id = str(getattr(slot, "slot_id", "") or "").strip()
+    narrative = str(getattr(slot, "narrative_function", "") or "").strip().lower()
+    is_bridge = slot_id.startswith("bridge_") or narrative == "chapter_transition"
+    if fit not in GAP_FIT_VALUES or is_bridge or not slot_id:
+        return None
+    gap_id = str(getattr(slot, "coverage_gap_id", "") or "").strip() or f"gap_{slot_id}"
+    needed = (
+        str(getattr(slot, "needed_visual", "") or "").strip()
+        or str(getattr(slot, "visual_intent", "") or "").strip()
+        or slot_id
+    )
+    concepts = [
+        str(item).strip()
+        for item in (getattr(slot, "search_concepts", None) or [])
+        if str(item).strip()
+    ]
+    if not concepts:
+        concepts = [needed[:40] or slot_id]
+    reason = str(getattr(slot, "asset_fit_reason", "") or "").strip() or (
+        "Kein geeignetes lokales Asset"
+        if fit == "none"
+        else "Lokales Asset nur schwach geeignet — Upgrade-Gap"
+    )
+    return CoverageGap(
+        gap_id=gap_id,
+        related_shot_ids=[slot_id],
+        needed_visual=needed,
+        editorial_purpose=str(getattr(slot, "narrative_function", "") or "orientation"),
+        preferred_media_type=str(
+            getattr(slot, "preferred_media_type", "") or "video"
+        ),
+        search_concepts=concepts,
+        search_queries=list(concepts),
+        must_include=[
+            str(item).strip()
+            for item in (getattr(slot, "must_include", None) or [])
+            if str(item).strip()
+        ],
+        must_avoid=[
+            str(item).strip()
+            for item in (getattr(slot, "must_avoid", None) or [])
+            if str(item).strip()
+        ],
+        fact_check_required=bool(getattr(slot, "fact_check_required", False)),
+        desired_motion=str(getattr(slot, "desired_motion", "") or ""),
+        desired_framing=str(getattr(slot, "desired_framing", "") or ""),
+        subject=needed,
+        editorial_function=str(
+            getattr(slot, "narrative_function", "") or "orientation"
+        ),
+        priority="high" if fit == "none" else "medium",
+        reason=reason,
+        target_duration_seconds=getattr(slot, "target_duration_seconds", None),
+    )
+
+
+def _plan_gaps_from_chapter_files(project: Project) -> list[CoverageGap]:
+    """weak/none-Slots aus gespeicherten Kapitel-Plänen, ohne Dramaturgie."""
+    root = chapters_cut_dir(project)
+    if not root.is_dir():
+        return []
+    found: list[CoverageGap] = []
+    seen: set[str] = set()
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        plan = load_model(child / UNIFIED_CUT_PLAN_FILENAME, UnifiedCutPlanDocument)
+        if plan is None or not plan.slots:
+            continue
+        for slot in plan.slots:
+            gap = _coverage_gap_from_plan_slot(slot)
+            if gap is None or gap.gap_id in seen:
+                continue
+            seen.add(gap.gap_id)
+            found.append(gap)
+    return found
+
+
+def sync_missing_plan_gaps_into_coverage(project: Project) -> list[str]:
+    """Trägt Kapitel-Plan-Gaps nach, die in coverage_gaps.json fehlen.
+
+    Cut-Plan blockiert Timing über den Kapitel-Plan. Der Funnel liest nur
+    coverage_gaps.json. Nach Demote/Rebuild ohne Merge-Refresh klaffen die
+    Listen auseinander (Timing blockiert, Funnel „offen 0“).
+    Die Cut-Plan-Run-ID bleibt unverändert, damit erfüllte Fills gültig bleiben.
+    """
+    global _PLAN_GAP_SYNC_DEPTH
+    if _PLAN_GAP_SYNC_DEPTH:
+        return []
+    plan_gaps = _plan_gaps_from_chapter_files(project)
+    if not plan_gaps:
+        return []
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    existing = {
+        str(gap.gap_id or "").strip()
+        for gap in (coverage.gaps if coverage is not None else [])
+        if str(gap.gap_id or "").strip()
+    }
+    missing = [gap for gap in plan_gaps if gap.gap_id not in existing]
+    if not missing:
+        return []
+    _PLAN_GAP_SYNC_DEPTH += 1
+    try:
+        if coverage is None:
+            script_version = ""
+            root = chapters_cut_dir(project)
+            if root.is_dir():
+                for child in sorted(root.iterdir()):
+                    plan = load_model(
+                        child / UNIFIED_CUT_PLAN_FILENAME, UnifiedCutPlanDocument
+                    )
+                    if plan is not None and str(plan.script_version or "").strip():
+                        script_version = str(plan.script_version)
+                        break
+            coverage = CoverageGapsDocument(
+                script_version=script_version,
+                cut_plan_run_id=compute_cut_plan_run_id_from_path(
+                    unified_cut_plan_path(project)
+                ),
+                gaps=missing,
+            )
+        else:
+            coverage = coverage.model_copy(
+                update={"gaps": list(coverage.gaps) + missing}
+            )
+        from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+            persist_coverage_gaps,
+        )
+
+        persist_coverage_gaps(project, coverage)
+    finally:
+        _PLAN_GAP_SYNC_DEPTH -= 1
+    return [gap.gap_id for gap in missing]
 
 
 def is_weak_upgrade_gap(gap: CoverageGap) -> bool:
@@ -532,7 +678,8 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
     """Aktueller Gap-Status relativ zum Unified-Cut-Plan-Lauf.
 
     Regeln:
-    - Gap-Liste kommt aus coverage_gaps.json (aktueller Plan).
+    - Gap-Liste kommt aus coverage_gaps.json (aktueller Plan), ergänzt um
+      weak/none-Slots aus den Kapitel-Plänen, falls die JSON sie nicht kennt.
     - Funnel export_ready / Download (gleiche Run-ID) schließt weak und none.
     - Accepted export_ready (gleiche Run-ID) schließt ebenfalls — auch ohne
       aktuellen Funnel-Eintrag.
@@ -542,6 +689,7 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
     - Stale Funnel/Merge (andere/fehlende Run-ID) zählen nicht — Accepted-
       Fills mit gleicher Gap-ID werden zuvor auf den aktuellen Lauf rebound.
     """
+    added_from_plans = sync_missing_plan_gaps_into_coverage(project)
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     if coverage is None or not coverage.gaps:
         return GapStatusSummary(message="Keine Coverage Gaps.")
@@ -618,6 +766,11 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
         notes.append("Funnel-Report gehört zu einem älteren Cut-Plan-Lauf")
     if merge_stale:
         notes.append("Gap-Merge-Report gehört zu einem älteren Cut-Plan-Lauf")
+    if added_from_plans:
+        notes.append(
+            f"{len(added_from_plans)} Gap(s) aus Kapitel-Plänen nachgetragen "
+            "(Cut-Plan und Funnel waren nicht synchron)"
+        )
     return GapStatusSummary(
         total=len(open_ids) + len(filled_ids),
         open_gap_ids=open_ids,

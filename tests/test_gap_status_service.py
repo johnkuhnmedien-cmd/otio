@@ -466,3 +466,71 @@ def test_stale_weak_confirm_on_high_gap_is_reset(tmp_path: Path) -> None:
     by_id = {g.gap_id: g for g in reloaded.gaps}
     assert by_id["Dublin_gap_001"].user_confirmed_weak is False
     assert by_id["gap_weak_ok"].user_confirmed_weak is True
+
+
+def test_summarize_adds_plan_gaps_missing_from_coverage_json(tmp_path: Path) -> None:
+    """Kapitel-Plan-none-Slot muss im Funnel auftauchen, nicht nur Timing blockieren."""
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        persist_chapter_unified_plan,
+    )
+
+    project = _project(tmp_path)
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id="run_keep",
+            gaps=[
+                CoverageGap(
+                    gap_id="gap_already_filled",
+                    needed_visual="old",
+                    priority="medium",
+                    user_confirmed_weak=True,
+                )
+            ],
+        ),
+    )
+    plan = UnifiedCutPlanDocument(
+        script_version="script-v1",
+        boundaries=[
+            CutBoundary(cut_id="b0", sentence_id="a__s001", position="start"),
+            CutBoundary(cut_id="b1", sentence_id="a__s002", position="end"),
+        ],
+        slots=[
+            CutSlot(
+                slot_id="A_slot_009",
+                local_asset_id=None,
+                asset_fit="none",
+                coverage_gap_id="gap_plan_only",
+                needed_visual="stork",
+                asset_fit_reason="Datei fehlt",
+            )
+        ],
+    )
+    persist_chapter_unified_plan(
+        project, "A", plan, refresh_merged=False, reset_open_gaps=False
+    )
+
+    status = summarize_gap_status(project)
+
+    assert "gap_already_filled" in status.filled_gap_ids
+    assert "gap_plan_only" in status.open_gap_ids
+    assert status.cut_plan_run_id == "run_keep"
+    assert "nachgetragen" in (status.message or "")
+
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    assert coverage is not None
+    assert {gap.gap_id for gap in coverage.gaps} == {
+        "gap_already_filled",
+        "gap_plan_only",
+    }
+    assert "gap_plan_only" in list_open_funnel_gap_ids(project)
+
+
+def test_cut_plan_ui_lists_chapters_blocked_by_open_gaps() -> None:
+    src = Path(
+        "otio_app/ui/without_voiceover_enhanced/cut_plan_tab.py"
+    ).read_text(encoding="utf-8")
+    assert "blocked_gap_statuses" in src
+    assert "chapter_count - len(ready_timing_names)" not in src
+    assert "Supplements / Funnel" in src
