@@ -20,10 +20,37 @@ class MediaHoldError(RuntimeError):
 
 
 def _hold_cache_dir(project: Project) -> Path:
-    root = assert_enhanced_work_root(project)
-    path = root / "exports" / "hold_cache"
+    """Geteilter Still-Hold-Cache: ``_otio_enhanced/exports/hold_cache``.
+
+    Nicht unter ``{LANG}/exports`` — Language-Scope würde den Ordner sonst
+    beim Anlegen einer zweiten Sprache verschieben, und Resolve findet die
+    MP4s nicht mehr (Media Offline).
+    """
+    from otio_app.services.language_scope import shared_hold_cache_dir
+
+    path = shared_hold_cache_dir(assert_enhanced_work_root(project))
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _recover_hold_cache_file(project: Project, filename: str) -> Path | None:
+    """Findet eine Hold-Datei; stellt sie her, falls eine zweite Sprache sie verschoben hat."""
+    cache = _hold_cache_dir(project)
+    dest = cache / filename
+    try:
+        if dest.is_file() and dest.stat().st_size > 0:
+            return dest
+    except OSError:
+        pass
+    from otio_app.services.language_scope import restore_shared_hold_cache
+
+    restore_shared_hold_cache(assert_enhanced_work_root(project))
+    try:
+        if dest.is_file() and dest.stat().st_size > 0:
+            return dest
+    except OSError:
+        return None
+    return None
 
 
 def _cache_key(*parts: str) -> str:
@@ -353,8 +380,9 @@ def ensure_still_hold_video(
         ),
     )
     out = _hold_cache_dir(project) / f"still_hold_{key}.mp4"
-    if out.is_file() and out.stat().st_size > 0:
-        return out
+    recovered = _recover_hold_cache_file(project, out.name)
+    if recovered is not None:
+        return recovered
     cmd = [
         "ffmpeg",
         "-y",
@@ -402,8 +430,9 @@ def ensure_video_padded_hold(
     rate = max(1.0, float(fps) or 25.0)
     key = _cache_key(str(source), f"{target_duration_seconds:.3f}", f"{rate:.3f}", "tpad")
     out = _hold_cache_dir(project) / f"video_hold_{key}.mp4"
-    if out.is_file() and out.stat().st_size > 0:
-        return out
+    recovered = _recover_hold_cache_file(project, out.name)
+    if recovered is not None:
+        return recovered
     # tpad stop_duration = zusätzliche Sekunden nach dem natürlichen Ende.
     # Wir kennen die Quelldauer nicht exakt hier — nutzen -t Ziel und tpad großzügig.
     cmd = [
@@ -463,8 +492,9 @@ def ensure_last_frame_hold(
     cache = _hold_cache_dir(project)
     frame = cache / f"lastframe_{key}.png"
     out = cache / f"lastframe_hold_{key}.mp4"
-    if out.is_file() and out.stat().st_size > 0:
-        return out
+    recovered = _recover_hold_cache_file(project, out.name)
+    if recovered is not None:
+        return recovered
 
     def _extract(cmd: list[str]) -> bool:
         try:
