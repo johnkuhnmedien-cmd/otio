@@ -113,6 +113,87 @@ def test_migrate_is_idempotent(tmp_path: Path) -> None:
     assert (first / "exports" / "a.otio").is_file()
 
 
+def test_second_language_does_not_steal_shared_hold_cache(tmp_path: Path) -> None:
+    """Regression: IT-Start darf DE-Still-Holds nicht nach IT/exports schieben."""
+    de = _project(tmp_path, language="de")
+    ensure_language_scope(de)
+    work = de.work_dir_path
+    hold = work / "exports" / "hold_cache"
+    hold.mkdir(parents=True)
+    clip = hold / "still_hold_ccf71abc1234def0.mp4"
+    clip.write_bytes(b"hold-bytes")
+
+    it = Project(
+        id="lang-scope-it",
+        name="USA",
+        project_root=de.project_root,
+        work_dir=de.work_dir,
+        language="it",
+        asset_subdir_names=["Florida Keys"],
+        selected_asset_subdirs=["Florida Keys"],
+    )
+    ensure_language_scope(it)
+
+    assert clip.is_file(), "geteilter Hold-Cache muss nach IT-Start liegen bleiben"
+    assert clip.read_bytes() == b"hold-bytes"
+    stolen = work / "IT" / "exports" / "hold_cache" / clip.name
+    assert not stolen.exists()
+
+
+def test_migrate_moves_otio_but_keeps_shared_hold_cache(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    work = project.work_dir_path
+    exports = work / "exports"
+    exports.mkdir()
+    (exports / "film.otio").write_text("timeline", encoding="utf-8")
+    hold = exports / "hold_cache"
+    hold.mkdir()
+    clip = hold / "still_hold_aabbccddeeff0011.mp4"
+    clip.write_bytes(b"still")
+
+    lang_dir = migrate_language_scope(project)
+    assert (lang_dir / "exports" / "film.otio").is_file()
+    assert not (work / "exports" / "film.otio").exists()
+    assert clip.is_file()
+    assert clip.parent == work / "exports" / "hold_cache"
+
+
+def test_restore_hold_cache_stolen_by_second_language(tmp_path: Path) -> None:
+    from otio_app.services.language_scope import restore_shared_hold_cache
+
+    de = _project(tmp_path, language="de")
+    ensure_language_scope(de)
+    work = de.work_dir_path
+    stolen_dir = work / "IT" / "exports" / "hold_cache"
+    stolen_dir.mkdir(parents=True)
+    stolen = stolen_dir / "still_hold_ccf71abc1234def0.mp4"
+    stolen.write_bytes(b"resolve-clip")
+
+    restored = restore_shared_hold_cache(work)
+    shared = work / "exports" / "hold_cache" / stolen.name
+    assert restored == 1
+    assert shared.is_file()
+    assert shared.read_bytes() == b"resolve-clip"
+    # Original bleibt (Hardlink/Kopie) — IT löscht nichts.
+    assert stolen.is_file()
+
+
+def test_opening_first_language_restores_stolen_holds(tmp_path: Path) -> None:
+    de = _project(tmp_path, language="de")
+    ensure_language_scope(de)
+    work = de.work_dir_path
+    stolen_dir = work / "IT" / "exports" / "hold_cache"
+    stolen_dir.mkdir(parents=True)
+    stolen = stolen_dir / "still_hold_deadbeefcafebabe.mp4"
+    stolen.write_bytes(b"offline-in-resolve")
+
+    ensure_language_scope(de)
+    shared = work / "exports" / "hold_cache" / stolen.name
+    assert shared.is_file()
+    assert shared.read_bytes() == b"offline-in-resolve"
+
+
+
 def test_migrate_moves_root_voice_folder_mapping(tmp_path: Path) -> None:
     project = _project(tmp_path)
     root_mapping = project.project_root_path / "voice_folder_mapping.json"

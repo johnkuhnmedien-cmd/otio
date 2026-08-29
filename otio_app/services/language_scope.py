@@ -1,8 +1,9 @@
 """Language-Scope unter `_otio/{LANG}/` — einmalige Migration + Pfad-Auflösung.
 
-SHARED bleibt unter `_otio/` (clean, inventory, cache/inventory, frames, …).
+SHARED bleibt unter `_otio/` (clean, inventory, cache/inventory, frames,
+``exports/hold_cache``, …).
 LANGUAGE-Artefakte liegen unter `_otio/{DE|EN}/` (voiceover_generation, edit_plan,
-exports, generated_titles, Settings-JSONs, …).
+exports ohne hold_cache, generated_titles, Settings-JSONs, …).
 
 Ein DB-Projekt = eine Sprache (`Project.language`).
 """
@@ -28,6 +29,18 @@ _LANGUAGE_DIRS: tuple[str, ...] = (
     "voiceover_generation",
     "model_comparison_runs",
     "supplement",
+)
+
+#: Still-Hold-MP4s für Resolve. Liegen bewusst geteilt unter
+#: ``_otio*/exports/hold_cache`` — nicht sprachbezogen. OTIO speichert
+#: absolute Pfade; eine Migration nach ``{LANG}/exports`` macht Clips in
+#: DaVinci Resolve „Media Offline“.
+HOLD_CACHE_SUBDIR = "hold_cache"
+_HOLD_CACHE_GLOBS = (
+    "still_hold_*.mp4",
+    "video_hold_*.mp4",
+    "lastframe_hold_*.mp4",
+    "lastframe_*.png",
 )
 
 # Einzeldateien am `_otio/`-Root → Language-Scope.
@@ -89,6 +102,8 @@ def _write_marker(work_dir: Path, *, lang: str, source_layout: str) -> None:
 
 def _has_flat_language_artifacts(work_dir: Path) -> bool:
     for name in _LANGUAGE_DIRS:
+        if name == "exports" and _exports_is_only_hold_cache(work_dir):
+            continue
         if (work_dir / name).exists():
             return True
     for name in _LANGUAGE_ROOT_FILES:
@@ -107,6 +122,94 @@ def _safe_move(src: Path, dest: Path) -> None:
         # Ziel schon da — Quelle nicht überschreiben; flat-Rest bleibt liegen.
         return
     shutil.move(str(src), str(dest))
+
+
+def _hardlink_or_copy(source: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        return
+    try:
+        dest.hardlink_to(source)
+        return
+    except OSError:
+        pass
+    shutil.copy2(source, dest)
+
+
+def shared_hold_cache_dir(work_dir: Path) -> Path:
+    return work_dir / "exports" / HOLD_CACHE_SUBDIR
+
+
+def _exports_is_only_hold_cache(work_dir: Path) -> bool:
+    """True wenn flat ``exports/`` nur den geteilten Still-Hold-Cache enthält."""
+    exports = work_dir / "exports"
+    if not exports.exists():
+        return False
+    try:
+        children = [path.name for path in exports.iterdir()]
+    except OSError:
+        return False
+    names = {name for name in children if name not in {".DS_Store", "Thumbs.db"}}
+    return names <= {HOLD_CACHE_SUBDIR}
+
+
+def _move_language_exports(src: Path, dest: Path) -> None:
+    """OTIO-Pakete wandern sprachbezogen — ``hold_cache`` bleibt geteilt."""
+    if not src.exists():
+        return
+    try:
+        children = list(src.iterdir())
+    except OSError:
+        return
+    rest = [path for path in children if path.name != HOLD_CACHE_SUBDIR]
+    if not rest:
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    for item in rest:
+        _safe_move(item, dest / item.name)
+
+
+def restore_shared_hold_cache(work_dir: Path) -> int:
+    """Holt Still-Holds zurück, die eine zweite Sprache nach ``{LANG}/exports`` verschoben hat.
+
+    Resolve zeigt sonst Media Offline, weil das OTIO noch auf
+    ``_otio*/exports/hold_cache/still_hold_*.mp4`` zeigt.
+    """
+    shared = shared_hold_cache_dir(work_dir)
+    restored = 0
+    try:
+        if not work_dir.is_dir():
+            return 0
+        lang_dirs = [path for path in work_dir.iterdir() if path.is_dir()]
+    except OSError:
+        return 0
+    for lang_dir in lang_dirs:
+        stolen = lang_dir / "exports" / HOLD_CACHE_SUBDIR
+        try:
+            if not stolen.is_dir():
+                continue
+        except OSError:
+            continue
+        for pattern in _HOLD_CACHE_GLOBS:
+            try:
+                matches = list(stolen.glob(pattern))
+            except OSError:
+                continue
+            for source in matches:
+                try:
+                    if not source.is_file():
+                        continue
+                except OSError:
+                    continue
+                dest = shared / source.name
+                try:
+                    if dest.exists():
+                        continue
+                    _hardlink_or_copy(source, dest)
+                except OSError:
+                    continue
+                restored += 1
+    return restored
 
 
 def _maybe_migrate_root_mapping(project: Project, lang_dir: Path) -> None:
@@ -167,6 +270,7 @@ def migrate_language_scope(project: Project) -> Path:
         lang_dir.mkdir(parents=True, exist_ok=True)
         _maybe_migrate_root_mapping(project, lang_dir)
         _maybe_migrate_root_voice_analysis(project, lang_dir)
+        restore_shared_hold_cache(work_dir)
         return lang_dir
 
     flat_present = _has_flat_language_artifacts(work_dir)
@@ -175,6 +279,7 @@ def migrate_language_scope(project: Project) -> Path:
         _maybe_migrate_root_mapping(project, lang_dir)
         _maybe_migrate_root_voice_analysis(project, lang_dir)
         _write_marker(work_dir, lang=lang, source_layout="fresh")
+        restore_shared_hold_cache(work_dir)
         return lang_dir
 
     lang_dir.mkdir(parents=True, exist_ok=True)
@@ -187,7 +292,10 @@ def migrate_language_scope(project: Project) -> Path:
         new_prefix = str(lang_dir)
 
     for name in _LANGUAGE_DIRS:
-        _safe_move(work_dir / name, lang_dir / name)
+        if name == "exports":
+            _move_language_exports(work_dir / name, lang_dir / name)
+        else:
+            _safe_move(work_dir / name, lang_dir / name)
 
     for name in _LANGUAGE_ROOT_FILES:
         _safe_move(work_dir / name, lang_dir / name)
@@ -202,6 +310,7 @@ def migrate_language_scope(project: Project) -> Path:
     _rewrite_absolute_paths_in_tree(lang_dir, old_prefix=old_prefix, new_prefix=new_prefix)
 
     _write_marker(work_dir, lang=lang, source_layout="flat")
+    restore_shared_hold_cache(work_dir)
     return lang_dir
 
 
@@ -211,8 +320,11 @@ def ensure_language_scope(project: Project) -> Path:
 
 
 __all__ = [
+    "HOLD_CACHE_SUBDIR",
     "LANGUAGE_SCOPE_MARKER_NAME",
     "ensure_language_scope",
     "language_scope_marker_path",
     "migrate_language_scope",
+    "restore_shared_hold_cache",
+    "shared_hold_cache_dir",
 ]
