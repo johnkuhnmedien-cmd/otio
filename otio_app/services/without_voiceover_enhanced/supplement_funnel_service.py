@@ -755,11 +755,13 @@ def list_open_funnel_gap_ids(project: Project) -> list[str]:
     """
     from otio_app.services.without_voiceover_enhanced.gap_status_service import (
         compute_cut_plan_run_id_from_path,
+        sync_missing_plan_gaps_into_coverage,
     )
     from otio_app.services.without_voiceover_enhanced.paths import (
         unified_cut_plan_path,
     )
 
+    sync_missing_plan_gaps_into_coverage(project)
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     if coverage is None or not coverage.gaps:
         return []
