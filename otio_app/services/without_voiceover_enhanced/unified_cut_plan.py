@@ -111,6 +111,52 @@ def _demote_slot_to_coverage_gap(
     )
 
 
+def demote_slots_with_unknown_local_assets(
+    plan: UnifiedCutPlanDocument,
+    known_asset_ids: set[str] | Mapping[str, object],
+    *,
+    only_asset_ids: set[str] | Mapping[str, object] | None = None,
+    reason: str = "Lokale Datei fehlt — Asset aus dem Inventar entfernt.",
+) -> tuple[UnifiedCutPlanDocument, list[str]]:
+    """Slots mit tot Inventar-IDs werden ehrliche Coverage-Gaps.
+
+    ``only_asset_ids``: wenn gesetzt, nur diese IDs anfassen (Stock-Geister),
+    nicht beliebige Test-/Lokal-IDs die der Katalog noch per Dateiname kennt.
+    """
+    known = {str(key).strip() for key in known_asset_ids if str(key).strip()}
+    only: set[str] | None = None
+    if only_asset_ids is not None:
+        only = {str(key).strip() for key in only_asset_ids if str(key).strip()}
+    updated: list[CutSlot] = []
+    notes: list[str] = []
+    for slot in plan.slots:
+        aid = str(slot.local_asset_id or "").strip()
+        fit = str(slot.asset_fit or "").strip().lower()
+        if not aid or fit in {"weak", "none"}:
+            updated.append(slot)
+            continue
+        if only is not None and aid not in only:
+            updated.append(slot)
+            continue
+        if aid in known:
+            updated.append(slot)
+            continue
+        demoted = _demote_slot_to_coverage_gap(slot, reason=reason)
+        updated.append(demoted)
+        notes.append(slot.slot_id)
+
+    extra: dict[str, Any] = {}
+    if notes:
+        extra["slots"] = updated
+    closing = str(plan.closing_fallback_asset_id or "").strip()
+    if closing and closing not in known and (only is None or closing in only):
+        extra["closing_fallback_asset_id"] = None
+        notes.append(f"closing_fallback:{closing}")
+    if not extra:
+        return plan, []
+    return plan.model_copy(update=extra), notes
+
+
 def _reuse_violation_reason(
     asset_id: str,
     *,

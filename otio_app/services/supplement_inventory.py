@@ -39,6 +39,7 @@ from otio_app.services.asset_analysis_signature import (
 from otio_app.services.inventory_loader import (
     load_folder_inventory,
     load_folder_inventory_file,
+    prune_unresolvable_supplement_assets,
     save_folder_inventory,
     sync_folder_inventory_with_status,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "ingest_supplement_asset",
     "is_local_original_media",
     "list_supplement_assets",
+    "prune_unresolvable_supplement_assets",
     "purge_supplement_rows_for_own_material",
     "upsert_supplement_into_inventory",
 ]

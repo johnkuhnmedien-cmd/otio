@@ -553,6 +553,90 @@ def find_local_media_for_candidate_id(
     return _pick_preferred_media_match(matches)
 
 
+def resolve_existing_inventory_media(
+    project: Project,
+    *,
+    raw_path: str,
+    asset_id: str = "",
+    folder_name: str = "",
+) -> Path | None:
+    """Liefert den echten Dateipfad, oder None wenn die Datei nicht existiert.
+
+    Sucht relativ zum Projekt, im Arbeitsverzeichnis, in Sprachordnern und
+    über die Stock-/Clean-ID (auch Geschwistersprachen).
+    """
+    if is_http_url(raw_path):
+        return None
+    text = str(raw_path or "").strip()
+    candidates: list[Path] = []
+    if text:
+        candidates.append(Path(text).expanduser())
+    roots: list[Path] = [
+        Path(project.project_root).expanduser(),
+        project.work_dir_path.expanduser(),
+    ]
+    try:
+        roots.append(project.language_work_dir_path.expanduser())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            iter_language_editorial_dirs,
+        )
+
+        roots.extend(iter_language_editorial_dirs(project))
+    except Exception:  # noqa: BLE001
+        pass
+    seen_roots: set[str] = set()
+    for root in roots:
+        try:
+            key = str(root.resolve())
+        except OSError:
+            key = str(root)
+        if key in seen_roots:
+            continue
+        seen_roots.add(key)
+        if text:
+            candidates.append(root / text)
+            name = Path(text).name
+            if name:
+                candidates.append(root / name)
+
+    seen_files: set[str] = set()
+    for candidate in candidates:
+        try:
+            if not candidate.is_file():
+                continue
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        key = str(resolved)
+        if key in seen_files:
+            continue
+        seen_files.add(key)
+        return resolved
+
+    search_ids = [str(asset_id or "").strip()]
+    if text:
+        search_ids.append(Path(text).stem)
+    seen_ids: set[str] = set()
+    for cid in search_ids:
+        key = cid.casefold()
+        if not cid or key in seen_ids:
+            continue
+        seen_ids.add(key)
+        found = find_local_media_for_candidate_id(
+            project, candidate_id=cid, folder_name=folder_name
+        )
+        if found is not None:
+            try:
+                if found.is_file():
+                    return found.resolve()
+            except OSError:
+                return found
+    return None
+
+
 def reconcile_accepted_supplement_paths(project: Project) -> int:
     """Accepted ``stock/downloads`` → vorhandene Clean-Kopie umbiegen.
 
