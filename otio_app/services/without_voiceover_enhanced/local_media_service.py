@@ -506,7 +506,9 @@ def find_local_media_for_candidate_id(
         get_folder_clean_output_dir,
     )
     from otio_app.services.media_utils import MEDIA_EXTENSIONS
-    from otio_app.services.without_voiceover_enhanced.paths import stock_downloads_dir
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        iter_stock_download_dirs,
+    )
 
     needles = _candidate_id_filename_needles(candidate_id)
     if not needles:
@@ -517,7 +519,7 @@ def find_local_media_for_candidate_id(
         roots.append(get_folder_clean_output_dir(project.work_dir_path, folder))
     roots.append(get_clean_media_output_dir(project.work_dir_path))
     roots.append(Path(project.project_root).expanduser() / "clean")
-    roots.append(stock_downloads_dir(project))
+    roots.extend(iter_stock_download_dirs(project))
 
     matches: list[Path] = []
     seen: set[str] = set()

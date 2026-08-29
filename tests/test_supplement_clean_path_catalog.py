@@ -330,3 +330,127 @@ def test_reconcile_accepted_finds_work_dir_clean(tmp_path: Path) -> None:
     path = accepted.supplements[0].local_media_path.replace("\\", "/")
     assert "/clean/" in path
     assert "stock/downloads" not in path
+
+
+def test_catalog_finds_download_in_sibling_de_folder(tmp_path: Path) -> None:
+    """IT-Timing: Datei liegt nur unter DE/voiceover_generation/stock/downloads."""
+    from otio_app.defaults import VOICEOVER_GENERATION_SUBDIR
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        STOCK_DOWNLOADS_SUBDIR,
+        STOCK_SUBDIR,
+    )
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    project.language = "IT"
+    folder = "Vogel"
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    (Path(project.project_root) / folder).mkdir(parents=True)
+
+    cid = "wikimedia_45709027"
+    de_file = (
+        project.work_dir_path
+        / "DE"
+        / VOICEOVER_GENERATION_SUBDIR
+        / STOCK_SUBDIR
+        / STOCK_DOWNLOADS_SUBDIR
+        / "Vogel_gap_005"
+        / cid
+        / f"{cid}.jpg"
+    )
+    de_file.parent.mkdir(parents=True)
+    de_file.write_bytes(b"\x00" * 80)
+    missing_it = (
+        project.work_dir_path
+        / "IT"
+        / VOICEOVER_GENERATION_SUBDIR
+        / STOCK_SUBDIR
+        / STOCK_DOWNLOADS_SUBDIR
+        / "Vogel_gap_005"
+        / cid
+        / f"{cid}.jpg"
+    )
+
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder),
+        AssetFolderAnalysis(
+            folder=folder,
+            description="",
+            media_files=[str(missing_it)],
+            assets=[
+                AssetMediaAnalysis(
+                    path=str(missing_it),
+                    description="vrsic pass",
+                    asset_id=cid,
+                    media_type="photo",
+                    analysis_status="complete",
+                    asset_origin="wikimedia",
+                    approved_for_cut_plan=True,
+                )
+            ],
+        ),
+    )
+
+    catalog = build_asset_catalog(project, fps=25.0, folder_names=[folder])
+    entry, err = lookup_catalog_entry(catalog, cid)
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == de_file.resolve()
+
+
+def test_resolve_relative_stock_path_via_sibling_language(tmp_path: Path) -> None:
+    """Relativer Funnel-Pfad ohne DE/IT-Prefix — Datei liegt im DE-Ordner."""
+    from otio_app.defaults import VOICEOVER_GENERATION_SUBDIR
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        STOCK_DOWNLOADS_SUBDIR,
+        STOCK_SUBDIR,
+    )
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _resolve_local_path,
+    )
+
+    project = _project(tmp_path)
+    project.language = "IT"
+    cid = "openverse_2c687a9d-625d-4ee6-81c0-c7a32254217d"
+    rel = (
+        f"{VOICEOVER_GENERATION_SUBDIR}/{STOCK_SUBDIR}/{STOCK_DOWNLOADS_SUBDIR}"
+        f"/Piran_gap_010/{cid}/{cid}.jpg"
+    )
+    de_file = project.work_dir_path / "DE" / rel
+    de_file.parent.mkdir(parents=True)
+    de_file.write_bytes(b"\x00" * 48)
+
+    resolved = _resolve_local_path(project, rel)
+    assert resolved.is_file()
+    assert resolved.resolve() == de_file.resolve()
+
+
+def test_resolve_swaps_de_absolute_path_to_it_copy(tmp_path: Path) -> None:
+    """Inventar zeigt auf DE-Absolutpfad, Datei liegt nur noch unter IT."""
+    from otio_app.defaults import VOICEOVER_GENERATION_SUBDIR
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        STOCK_DOWNLOADS_SUBDIR,
+        STOCK_SUBDIR,
+    )
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _resolve_local_path,
+    )
+
+    project = _project(tmp_path)
+    project.language = "IT"
+    cid = "openverse_e2287d76-bcd0-4c86-bcde-932ee0422522"
+    rel = (
+        f"{VOICEOVER_GENERATION_SUBDIR}/{STOCK_SUBDIR}/{STOCK_DOWNLOADS_SUBDIR}"
+        f"/Piran_gap_015/{cid}/{cid}.jpg"
+    )
+    de_missing = project.work_dir_path / "DE" / rel
+    it_file = project.work_dir_path / "IT" / rel
+    it_file.parent.mkdir(parents=True)
+    it_file.write_bytes(b"\x00" * 48)
+
+    resolved = _resolve_local_path(project, str(de_missing))
+    assert resolved.is_file()
+    assert resolved.resolve() == it_file.resolve()

@@ -102,18 +102,76 @@ def _resolve_local_path(project: Project, raw: str | Path) -> Path:
     path = Path(str(raw)).expanduser()
     if path.is_file():
         return path.resolve()
-    roots = [
+    roots: list[Path] = [
         Path(project.project_root).expanduser(),
         project.work_dir_path.expanduser(),
     ]
+    try:
+        roots.append(project.language_work_dir_path.expanduser())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            iter_language_editorial_dirs,
+        )
+
+        roots.extend(iter_language_editorial_dirs(project))
+    except Exception:  # noqa: BLE001
+        pass
+    seen: set[str] = set()
     for root in roots:
+        try:
+            key = str(root.resolve())
+        except OSError:
+            key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
         try:
             candidate = (root / path).resolve()
         except OSError:
             continue
         if candidate.is_file():
             return candidate
+
+    # Absoluter DE-Pfad, Datei liegt inzwischen unter IT (oder umgekehrt).
+    try:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            iter_language_editorial_dirs,
+        )
+
+        text = str(path)
+        posix = text.replace("\\", "/")
+        for lang_dir in iter_language_editorial_dirs(project):
+            token = f"/{lang_dir.name}/"
+            if token.lower() in posix.lower():
+                continue
+            swapped = _swap_language_folder_in_path(text, lang_dir.name)
+            if swapped is not None and swapped.is_file():
+                return swapped.resolve()
+    except Exception:  # noqa: BLE001
+        pass
     return path
+
+
+def _swap_language_folder_in_path(raw: str, target_lang: str) -> Path | None:
+    """``…/_otio_enhanced/DE/voiceover_generation/…`` → ``…/IT/…``."""
+    posix = raw.replace("\\", "/")
+    marker = "/voiceover_generation/"
+    idx = posix.lower().rfind(marker)
+    if idx < 0:
+        return None
+    head = posix[:idx]
+    tail = posix[idx:]
+    slash = head.rfind("/")
+    if slash < 0:
+        return None
+    swapped = f"{head[:slash]}/{target_lang}{tail}"
+    if raw.startswith("\\\\") or (len(raw) >= 2 and raw[1] == ":"):
+        # Windows-Pfad: POSIX-Tausch reicht nicht — nur POSIX-Fälle.
+        if "\\" in raw and "/" not in raw:
+            swapped = swapped.replace("/", "\\")
+    return Path(swapped)
 
 
 def _catalog_media_stem_key(path: Path | str) -> str:
