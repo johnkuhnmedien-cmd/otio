@@ -323,6 +323,91 @@ def stock_downloads_dir(project: Project) -> Path:
     return stock_dir(project) / STOCK_DOWNLOADS_SUBDIR
 
 
+_SHARED_ENHANCED_DIR_NAMES = frozenset(
+    {
+        "inventory",
+        "clean",
+        "clean_media",
+        "config",
+        "placeholders",
+        "frames",
+        "exports",
+        "llm_runs",
+    }
+)
+
+
+def iter_language_editorial_dirs(project: Project) -> list[Path]:
+    """``_otio_enhanced/{DE,IT,…}`` — Funnel-Downloads sind sprachgetrennt.
+
+    Inventar und Clean liegen geteilt unter ``work_dir``. Stock-Downloads
+    dagegen unter der Sprache, die den Funnel zuerst ausgeführt hat. IT darf
+    deshalb in DE nach derselben Datei suchen.
+    """
+    work = assert_enhanced_work_root(project)
+    out: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(raw: Path) -> None:
+        try:
+            key = str(raw.expanduser().resolve())
+        except OSError:
+            key = str(raw)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(raw)
+
+    try:
+        _add(project.language_work_dir_path)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        if work.is_dir():
+            for child in sorted(work.iterdir(), key=lambda p: p.name.lower()):
+                try:
+                    if not child.is_dir():
+                        continue
+                except OSError:
+                    continue
+                if child.name.strip().lower() in _SHARED_ENHANCED_DIR_NAMES:
+                    continue
+                if (child / VOICEOVER_GENERATION_SUBDIR).is_dir():
+                    _add(child)
+    except OSError:
+        pass
+    return out
+
+
+def iter_stock_download_dirs(project: Project) -> list[Path]:
+    """Aktuelle Sprache plus Geschwister (DE/IT/…)."""
+    out: list[Path] = []
+    seen: set[str] = set()
+    for lang_dir in iter_language_editorial_dirs(project):
+        downloads = (
+            lang_dir / VOICEOVER_GENERATION_SUBDIR / STOCK_SUBDIR / STOCK_DOWNLOADS_SUBDIR
+        )
+        try:
+            if not downloads.is_dir():
+                continue
+            key = str(downloads.resolve())
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(downloads)
+    current = stock_downloads_dir(project)
+    try:
+        if current.is_dir():
+            key = str(current.resolve())
+            if key not in seen:
+                out.insert(0, current)
+    except OSError:
+        pass
+    return out
+
+
 def stock_candidate_download_dir(
     project: Project,
     *,

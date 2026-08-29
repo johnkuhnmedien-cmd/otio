@@ -82,6 +82,18 @@ def test_reuse_identity_key_collapses_pexels_aliases() -> None:
     assert reuse_identity_key("manual_cliffs_abc") == "manual_cliffs_abc"
 
 
+def test_parse_openverse_uuid_asset_id() -> None:
+    ident = parse_provider_identity_from_asset_id(
+        "openverse_e61610da-6d0c-41f4-bf76-ecb24278f193"
+    )
+    assert ident is not None
+    assert ident.provider == "openverse"
+    assert ident.provider_asset_id == "e61610da-6d0c-41f4-bf76-ecb24278f193"
+    assert reuse_identity_key(
+        "openverse_e61610da-6d0c-41f4-bf76-ecb24278f193"
+    ) == "openverse:e61610da-6d0c-41f4-bf76-ecb24278f193"
+
+
 def test_find_existing_from_inventory(tmp_path: Path) -> None:
     project = _project(tmp_path)
     media = Path(project.project_root) / "Cliffs of Moher" / "clip.mp4"

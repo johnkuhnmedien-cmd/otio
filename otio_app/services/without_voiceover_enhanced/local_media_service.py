@@ -448,23 +448,193 @@ def _is_stale_accepted_supplement(
     return cand_run != expected_run_id
 
 
-def find_clean_media_for_candidate(
-    project: Project, *, candidate_id: str
-) -> Path | None:
-    """Sucht ``clean/**/{candidate_id}*`` — kanonische Kopie nach Clean Media."""
+def _candidate_id_filename_needles(candidate_id: str) -> list[str]:
+    """Dateiname-Varianten: Bindestrich-UUID, Slug, Unterstriche."""
     cid = (candidate_id or "").strip()
     if not cid:
+        return []
+    from otio_app.project_layout import safe_folder_slug
+
+    variants = [cid, safe_folder_slug(cid), cid.replace("-", "_"), cid.replace("_", "-")]
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in variants:
+        text = str(raw or "").strip()
+        key = text.casefold()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out
+
+
+def _pick_preferred_media_match(matches: list[Path]) -> Path | None:
+    files = [path for path in matches if path.is_file()]
+    if not files:
         return None
-    root = Path(project.project_root).expanduser()
-    clean_root = root / "clean"
-    if not clean_root.is_dir():
+    files.sort(
+        key=lambda p: (
+            "/clean/" not in str(p).replace("\\", "/").lower(),
+            p.suffix.lower() != ".mp4",
+            -len(p.name),
+            str(p),
+        )
+    )
+    return files[0]
+
+
+def find_clean_media_for_candidate(
+    project: Project, *, candidate_id: str, folder_name: str = ""
+) -> Path | None:
+    """Sucht Clean-Kopie zu einer Funnel-/Stock-ID.
+
+    Enhanced legt Clean unter ``work_dir/clean/<Ordner>/`` ab, nicht unter
+    ``project_root/clean/``. Dateinamen nutzen oft den Slug (Bindestriche →
+    Unterstriche), der Cut-Plan aber die originale ``openverse_<uuid>``.
+    """
+    return find_local_media_for_candidate_id(
+        project, candidate_id=candidate_id, folder_name=folder_name
+    )
+
+
+def find_local_media_for_candidate_id(
+    project: Project, *, candidate_id: str, folder_name: str = ""
+) -> Path | None:
+    """Clean (Work-Dir + Legacy-Root) und ``stock/downloads`` zur Stock-ID."""
+    from otio_app.project_layout import (
+        get_clean_media_output_dir,
+        get_folder_clean_output_dir,
+    )
+    from otio_app.services.media_utils import MEDIA_EXTENSIONS
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        iter_stock_download_dirs,
+    )
+
+    needles = _candidate_id_filename_needles(candidate_id)
+    if not needles:
         return None
-    matches = [p for p in clean_root.rglob(f"{cid}*") if p.is_file()]
-    if not matches:
+    roots: list[Path] = []
+    folder = (folder_name or "").strip()
+    if folder:
+        roots.append(get_folder_clean_output_dir(project.work_dir_path, folder))
+    roots.append(get_clean_media_output_dir(project.work_dir_path))
+    roots.append(Path(project.project_root).expanduser() / "clean")
+    roots.extend(iter_stock_download_dirs(project))
+
+    matches: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            if not root.is_dir():
+                continue
+        except OSError:
+            continue
+        for needle in needles:
+            try:
+                found = list(root.rglob(f"*{needle}*"))
+            except OSError:
+                continue
+            for path in found:
+                try:
+                    if not path.is_file():
+                        continue
+                except OSError:
+                    continue
+                if path.suffix.lower() not in MEDIA_EXTENSIONS:
+                    continue
+                try:
+                    key = str(path.resolve())
+                except OSError:
+                    key = str(path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                matches.append(path)
+    return _pick_preferred_media_match(matches)
+
+
+def resolve_existing_inventory_media(
+    project: Project,
+    *,
+    raw_path: str,
+    asset_id: str = "",
+    folder_name: str = "",
+) -> Path | None:
+    """Liefert den echten Dateipfad, oder None wenn die Datei nicht existiert.
+
+    Sucht relativ zum Projekt, im Arbeitsverzeichnis, in Sprachordnern und
+    über die Stock-/Clean-ID (auch Geschwistersprachen).
+    """
+    if is_http_url(raw_path):
         return None
-    # Bevorzuge mp4 / längeren Namen (oft mit Auflösungssuffix).
-    matches.sort(key=lambda p: (p.suffix.lower() != ".mp4", -len(p.name), str(p)))
-    return matches[0]
+    text = str(raw_path or "").strip()
+    candidates: list[Path] = []
+    if text:
+        candidates.append(Path(text).expanduser())
+    roots: list[Path] = [
+        Path(project.project_root).expanduser(),
+        project.work_dir_path.expanduser(),
+    ]
+    try:
+        roots.append(project.language_work_dir_path.expanduser())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            iter_language_editorial_dirs,
+        )
+
+        roots.extend(iter_language_editorial_dirs(project))
+    except Exception:  # noqa: BLE001
+        pass
+    seen_roots: set[str] = set()
+    for root in roots:
+        try:
+            key = str(root.resolve())
+        except OSError:
+            key = str(root)
+        if key in seen_roots:
+            continue
+        seen_roots.add(key)
+        if text:
+            candidates.append(root / text)
+            name = Path(text).name
+            if name:
+                candidates.append(root / name)
+
+    seen_files: set[str] = set()
+    for candidate in candidates:
+        try:
+            if not candidate.is_file():
+                continue
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        key = str(resolved)
+        if key in seen_files:
+            continue
+        seen_files.add(key)
+        return resolved
+
+    search_ids = [str(asset_id or "").strip()]
+    if text:
+        search_ids.append(Path(text).stem)
+    seen_ids: set[str] = set()
+    for cid in search_ids:
+        key = cid.casefold()
+        if not cid or key in seen_ids:
+            continue
+        seen_ids.add(key)
+        found = find_local_media_for_candidate_id(
+            project, candidate_id=cid, folder_name=folder_name
+        )
+        if found is not None:
+            try:
+                if found.is_file():
+                    return found.resolve()
+            except OSError:
+                return found
+    return None
 
 
 def reconcile_accepted_supplement_paths(project: Project) -> int:

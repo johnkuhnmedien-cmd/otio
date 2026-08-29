@@ -35,10 +35,9 @@ from otio_app.services.without_voiceover_enhanced.cut_rhythm_validator import (
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
-    STATUS_EXPORT_READY,
+    find_local_media_for_candidate_id,
     is_http_url,
     list_export_ready_supplements,
-    refresh_supplement_validation,
 )
 from otio_app.services.without_voiceover_enhanced.media_hold import (
     MediaHoldError,
@@ -103,10 +102,85 @@ def _resolve_local_path(project: Project, raw: str | Path) -> Path:
     path = Path(str(raw)).expanduser()
     if path.is_file():
         return path.resolve()
-    candidate = (Path(project.project_root).expanduser() / path).resolve()
-    if candidate.is_file():
-        return candidate
+    roots: list[Path] = [
+        Path(project.project_root).expanduser(),
+        project.work_dir_path.expanduser(),
+    ]
+    try:
+        roots.append(project.language_work_dir_path.expanduser())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            iter_language_editorial_dirs,
+        )
+
+        roots.extend(iter_language_editorial_dirs(project))
+    except Exception:  # noqa: BLE001
+        pass
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            key = str(root.resolve())
+        except OSError:
+            key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            candidate = (root / path).resolve()
+        except OSError:
+            continue
+        if candidate.is_file():
+            return candidate
+
+    # Absoluter DE-Pfad, Datei liegt inzwischen unter IT (oder umgekehrt).
+    try:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            iter_language_editorial_dirs,
+        )
+
+        text = str(path)
+        posix = text.replace("\\", "/")
+        for lang_dir in iter_language_editorial_dirs(project):
+            token = f"/{lang_dir.name}/"
+            if token.lower() in posix.lower():
+                continue
+            swapped = _swap_language_folder_in_path(text, lang_dir.name)
+            if swapped is not None and swapped.is_file():
+                return swapped.resolve()
+    except Exception:  # noqa: BLE001
+        pass
     return path
+
+
+def _swap_language_folder_in_path(raw: str, target_lang: str) -> Path | None:
+    """``…/_otio_enhanced/DE/voiceover_generation/…`` → ``…/IT/…``."""
+    posix = raw.replace("\\", "/")
+    marker = "/voiceover_generation/"
+    idx = posix.lower().rfind(marker)
+    if idx < 0:
+        return None
+    head = posix[:idx]
+    tail = posix[idx:]
+    slash = head.rfind("/")
+    if slash < 0:
+        return None
+    swapped = f"{head[:slash]}/{target_lang}{tail}"
+    if raw.startswith("\\\\") or (len(raw) >= 2 and raw[1] == ":"):
+        # Windows-Pfad: POSIX-Tausch reicht nicht — nur POSIX-Fälle.
+        if "\\" in raw and "/" not in raw:
+            swapped = swapped.replace("/", "\\")
+    return Path(swapped)
+
+
+def _catalog_media_stem_key(path: Path | str) -> str:
+    """Dateiname ohne Extension und ohne ``_3840x2160`` — jpg und Clean-mp4 treffen sich."""
+    stem = Path(str(path)).stem.strip()
+    if not stem:
+        return ""
+    collapsed = re.sub(r"[^a-zA-Z0-9]+", "_", stem).strip("_").lower()
+    return _RESOLUTION_STEM_SUFFIX_RE.sub("", collapsed).strip("_")
 
 
 def _stem_slug_variants(stem: str) -> list[str]:
@@ -334,6 +408,13 @@ def _recover_inventory_media_path(
             return Path(clean).resolve()
         except OSError:
             return Path(clean).expanduser()
+    stock_id = str(asset_id or "").strip()
+    if stock_id:
+        recovered_stock = find_local_media_for_candidate_id(
+            project, candidate_id=stock_id, folder_name=folder
+        )
+        if recovered_stock is not None and recovered_stock.is_file():
+            return recovered_stock.resolve()
     return None
 
 
@@ -698,15 +779,20 @@ def build_asset_catalog(
         # Slim-IDs (LLM-Cut) immer als Alias auf indexierte Dateien legen.
         # Besonders relevant bei Ordner-/Dateinamen mit ``&``: Slim kollabiert
         # Sonderzeichen, ältere Stem-Aliasse erzeugten ``___``.
+        # Funnel-Fotos: Inventar/Slim zeigen oft ``.jpg``, Clean liegt als ``.mp4``.
         slim_by_file = _slim_id_filename_map(project, folder)
         if slim_by_file:
             entries_by_name: dict[str, dict] = {}
+            entries_by_stem: dict[str, dict] = {}
             for entry in result.by_id.values():
                 if str(entry.get("folder") or "") != folder:
                     continue
                 name = Path(str(entry.get("path") or "")).name.lower()
                 if name and name not in entries_by_name:
                     entries_by_name[name] = entry
+                stem_key = _catalog_media_stem_key(entry.get("path") or "")
+                if stem_key and stem_key not in entries_by_stem:
+                    entries_by_stem[stem_key] = entry
             for slim_id, file_name in slim_by_file.items():
                 if not slim_id or slim_id in result.by_id:
                     continue
@@ -714,75 +800,76 @@ def build_asset_catalog(
                     continue
                 entry = entries_by_name.get(file_name.lower())
                 if entry is None:
+                    entry = entries_by_stem.get(_catalog_media_stem_key(file_name))
+                if entry is None:
                     continue
                 _register(slim_id, entry, raw_id=slim_id)
 
-    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
-    if accepted is not None:
-        for supplement in accepted.supplements:
-            refreshed = refresh_supplement_validation(supplement)
-            if refreshed.media_validation_status != STATUS_EXPORT_READY:
+    def _entry_for_path(path: Path) -> dict | None:
+        try:
+            want = str(path.resolve())
+        except OSError:
+            want = str(path)
+        for entry in result.by_id.values():
+            raw = str(entry.get("path") or "")
+            if not raw:
                 continue
-            # Inventar hat Vorrang — Accepted nicht nochmal mit stock/downloads registrieren.
-            if supplement.candidate_id in result.by_id:
-                continue
-            local_path = str(refreshed.local_media_path or "").strip()
-            if not local_path or is_http_url(local_path):
-                continue
-            path = _resolve_local_path(project, local_path)
-            if not path.is_file():
-                continue
-            media_type = (refreshed.media_type or "photo").lower()
-            entry = _probe_entry(
-                project,
-                path=path,
-                folder="",
-                asset_id=supplement.candidate_id,
-                usable_in=None,
-                media_type_hint=media_type,
-                fps=fps,
-                known_duration=(
-                    float(refreshed.duration_seconds)
-                    if refreshed.duration_seconds is not None
-                    else None
-                ),
-                probe_cache=probe_cache,
-            )
-            entry["supplement"] = True
-            entry["export_ready"] = True
-            if refreshed.duration_seconds is not None:
-                entry["duration_seconds"] = refreshed.duration_seconds
-            _register(supplement.candidate_id, entry, raw_id=supplement.candidate_id)
+            try:
+                have = str(Path(raw).resolve())
+            except OSError:
+                have = raw
+            if have == want:
+                return entry
+        return None
 
-    for supplement in list_export_ready_supplements(project):
-        local_path = str(supplement.local_media_path or "").strip()
-        if not local_path or is_http_url(local_path):
-            continue
-        path = _resolve_local_path(project, local_path)
-        if not path.is_file():
-            continue
-        if supplement.candidate_id in result.by_id:
-            continue
+    def _register_supplement_candidate(supplement: object, *, folder_hint: str = "") -> None:
+        candidate_id = str(getattr(supplement, "candidate_id", "") or "").strip()
+        if not candidate_id or candidate_id in result.by_id:
+            return
+        local_path = str(getattr(supplement, "local_media_path", "") or "").strip()
+        path: Path | None = None
+        if local_path and not is_http_url(local_path):
+            resolved = _resolve_local_path(project, local_path)
+            if resolved.is_file():
+                path = resolved
+        if path is None or not path.is_file():
+            recovered = find_local_media_for_candidate_id(
+                project, candidate_id=candidate_id, folder_name=folder_hint
+            )
+            if recovered is not None and recovered.is_file():
+                path = recovered
+        if path is None or not path.is_file():
+            return
+        existing = _entry_for_path(path)
+        if existing is not None:
+            _register(candidate_id, existing, raw_id=candidate_id)
+            return
+        duration = getattr(supplement, "duration_seconds", None)
+        media_type = str(getattr(supplement, "media_type", "") or "photo").lower()
         entry = _probe_entry(
             project,
             path=path,
             folder="",
-            asset_id=supplement.candidate_id,
+            asset_id=candidate_id,
             usable_in=None,
-            media_type_hint=(supplement.media_type or "photo").lower(),
+            media_type_hint=media_type,
             fps=fps,
-            known_duration=(
-                float(supplement.duration_seconds)
-                if supplement.duration_seconds is not None
-                else None
-            ),
+            known_duration=float(duration) if duration is not None else None,
             probe_cache=probe_cache,
         )
         entry["supplement"] = True
         entry["export_ready"] = True
-        if supplement.duration_seconds is not None:
-            entry["duration_seconds"] = supplement.duration_seconds
-        _register(supplement.candidate_id, entry, raw_id=supplement.candidate_id)
+        if duration is not None:
+            entry["duration_seconds"] = duration
+        _register(candidate_id, entry, raw_id=candidate_id)
+
+    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    if accepted is not None:
+        for supplement in accepted.supplements:
+            _register_supplement_candidate(supplement)
+
+    for supplement in list_export_ready_supplements(project):
+        _register_supplement_candidate(supplement)
 
     for asset_id, paths in sorted(explicit_paths.items()):
         unique_paths = sorted(set(paths))

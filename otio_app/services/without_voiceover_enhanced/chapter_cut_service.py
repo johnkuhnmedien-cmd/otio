@@ -574,6 +574,9 @@ def generate_chapter_unified_cut(
         raise ChapterCutError(
             "Intro läuft über die Intro-Buttons — kein Kapitel-Cut für Intro."
         )
+    from otio_app.services.inventory_loader import prune_unresolvable_supplement_assets
+
+    prune_unresolvable_supplement_assets(project, folder_name)
     prior = load_prior_chapter_plans(project, folder_name)
     ledger = _used_in_ledger_text(prior)
     result = generate_unified_cut_for_folder(
@@ -601,6 +604,101 @@ def generate_chapter_unified_cut(
         slot_count=len(plan.slots),
         gap_count=gap_count,
     )
+
+
+def _known_folder_asset_ids(project: Project, folder_name: str) -> set[str]:
+    """IDs, die Slim/Inventar nach dem Prune noch kennen."""
+    from otio_app.project_layout import get_folder_inventory_path
+    from otio_app.services.inventory_loader import load_folder_inventory_file
+    from otio_app.services.inventory_prompt_view import (
+        load_slim_folder_inventory_file,
+        slim_inventory_path_for,
+    )
+
+    ids: set[str] = set()
+    inv_path = get_folder_inventory_path(project.work_dir_path, folder_name)
+    inventory = load_folder_inventory_file(inv_path)
+    for asset in getattr(inventory, "assets", None) or []:
+        aid = str(getattr(asset, "asset_id", "") or "").strip()
+        if aid:
+            ids.add(aid)
+    slim = load_slim_folder_inventory_file(slim_inventory_path_for(inv_path))
+    for item in (slim or {}).get("assets") or []:
+        if not isinstance(item, dict):
+            continue
+        aid = str(item.get("id") or "").strip()
+        if aid:
+            ids.add(aid)
+    return ids
+
+
+_STOCK_GHOST_PREFIXES = (
+    "openverse_",
+    "wikimedia_",
+    "pexels_",
+    "pixabay_",
+    "flickr_",
+)
+
+
+def _ghost_ids_to_demote(
+    plan: UnifiedCutPlanDocument,
+    known_ids: set[str],
+    dropped_ids: list[str] | None,
+) -> set[str]:
+    """Nur IDs, die gerade aus dem Inventar flogen oder wie tote Stock-IDs aussehen."""
+    missing = {str(item).strip() for item in (dropped_ids or []) if str(item).strip()}
+    known = {str(item).strip() for item in known_ids if str(item).strip()}
+
+    def _consider(raw: str | None) -> None:
+        aid = str(raw or "").strip()
+        if not aid or aid in known:
+            return
+        if aid in missing:
+            return
+        if aid.casefold().startswith(_STOCK_GHOST_PREFIXES):
+            missing.add(aid)
+
+    for slot in plan.slots:
+        _consider(slot.local_asset_id)
+    _consider(plan.closing_fallback_asset_id)
+    return missing
+
+
+def _demote_unknown_assets_in_chapter_plan(
+    project: Project,
+    folder_name: str,
+    dropped_ids: list[str] | None = None,
+) -> list[str]:
+    """Slots mit tot Inventar-IDs zu Coverage-Gaps machen und speichern."""
+    from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+        demote_slots_with_unknown_local_assets,
+    )
+
+    plan = load_chapter_unified_plan(project, folder_name)
+    if plan is None or not plan.slots:
+        return []
+    known = _known_folder_asset_ids(project, folder_name)
+    only = _ghost_ids_to_demote(plan, known, dropped_ids)
+    if not only:
+        return []
+    updated, notes = demote_slots_with_unknown_local_assets(
+        plan, known, only_asset_ids=only
+    )
+    if not notes:
+        return []
+    persist_chapter_unified_plan(
+        project,
+        folder_name,
+        updated,
+        refresh_merged=False,
+        reset_open_gaps=False,
+    )
+    try:
+        refresh_merged_unified_cut_plan(project)
+    except Exception:  # noqa: BLE001 — Kapitel-Plan ist geschrieben; Merge optional
+        pass
+    return notes
 
 
 def generate_all_chapter_unified_cuts(
@@ -723,6 +821,18 @@ def resolve_chapter_timeline(
 
     # Externe App: Dateien in coverage/inbox/{gap_id}/ vor Timing übernehmen.
     ingest_coverage_gap_inbox(project)
+
+    from otio_app.services.inventory_loader import prune_unresolvable_supplement_assets
+
+    dropped = prune_unresolvable_supplement_assets(project, folder_name)
+    _demote_unknown_assets_in_chapter_plan(
+        project, folder_name, dropped_ids=dropped
+    )
+    plan = load_chapter_unified_plan(project, folder_name)
+    if plan is None or not plan.slots:
+        raise ChapterCutError(
+            f"Kapitel-Plan fehlt für „{folder_name}“ — zuerst LLM Cut."
+        )
 
     open_gaps = chapter_open_gap_ids(project, folder_name)
     if open_gaps:
