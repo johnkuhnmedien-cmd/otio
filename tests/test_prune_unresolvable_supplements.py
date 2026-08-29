@@ -19,7 +19,11 @@ from otio_app.services.inventory_prompt_view import (
     load_slim_folder_inventory_file,
     slim_inventory_path_for,
 )
-from otio_app.services.media_inventory_cache import media_cache_path, save_cached_media
+from otio_app.services.media_inventory_cache import (
+    CACHE_SCOPE_SUPPLEMENT,
+    media_cache_path,
+    save_cached_media,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     CutBoundary,
     CutSlot,
@@ -208,10 +212,39 @@ def test_prune_rewrites_path_when_clean_mp4_exists(tmp_path: Path) -> None:
     assert Path(row.path).resolve() == clean.resolve()
 
 
-def test_materialize_does_not_resurrect_missing_supplement(tmp_path: Path) -> None:
+def test_materialize_keeps_existing_inventory_rows_even_if_file_missing(
+    tmp_path: Path,
+) -> None:
+    """Rebuild darf vorhandene Stock-Zeilen nicht still löschen."""
     project = _project(tmp_path)
     original = _original(project)
     _save_inventory(project, [original, _ghost_asset()])
+
+    item, error = materialize_folder_inventory_from_cache(project, FOLDER, allow_partial=True)
+
+    assert error is None
+    assert item is not None
+    ids = {asset.asset_id for asset in item.assets}
+    assert GHOST_ID in ids
+    assert "vogel_clip" in ids
+
+
+def test_materialize_does_not_add_missing_file_from_supplement_cache(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    original = _original(project)
+    _save_inventory(project, [original])
+    ghost = _ghost_asset()
+    save_cached_media(
+        media_cache_path(
+            project,
+            FOLDER,
+            Path(ghost.path),
+            scope=CACHE_SCOPE_SUPPLEMENT,
+        ),
+        ghost,
+    )
 
     item, error = materialize_folder_inventory_from_cache(project, FOLDER, allow_partial=True)
 
@@ -345,13 +378,15 @@ def test_generate_chapter_unified_cut_prunes_ghost_before_llm(tmp_path: Path) ->
     assert "vogel_clip" in seen_ids[0]
 
 
-def test_resolve_chapter_timeline_demotes_ghost_then_asks_for_funnel(
+def test_resolve_chapter_timeline_does_not_prune_or_demote_inventory(
     tmp_path: Path,
 ) -> None:
     from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
-        ChapterCutError,
         persist_chapter_unified_plan,
         resolve_chapter_timeline,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import (
+        ResolvedTimelineDocument,
     )
 
     project = _project(tmp_path)
@@ -386,24 +421,31 @@ def test_resolve_chapter_timeline_demotes_ghost_then_asks_for_funnel(
     persist_chapter_unified_plan(
         project, FOLDER, plan, refresh_merged=False, reset_open_gaps=False
     )
+    dummy = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=2.0,
+        shots=[],
+        audio_segments=[],
+    )
 
     with patch(
         "otio_app.services.without_voiceover_enhanced.coverage_gap_external_export.ingest_coverage_gap_inbox",
         return_value=None,
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.unified_timeline_service.resolve_unified_timeline",
+        return_value=dummy,
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.gap_merge_service.merge_export_ready_gaps_into_timeline",
+        return_value=(dummy, None),
     ):
-        try:
-            resolve_chapter_timeline(project, FOLDER)
-        except ChapterCutError as exc:
-            message = str(exc)
-        else:
-            raise AssertionError("expected ChapterCutError")
+        resolve_chapter_timeline(project, FOLDER)
 
-    assert "Coverage Gap" in message or "Funnel" in message
     saved = load_folder_inventory_file(
         get_folder_inventory_path(project.work_dir_path, FOLDER)
     )
     assert saved is not None
-    assert GHOST_ID not in {asset.asset_id for asset in saved.assets}
+    assert GHOST_ID in {asset.asset_id for asset in saved.assets}
 
     from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
         load_chapter_unified_plan,
@@ -412,5 +454,5 @@ def test_resolve_chapter_timeline_demotes_ghost_then_asks_for_funnel(
     updated = load_chapter_unified_plan(project, FOLDER)
     assert updated is not None
     slot = updated.slots[0]
-    assert slot.local_asset_id is None
-    assert slot.asset_fit == "none"
+    assert slot.local_asset_id == GHOST_ID
+    assert slot.asset_fit == "strong"

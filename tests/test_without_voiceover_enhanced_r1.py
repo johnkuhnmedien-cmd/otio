@@ -766,7 +766,13 @@ def test_otio_allow_errors_exports_partial_timeline_with_gaps(tmp_path: Path) ->
     payload = out.read_text(encoding="utf-8")
     assert "shot_a" in payload
     assert "shot_c" in payload
-    assert "Gap" in payload or "gap" in payload.lower() or "still_hold_" in payload
+    assert (
+        "Gap" in payload
+        or "gap" in payload.lower()
+        or "still_hold_" in payload
+        or "placeholder" in payload.lower()
+        or "timeline_hole_before_" in payload
+    )
     assert "http://" not in payload
 
 
@@ -782,3 +788,14 @@ def test_ui_test_otio_with_gaps_markers() -> None:
     assert "Test-OTIO mit Lücken erzeugen" in final_src
     assert "allow_errors=True" in final_src
     assert "disabled=has_errors" in final_src
+    all_otio = cut_src[cut_src.index("if run_all_otio:") : cut_src.index("if run_all_otio:") + 700]
+    assert "allow_errors=False" in all_otio
+    assert "allow_errors=True" not in all_otio
+    chapter_otio = cut_src[cut_src.index("if run_otio:") : cut_src.index("if run_otio:") + 500]
+    assert "allow_errors=False" in chapter_otio
+    auto_src = Path(
+        "otio_app/services/without_voiceover_enhanced/enhanced_auto_run_service.py"
+    ).read_text(encoding="utf-8")
+    run_otio = auto_src[auto_src.index("def _run_otio") : auto_src.index("def _run_otio") + 900]
+    assert "allow_errors=False" in run_otio
+    assert "allow_errors=True" not in run_otio

@@ -29,6 +29,7 @@ from otio_app.services.without_voiceover_enhanced.io_utils import load_model
 from otio_app.services.without_voiceover_enhanced.local_media_service import is_http_url
 from otio_app.services.without_voiceover_enhanced.media_hold import (
     MediaHoldError,
+    ensure_gap_placeholder_slate,
     ensure_still_hold_video,
 )
 from otio_app.services.without_voiceover_enhanced.models import (
@@ -117,6 +118,52 @@ def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> 
         start_time=otio.opentime.RationalTime(start_frames, media_rate),
         duration=otio.opentime.RationalTime(end_frames - start_frames, media_rate),
     )
+
+
+def _append_test_placeholder_clip(
+    video_track: otio.schema.Track,
+    project: Project,
+    *,
+    fps: float,
+    shot_id: str,
+    gap_id: str,
+    start_seconds: float,
+    end_seconds: float,
+    needed_visual: str = "",
+) -> None:
+    """Test-OTIO: sichtbares Slate statt leerer Resolve-Lücke."""
+    duration = max(0.01, float(end_seconds) - float(start_seconds))
+    try:
+        slate = ensure_gap_placeholder_slate(
+            project,
+            shot_id=shot_id,
+            gap_id=(gap_id or f"gap_{shot_id}").strip() or f"gap_{shot_id}",
+            needed_visual=needed_visual,
+            start_seconds=float(start_seconds),
+            end_seconds=float(end_seconds),
+            fps=float(fps),
+        )
+        media_dur = probe_duration_seconds(slate) or duration
+        clip = otio.schema.Clip(
+            name=shot_id,
+            media_reference=otio.schema.ExternalReference(
+                target_url=str(slate),
+                available_range=_time_range(media_dur, fps, start_sec=0.0),
+            ),
+            source_range=_time_range(min(duration, media_dur), fps, start_sec=0.0),
+        )
+        clip.metadata["placeholder"] = True
+        clip.metadata["open_gap"] = True
+        video_track.append(clip)
+        remainder = duration - min(duration, media_dur)
+        if remainder > 1e-3:
+            video_track.append(
+                otio.schema.Gap(source_range=_time_range(remainder, fps))
+            )
+    except (MediaHoldError, OSError, EnhancedOtioExportError):
+        video_track.append(
+            otio.schema.Gap(source_range=_time_range(duration, fps))
+        )
 
 
 def _shot_needs_manual_marker(shot: ResolvedShot) -> bool:
@@ -1029,10 +1076,22 @@ def export_otio_from_resolved_timeline(
     sorted_shots = sorted(resolved.shots, key=_resolved_shot_sort_key)
     for shot_index, shot in enumerate(sorted_shots):
         if shot.timeline_start_seconds > cursor + 1e-6:
-            gap = shot.timeline_start_seconds - cursor
-            video_track.append(
-                otio.schema.Gap(source_range=_time_range(gap, fps))
-            )
+            if allow_errors:
+                _append_test_placeholder_clip(
+                    video_track,
+                    project,
+                    fps=fps,
+                    shot_id=f"timeline_hole_before_{shot.shot_id}",
+                    gap_id=f"hole_before_{shot.shot_id}",
+                    start_seconds=cursor,
+                    end_seconds=float(shot.timeline_start_seconds),
+                    needed_visual="fehlender Shot zwischen Clips",
+                )
+            else:
+                gap = shot.timeline_start_seconds - cursor
+                video_track.append(
+                    otio.schema.Gap(source_range=_time_range(gap, fps))
+                )
         try:
             media_path, avail_start, source_start, source_end, rate = (
                 _ensure_shot_media_for_export(
@@ -1047,11 +1106,18 @@ def export_otio_from_resolved_timeline(
         except EnhancedOtioExportError:
             if not allow_errors:
                 raise
-            # Test-Modus: Lücke statt ungültigem Clip.
-            gap = max(
-                0.01, shot.timeline_end_seconds - shot.timeline_start_seconds
+            _append_test_placeholder_clip(
+                video_track,
+                project,
+                fps=fps,
+                shot_id=str(shot.shot_id),
+                gap_id=str(shot.coverage_gap_id or f"gap_{shot.shot_id}"),
+                start_seconds=float(shot.timeline_start_seconds),
+                end_seconds=float(shot.timeline_end_seconds),
+                needed_visual=str(
+                    shot.asset_fit_reason or shot.asset_id or ""
+                ),
             )
-            video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
             cursor = shot.timeline_end_seconds
             continue
 

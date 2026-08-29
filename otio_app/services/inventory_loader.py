@@ -427,31 +427,31 @@ def _with_preserved_supplements(
     folder_name: str,
     item: AssetFolderAnalysis,
 ) -> AssetFolderAnalysis:
-    """Ergänzt fehlende Supplement-Zeilen aus Inventar-Historie und Cache."""
+    """Ergänzt fehlende Supplement-Zeilen aus Inventar-Historie und Cache.
+
+    Bereits geladene Zeilen bleiben stehen. Nur *zusätzliche* Zeilen ohne
+    auffindbare Datei werden nicht ergänzt. Ein Inventar-Rebuild darf Stock
+    nicht stillschweigend löschen — sonst fehlen IDs in Timing/Export, ohne
+    dass Python Timing einen Fehler zeigt.
+    """
     extras = _supplement_assets_to_preserve(project, folder_name, item.assets)
-    merged = item
-    if extras:
-        merged_assets = list(item.assets) + extras
-        merged_media = list(item.media_files)
-        for asset in extras:
-            if asset.path not in merged_media:
-                merged_media.append(asset.path)
-        merged = item.model_copy(
-            update={
-                "assets": merged_assets,
-                "media_files": merged_media,
-                "frames_used": [
-                    frame for asset in merged_assets for frame in asset.frames_used
-                ],
-                "description": _folder_summary_from_assets(merged_assets),
-            }
-        )
-    cleaned, dropped = filter_unresolvable_supplement_assets(
-        project, folder_name, merged
+    if not extras:
+        return item
+    merged_assets = list(item.assets) + extras
+    merged_media = list(item.media_files)
+    for asset in extras:
+        if asset.path not in merged_media:
+            merged_media.append(asset.path)
+    return item.model_copy(
+        update={
+            "assets": merged_assets,
+            "media_files": merged_media,
+            "frames_used": [
+                frame for asset in merged_assets for frame in asset.frames_used
+            ],
+            "description": _folder_summary_from_assets(merged_assets),
+        }
     )
-    if dropped:
-        return cleaned
-    return merged
 
 
 def _cache_is_newer_than_inventory(
