@@ -2050,7 +2050,7 @@ def _render_chapter_cut_rows(
                         project,
                         folder,
                         basename=f"{project.name}_{slug}",
-                        allow_errors=True,
+                        allow_errors=False,
                     )
                 st.success(f"Kapitel-OTIO: `{path}`")
             except EnhancedOtioExportError as exc:
@@ -2264,9 +2264,11 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             key="enh_unified_cut_otio_all",
             use_container_width=True,
             help=(
-                "Intro + vorhandene Kapitel-Timelines mergen → eine OTIO und "
+                "Intro + vorhandene Kapitel-Timelines mergen → eine "
+                "Produktions-OTIO (bricht bei fehlenden Medien/Lücken ab) und "
                 "globale resolved_timeline.json. Kapitel ohne passendes "
-                "Python-Timing werden übersprungen (kein stilles Nachrechnen)."
+                "Python-Timing werden übersprungen (kein stilles Nachrechnen). "
+                "Test-OTIO mit Lücken nur unter Final Output."
             ),
         )
 
@@ -2440,7 +2442,7 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
                 path = export_all_chapters_otio(
                     project,
                     basename=f"{project.name}_enhanced",
-                    allow_errors=True,
+                    allow_errors=False,
                     include_intro=True,
                 )
             merged = load_model(

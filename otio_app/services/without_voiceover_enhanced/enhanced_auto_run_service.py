@@ -1790,10 +1790,11 @@ def _run_otio(
         return
     emit("otio", "OTIO-Export (Intro + alle Kapitel)…")
     try:
+        # Produktions-Export: fehlende Medien/Lücken sind Fehler, keine stillen Gaps.
         path = export_all_chapters_otio(
             project,
             basename=f"{project.name}_enhanced",
-            allow_errors=True,
+            allow_errors=False,
             include_intro=True,
         )
     except (ChapterCutError, EnhancedOtioExportError) as exc:

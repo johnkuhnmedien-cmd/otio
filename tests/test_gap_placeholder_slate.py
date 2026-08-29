@@ -373,3 +373,46 @@ def test_production_gate_blocks_placeholder_even_with_path(tmp_path: Path) -> No
     errors = validate_resolved_timeline_for_production(project, resolved)
     assert any("Placeholder" in e or "offener Gap" in e for e in errors)
     assert not any("resolved_media_path fehlt" in e for e in errors)
+
+
+def test_allow_errors_export_writes_placeholder_instead_of_empty_gap(
+    tmp_path: Path,
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        export_otio_from_resolved_timeline,
+    )
+
+    project = _project(tmp_path)
+    resolved = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=2.0,
+        shots=[
+            ResolvedShot(
+                shot_id="missing_shot",
+                asset_id="gone",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=2.0,
+                source_start_seconds=0.0,
+                source_end_seconds=2.0,
+                resolved_media_path=str(tmp_path / "does_not_exist.mp4"),
+                resolved_media_kind="video",
+            )
+        ],
+        errors=["Asset gone fehlt — Produktions-Export würde blockieren."],
+    )
+    out = export_otio_from_resolved_timeline(
+        project,
+        basename="preview_gaps",
+        allow_errors=True,
+        resolved=resolved,
+    )
+    timeline = otio.adapters.read_from_file(str(out))
+    video = next(track for track in timeline.tracks if track.kind == otio.schema.TrackKind.Video)
+    names = [item.name for item in video]
+    assert "missing_shot" in names
+    missing = next(item for item in video if item.name == "missing_shot")
+    assert isinstance(missing, otio.schema.Clip)
+    url = str(missing.media_reference.target_url)
+    assert "placeholder" in url.lower()
+    assert timeline.metadata.get("enhanced_export_mode") == "test_gaps"

@@ -822,17 +822,8 @@ def resolve_chapter_timeline(
     # Externe App: Dateien in coverage/inbox/{gap_id}/ vor Timing übernehmen.
     ingest_coverage_gap_inbox(project)
 
-    from otio_app.services.inventory_loader import prune_unresolvable_supplement_assets
-
-    dropped = prune_unresolvable_supplement_assets(project, folder_name)
-    _demote_unknown_assets_in_chapter_plan(
-        project, folder_name, dropped_ids=dropped
-    )
-    plan = load_chapter_unified_plan(project, folder_name)
-    if plan is None or not plan.slots:
-        raise ChapterCutError(
-            f"Kapitel-Plan fehlt für „{folder_name}“ — zuerst LLM Cut."
-        )
+    # Inventar hier nicht löschen — das gehört vor den LLM-Cut. Timing soll
+    # fehlende Dateien als Fehler zeigen, nicht Slots still zu Lücken machen.
 
     open_gaps = chapter_open_gap_ids(project, folder_name)
     if open_gaps:
@@ -1207,7 +1198,7 @@ def export_chapter_otio(
     folder_name: str,
     *,
     basename: str | None = None,
-    allow_errors: bool = True,
+    allow_errors: bool = False,
 ) -> Path:
     """OTIO nur für ein Körper-Kapitel."""
     assert_enhanced_work_root(project)
@@ -1256,7 +1247,7 @@ def export_all_chapters_otio(
     project: Project,
     *,
     basename: str | None = None,
-    allow_errors: bool = True,
+    allow_errors: bool = False,
     include_intro: bool = True,
 ) -> Path:
     """Merged Intro + alle Kapitel → eine OTIO (+ globale resolved_timeline.json)."""
