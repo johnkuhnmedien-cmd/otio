@@ -9,7 +9,9 @@ dann Script Lock. Der Aufruf über den Auto-Lauf-Button gilt als explizite
 Bestätigung für Dramaturgie, Script Lock und Intro (erste gültige Variante).
 Clean Media, Analysen und SFX bleiben manuell. Offene Coverage-Gaps nach
 dem Funnel sind ein Fehler (die Sprachen-Queue macht mit der nächsten
-Sprache weiter).
+Sprache weiter). Schlägt Python Timing fehl, gibt es einen zweiten Versuch
+nur für die betroffenen Kapitel (neuer LLM-Cut, Funnel, Timing); beim
+zweiten Fehlschlag bricht dieser Sprachen-Lauf ab.
 """
 
 from __future__ import annotations
@@ -633,6 +635,8 @@ def run_enhanced_auto_pipeline(
             emit=emit,
             checkpoint=checkpoint,
             finish=finish_step,
+            cancelled=cancelled,
+            funnel_model=models.enhanced_supplement_funnel.model,
         )
 
         checkpoint("music")
@@ -1518,6 +1522,122 @@ def _run_maps(
     finish("maps", skipped=False)
 
 
+def _time_body_chapters(
+    project: Project,
+    names: list[str],
+    *,
+    emit: Callable[..., None],
+    checkpoint: Callable[[str], None],
+) -> tuple[int, list[str], str]:
+    """Python Timing für die genannten Kapitel. Liefert (ok, fehlgeschlagen, Fehlertext)."""
+    if not names:
+        return 0, [], ""
+    total = len(names)
+    workers = min(max(1, ENHANCED_CHAPTER_TIMING_MAX_WORKERS), total)
+
+    def _timing_progress(folder_name: str, index: int, total_chapters: int) -> None:
+        checkpoint("timing")
+        emit(
+            "timing",
+            f"Python Timing {index}/{total_chapters}: {folder_name} (parallel, max. {workers})",
+            item_label=folder_name,
+            item_index=index,
+            item_total=total_chapters,
+        )
+
+    emit(
+        "timing",
+        f"Python Timing parallel ({total} Kapitel, max. {workers})…",
+        item_total=total,
+    )
+    try:
+        timed_results = resolve_all_chapter_timelines(
+            project,
+            chapter_names=names,
+            progress_callback=_timing_progress,
+            max_workers=workers,
+        )
+        return len(timed_results), [], ""
+    except ChapterCutError as exc:
+        still_needed = set(list_chapters_needing_python_timing(project))
+        failed = [name for name in names if name in still_needed]
+        if not failed:
+            failed = list(names)
+        ok = max(0, len(names) - len(failed))
+        return ok, failed, str(exc)
+    except Exception as exc:  # noqa: BLE001
+        still_needed = set(list_chapters_needing_python_timing(project))
+        failed = [name for name in names if name in still_needed] or list(names)
+        ok = max(0, len(names) - len(failed))
+        return ok, failed, f"Python Timing fehlgeschlagen: {exc}"
+
+
+def _recut_chapters_then_funnel(
+    project: Project,
+    folder_names: list[str],
+    *,
+    emit: Callable[..., None],
+    checkpoint: Callable[[str], None],
+    cancelled: Callable[[], bool],
+    funnel_model: str,
+) -> None:
+    """Zweiter Versuch: neuer LLM-Cut der betroffenen Kapitel, dann Funnel."""
+    names = [name for name in folder_names if str(name).strip()]
+    if not names:
+        return
+    preview = ", ".join(names[:8])
+    more = f" (+{len(names) - 8})" if len(names) > 8 else ""
+    emit(
+        "chapter_cuts",
+        f"Python Timing fehlgeschlagen — neuer LLM-Cut für {len(names)} Kapitel: "
+        f"{preview}{more}",
+    )
+    generated = 0
+    total = len(names)
+    for index, name in enumerate(names, start=1):
+        checkpoint("chapter_cuts")
+        emit(
+            "chapter_cuts",
+            f"LLM Cut (2. Versuch) {index}/{total}: {name}",
+            item_label=name,
+            item_index=index,
+            item_total=total,
+        )
+        try:
+            chapter_provider, chapter_model = llm_cut_provider_model(
+                project, folder_name=name
+            )
+            generate_chapter_unified_cut(
+                project,
+                name,
+                provider=chapter_provider,
+                model=chapter_model,
+                refresh_merged=False,
+            )
+            generated += 1
+        except ChapterCutError as exc:
+            raise EnhancedAutoRunError(
+                f"Zweiter Versuch abgebrochen — LLM Cut „{name}“ fehlgeschlagen: {exc}"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise EnhancedAutoRunError(
+                f"Zweiter Versuch abgebrochen — LLM Cut „{name}“ fehlgeschlagen: {exc}"
+            ) from exc
+    if generated:
+        refresh_merged_unified_cut_plan(project)
+
+    checkpoint("stock")
+    _run_stock_and_funnel(
+        project,
+        skip_done=True,
+        emit=emit,
+        checkpoint=checkpoint,
+        cancelled=cancelled,
+        funnel_model=funnel_model,
+        finish=lambda *_a, **_k: None,
+    )
+
+
 def _run_timing(
     project: Project,
     *,
@@ -1525,6 +1645,8 @@ def _run_timing(
     emit: Callable[..., None],
     checkpoint: Callable[[str], None],
     finish: Callable[..., None],
+    cancelled: Callable[[], bool] | None = None,
+    funnel_model: str = "",
 ) -> None:
     intro_done = intro_timing_complete(project)
     names = (
@@ -1548,36 +1670,36 @@ def _run_timing(
 
     timed = 0
     if names:
-        total = len(names)
-        workers = min(max(1, ENHANCED_CHAPTER_TIMING_MAX_WORKERS), total)
-
-        def _timing_progress(folder_name: str, index: int, total_chapters: int) -> None:
-            checkpoint("timing")
+        timed, failed, first_error = _time_body_chapters(
+            project, names, emit=emit, checkpoint=checkpoint
+        )
+        if failed:
             emit(
                 "timing",
-                f"Python Timing {index}/{total_chapters}: {folder_name} (parallel, max. {workers})",
-                item_label=folder_name,
-                item_index=index,
-                item_total=total_chapters,
+                "Python Timing fehlgeschlagen — einmal neu: LLM-Cut, Funnel, Timing "
+                f"({', '.join(failed[:8])}{'…' if len(failed) > 8 else ''}).",
             )
-
-        emit(
-            "timing",
-            f"Python Timing parallel ({total} Kapitel, max. {workers})…",
-            item_total=total,
-        )
-        try:
-            timed_results = resolve_all_chapter_timelines(
+            _recut_chapters_then_funnel(
                 project,
-                chapter_names=names,
-                progress_callback=_timing_progress,
-                max_workers=workers,
+                failed,
+                emit=emit,
+                checkpoint=checkpoint,
+                cancelled=cancelled or (lambda: False),
+                funnel_model=funnel_model,
             )
-            timed = len(timed_results)
-        except ChapterCutError as exc:
-            raise EnhancedAutoRunError(str(exc)) from exc
-        except Exception as exc:  # noqa: BLE001
-            raise EnhancedAutoRunError(f"Python Timing fehlgeschlagen: {exc}") from exc
+            timed_retry, failed_retry, retry_error = _time_body_chapters(
+                project, failed, emit=emit, checkpoint=checkpoint
+            )
+            timed += timed_retry
+            if failed_retry:
+                preview = ", ".join(failed_retry[:8])
+                more = f" (+{len(failed_retry) - 8})" if len(failed_retry) > 8 else ""
+                detail = retry_error or first_error
+                raise EnhancedAutoRunError(
+                    "Python Timing nach erneutem LLM-Cut und Funnel weiterhin "
+                    f"fehlgeschlagen ({preview}{more}). Abbruch."
+                    + (f" {detail}" if detail else "")
+                )
 
     leftover = list_chapters_needing_python_timing(project)
     if leftover:

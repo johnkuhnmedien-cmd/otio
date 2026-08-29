@@ -836,6 +836,127 @@ def test_auto_run_python_timing_runs_chapters_in_parallel(
     assert max_seen <= len(folders)
 
 
+def test_auto_run_timing_retries_failed_chapters_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        ChapterCutError,
+    )
+    from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+        _run_timing,
+    )
+
+    project = _project(tmp_path)
+    attempts = {"timing": 0}
+    recut: list[str] = []
+    funnel = {"n": 0}
+    timed_ok: list[str] = []
+
+    def fake_all_timelines(
+        _p,
+        *,
+        chapter_names=None,
+        progress_callback=None,
+        **_k,
+    ):
+        attempts["timing"] += 1
+        selected = list(chapter_names or [])
+        total = len(selected)
+        for index, name in enumerate(selected, start=1):
+            if progress_callback is not None:
+                progress_callback(name, index, total)
+        if attempts["timing"] == 1:
+            raise ChapterCutError(
+                "2/2 Python-Timing(s) fehlgeschlagen (0 ok):\n"
+                "- Vogel: Unbekannte Asset-ID: openverse_abc\n"
+                "- Soča: Unbekannte Asset-ID: wikimedia_1"
+            )
+        timed_ok.extend(selected)
+        return [(name, MagicMock()) for name in selected]
+
+    def fake_needing(_p):
+        if attempts["timing"] >= 2:
+            return []
+        return ["Vogel", "Soča"]
+
+    def fake_cut(_p, folder_name, **_k):
+        recut.append(folder_name)
+        return MagicMock()
+
+    def fake_funnel(*_a, **_k):
+        funnel["n"] += 1
+
+    monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
+    monkeypatch.setattr(auto_run, "list_chapters_needing_python_timing", fake_needing)
+    monkeypatch.setattr(
+        auto_run, "list_chapters_ready_for_python_timing", lambda _p: ["Vogel", "Soča"]
+    )
+    monkeypatch.setattr(auto_run, "resolve_all_chapter_timelines", fake_all_timelines)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", fake_cut)
+    monkeypatch.setattr(auto_run, "refresh_merged_unified_cut_plan", lambda _p: None)
+    monkeypatch.setattr(auto_run, "_run_stock_and_funnel", fake_funnel)
+
+    _run_timing(
+        project,
+        skip_done=True,
+        emit=lambda *_a, **_k: None,
+        checkpoint=lambda _step: None,
+        finish=lambda *_a, **_k: None,
+    )
+    assert attempts["timing"] == 2
+    assert recut == ["Vogel", "Soča"]
+    assert funnel["n"] == 1
+    assert timed_ok == ["Vogel", "Soča"]
+
+
+def test_auto_run_timing_aborts_after_second_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        ChapterCutError,
+    )
+    from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service import (
+        _run_timing,
+    )
+
+    project = _project(tmp_path)
+    attempts = {"timing": 0}
+
+    def fake_all_timelines(_p, *, chapter_names=None, progress_callback=None, **_k):
+        attempts["timing"] += 1
+        selected = list(chapter_names or ["Vogel"])
+        for index, name in enumerate(selected, start=1):
+            if progress_callback is not None:
+                progress_callback(name, index, len(selected))
+        raise ChapterCutError(
+            "1/1 Python-Timing(s) fehlgeschlagen (0 ok):\n"
+            "- Vogel: Unbekannte Asset-ID: openverse_abc"
+        )
+
+    monkeypatch.setattr(auto_run, "intro_timing_complete", lambda _p: True)
+    monkeypatch.setattr(
+        auto_run, "list_chapters_needing_python_timing", lambda _p: ["Vogel"]
+    )
+    monkeypatch.setattr(
+        auto_run, "list_chapters_ready_for_python_timing", lambda _p: ["Vogel"]
+    )
+    monkeypatch.setattr(auto_run, "resolve_all_chapter_timelines", fake_all_timelines)
+    monkeypatch.setattr(auto_run, "generate_chapter_unified_cut", lambda *_a, **_k: MagicMock())
+    monkeypatch.setattr(auto_run, "refresh_merged_unified_cut_plan", lambda _p: None)
+    monkeypatch.setattr(auto_run, "_run_stock_and_funnel", lambda *_a, **_k: None)
+
+    with pytest.raises(EnhancedAutoRunError, match="Abbruch") as exc_info:
+        _run_timing(
+            project,
+            skip_done=True,
+            emit=lambda *_a, **_k: None,
+            checkpoint=lambda _step: None,
+            finish=lambda *_a, **_k: None,
+        )
+    assert attempts["timing"] == 2
+    assert "Vogel" in str(exc_info.value)
+
+
 def test_auto_run_llm_cuts_use_prefix_and_standard_models(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
