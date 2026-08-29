@@ -257,7 +257,17 @@ def list_clean_files_in_folder(project: Project, folder_name: str) -> list[Path]
     if not clean_dir.is_dir():
         return []
     files: list[Path] = []
-    for pattern in ("*.mp4", "*.mov", "*.m4v"):
+    for pattern in (
+        "*.mp4",
+        "*.mov",
+        "*.m4v",
+        "*.jpg",
+        "*.jpeg",
+        "*.png",
+        "*.webp",
+        "*.tif",
+        "*.tiff",
+    ):
         try:
             files.extend(clean_dir.rglob(pattern))
         except OSError:

@@ -46,11 +46,12 @@ from otio_app.services.without_voiceover_enhanced.paths import (
 
 
 # pexels_video_123 / pexels_photo_123 / pixabay_video_9 / supplement_pexels_123
+# Openverse-IDs enthalten Bindestrich-UUIDs (openverse_e61610da-6d0c-…).
 _ASSET_ID_PROVIDER_RE = re.compile(
     r"^(?:supplement_)?(?P<provider>pexels|pixabay|openverse|wikimedia|archive|"
     r"adobe(?:_stock)?)"
     r"(?:_(?:video|photo|image|stock))?"
-    r"_(?P<asset_id>[A-Za-z0-9]+)(?:__|$)",
+    r"_(?P<asset_id>[A-Za-z0-9][A-Za-z0-9._-]*)(?:__|$)",
     re.IGNORECASE,
 )
 

@@ -152,3 +152,181 @@ def test_reconcile_accepted_points_to_clean(tmp_path: Path) -> None:
     path = accepted.supplements[0].local_media_path.replace("\\", "/")
     assert "/clean/" in path
     assert "stock/downloads" not in path
+
+
+def test_catalog_resolves_openverse_id_when_jpg_gone_and_clean_mp4_exists(
+    tmp_path: Path,
+) -> None:
+    """Inventar zeigt die Openverse-ID, Datei ist aber nur noch als Clean-MP4 da.
+
+    Typisch nach Funnel + Clean: Download-JPG gelöscht, Cut-Plan behält
+    ``openverse_<uuid>``. Kapitel-Timing darf die ID nicht als unbekannt werten.
+    """
+    from otio_app.project_layout import get_folder_clean_output_dir
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Vogel"
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    (Path(project.project_root) / folder).mkdir(parents=True)
+
+    cid = "openverse_e61610da-6d0c-41f4-bf76-ecb24278f193"
+    missing_jpg = (
+        project.work_dir_path
+        / "stock"
+        / "downloads"
+        / "Vogel_gap_009"
+        / cid
+        / f"{cid}.jpg"
+    )
+    clean = get_folder_clean_output_dir(project.work_dir_path, folder) / f"{cid}_3840x2160.mp4"
+    clean.parent.mkdir(parents=True)
+    clean.write_bytes(b"\x00" * 128)
+
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder),
+        AssetFolderAnalysis(
+            folder=folder,
+            description="",
+            media_files=[str(missing_jpg)],
+            assets=[
+                AssetMediaAnalysis(
+                    path=str(missing_jpg),
+                    description="birds over a lake",
+                    asset_id=cid,
+                    media_type="photo",
+                    analysis_status="complete",
+                    asset_origin="openverse",
+                    approved_for_cut_plan=True,
+                )
+            ],
+        ),
+    )
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id=cid,
+                    provider="openverse",
+                    provider_asset_id="e61610da-6d0c-41f4-bf76-ecb24278f193",
+                    gap_id="Vogel_gap_009",
+                    local_media_path=str(missing_jpg),
+                    media_validation_status="export_ready",
+                    media_type="photo",
+                    cut_plan_run_id="run-recut",
+                )
+            ],
+        ),
+    )
+
+    catalog = build_asset_catalog(project, fps=25.0, folder_names=[folder])
+    entry, err = lookup_catalog_entry(catalog, cid)
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == clean.resolve()
+
+
+def test_catalog_aliases_slim_jpg_name_to_clean_mp4(tmp_path: Path) -> None:
+    """Slim listet ``.jpg``, Disk-Index hat nur das Clean-``.mp4`` denselben Stem."""
+    from otio_app.project_layout import get_folder_clean_output_dir
+    from otio_app.services.inventory_prompt_view import slim_inventory_path_for
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Piran"
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    (Path(project.project_root) / folder).mkdir(parents=True)
+
+    cid = "wikimedia_5368375"
+    inv_path = get_folder_inventory_path(project.work_dir_path, folder)
+    missing_jpg = (
+        project.work_dir_path / "stock" / "downloads" / "gone" / f"{cid}.jpg"
+    )
+    clean = get_folder_clean_output_dir(project.work_dir_path, folder) / f"{cid}.mp4"
+    clean.parent.mkdir(parents=True)
+    clean.write_bytes(b"\x00" * 96)
+
+    save_folder_inventory(
+        inv_path,
+        AssetFolderAnalysis(
+            folder=folder,
+            description="",
+            media_files=[str(missing_jpg)],
+            assets=[
+                AssetMediaAnalysis(
+                    path=str(missing_jpg),
+                    description="soca gorge",
+                    asset_id=cid,
+                    media_type="photo",
+                    analysis_status="complete",
+                    asset_origin="wikimedia",
+                )
+            ],
+        ),
+    )
+    slim = slim_inventory_path_for(inv_path)
+    assert slim.is_file()
+
+    catalog = build_asset_catalog(project, fps=25.0, folder_names=[folder])
+    entry, err = lookup_catalog_entry(catalog, cid)
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == clean.resolve()
+
+
+def test_reconcile_accepted_finds_work_dir_clean(tmp_path: Path) -> None:
+    from otio_app.project_layout import get_folder_clean_output_dir
+
+    project = _project(tmp_path)
+    cid = "openverse_2c687a9d-625d-4ee6-81c0-c7a32254217d"
+    stock = (
+        project.work_dir_path
+        / "stock"
+        / "downloads"
+        / "Piran_gap_010"
+        / cid
+        / f"{cid}.jpg"
+    )
+    stock.parent.mkdir(parents=True)
+    stock.write_bytes(b"\x00" * 32)
+    clean = (
+        get_folder_clean_output_dir(project.work_dir_path, "Piran")
+        / f"{cid}_3840x2160.mp4"
+    )
+    clean.parent.mkdir(parents=True)
+    clean.write_bytes(b"\x00" * 64)
+
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id=cid,
+                    provider="openverse",
+                    gap_id="Piran_gap_010",
+                    local_media_path=str(stock),
+                    media_validation_status="export_ready",
+                    media_type="photo",
+                )
+            ],
+        ),
+    )
+
+    n = reconcile_accepted_supplement_paths(project)
+    assert n == 1
+    accepted = load_model(
+        accepted_supplements_path(project), AcceptedSupplementsDocument
+    )
+    assert accepted is not None
+    path = accepted.supplements[0].local_media_path.replace("\\", "/")
+    assert "/clean/" in path
+    assert "stock/downloads" not in path

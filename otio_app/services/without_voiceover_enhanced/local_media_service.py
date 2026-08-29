@@ -448,23 +448,107 @@ def _is_stale_accepted_supplement(
     return cand_run != expected_run_id
 
 
-def find_clean_media_for_candidate(
-    project: Project, *, candidate_id: str
-) -> Path | None:
-    """Sucht ``clean/**/{candidate_id}*`` — kanonische Kopie nach Clean Media."""
+def _candidate_id_filename_needles(candidate_id: str) -> list[str]:
+    """Dateiname-Varianten: Bindestrich-UUID, Slug, Unterstriche."""
     cid = (candidate_id or "").strip()
     if not cid:
+        return []
+    from otio_app.project_layout import safe_folder_slug
+
+    variants = [cid, safe_folder_slug(cid), cid.replace("-", "_"), cid.replace("_", "-")]
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in variants:
+        text = str(raw or "").strip()
+        key = text.casefold()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out
+
+
+def _pick_preferred_media_match(matches: list[Path]) -> Path | None:
+    files = [path for path in matches if path.is_file()]
+    if not files:
         return None
-    root = Path(project.project_root).expanduser()
-    clean_root = root / "clean"
-    if not clean_root.is_dir():
+    files.sort(
+        key=lambda p: (
+            "/clean/" not in str(p).replace("\\", "/").lower(),
+            p.suffix.lower() != ".mp4",
+            -len(p.name),
+            str(p),
+        )
+    )
+    return files[0]
+
+
+def find_clean_media_for_candidate(
+    project: Project, *, candidate_id: str, folder_name: str = ""
+) -> Path | None:
+    """Sucht Clean-Kopie zu einer Funnel-/Stock-ID.
+
+    Enhanced legt Clean unter ``work_dir/clean/<Ordner>/`` ab, nicht unter
+    ``project_root/clean/``. Dateinamen nutzen oft den Slug (Bindestriche →
+    Unterstriche), der Cut-Plan aber die originale ``openverse_<uuid>``.
+    """
+    return find_local_media_for_candidate_id(
+        project, candidate_id=candidate_id, folder_name=folder_name
+    )
+
+
+def find_local_media_for_candidate_id(
+    project: Project, *, candidate_id: str, folder_name: str = ""
+) -> Path | None:
+    """Clean (Work-Dir + Legacy-Root) und ``stock/downloads`` zur Stock-ID."""
+    from otio_app.project_layout import (
+        get_clean_media_output_dir,
+        get_folder_clean_output_dir,
+    )
+    from otio_app.services.media_utils import MEDIA_EXTENSIONS
+    from otio_app.services.without_voiceover_enhanced.paths import stock_downloads_dir
+
+    needles = _candidate_id_filename_needles(candidate_id)
+    if not needles:
         return None
-    matches = [p for p in clean_root.rglob(f"{cid}*") if p.is_file()]
-    if not matches:
-        return None
-    # Bevorzuge mp4 / längeren Namen (oft mit Auflösungssuffix).
-    matches.sort(key=lambda p: (p.suffix.lower() != ".mp4", -len(p.name), str(p)))
-    return matches[0]
+    roots: list[Path] = []
+    folder = (folder_name or "").strip()
+    if folder:
+        roots.append(get_folder_clean_output_dir(project.work_dir_path, folder))
+    roots.append(get_clean_media_output_dir(project.work_dir_path))
+    roots.append(Path(project.project_root).expanduser() / "clean")
+    roots.append(stock_downloads_dir(project))
+
+    matches: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            if not root.is_dir():
+                continue
+        except OSError:
+            continue
+        for needle in needles:
+            try:
+                found = list(root.rglob(f"*{needle}*"))
+            except OSError:
+                continue
+            for path in found:
+                try:
+                    if not path.is_file():
+                        continue
+                except OSError:
+                    continue
+                if path.suffix.lower() not in MEDIA_EXTENSIONS:
+                    continue
+                try:
+                    key = str(path.resolve())
+                except OSError:
+                    key = str(path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                matches.append(path)
+    return _pick_preferred_media_match(matches)
 
 
 def reconcile_accepted_supplement_paths(project: Project) -> int:
