@@ -14,17 +14,21 @@ from otio_app.services.without_voiceover_enhanced.models import (
     CoverageGap,
     CoverageGapsDocument,
     GapMergeReport,
+    ResolvedTimelineDocument,
     StockCandidate,
+    StockSearchResultsDocument,
     SupplementFunnelReport,
     UnifiedCutPlanDocument,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
     UNIFIED_CUT_PLAN_FILENAME,
     accepted_supplements_path,
+    chapter_resolved_timeline_path,
     chapters_cut_dir,
     coverage_gaps_path,
     gap_merge_report_path,
     stock_candidate_download_dir,
+    stock_search_results_path,
     supplement_funnel_report_path,
     unified_cut_plan_path,
 )
@@ -35,6 +39,7 @@ __all__ = [
     "compute_cut_plan_run_id",
     "compute_cut_plan_run_id_from_path",
     "is_weak_upgrade_gap",
+    "migrate_legacy_plan_gap_ids",
     "rebind_gap_fills_to_current_run",
     "sanitize_stale_user_confirmed_weak",
     "summarize_gap_status",
@@ -259,6 +264,267 @@ def _plan_gaps_from_chapter_files(project: Project) -> list[CoverageGap]:
             seen.add(gap.gap_id)
             found.append(gap)
     return found
+
+
+def _rewrite_id_list(ids: list[str] | None, mapping: dict[str, str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in ids or []:
+        gid = mapping.get(str(raw).strip(), str(raw).strip())
+        if gid and gid not in seen:
+            seen.add(gid)
+            out.append(gid)
+    return out
+
+
+def _slot_has_blocking_placeholder(
+    resolved: ResolvedTimelineDocument | None, slot_id: str
+) -> bool:
+    """True wenn Timing für diesen Slot nur einen leeren Platzhalter hat."""
+    if resolved is None or not slot_id:
+        return False
+    prefix = f"{slot_id}__"
+    for shot in resolved.shots or []:
+        sid = str(getattr(shot, "shot_id", "") or "").strip()
+        if sid != slot_id and not sid.startswith(prefix):
+            continue
+        if bool(getattr(shot, "is_placeholder", False)):
+            return True
+        if str(getattr(shot, "hold_mode", "") or "").strip() == "placeholder_slate":
+            return True
+        if bool(getattr(shot, "open_gap", False)) and not str(
+            getattr(shot, "asset_id", "") or ""
+        ).strip():
+            return True
+    return False
+
+
+def _legacy_gap_aliases(
+    project: Project,
+) -> tuple[dict[str, str], set[str]]:
+    """LLM-Zähler → ``gap_{slot_id}``. drop_fill: Platzhalter, Fill nicht mitnehmen."""
+    from otio_app.services.without_voiceover_enhanced.models import GAP_FIT_VALUES
+    from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+        canonical_coverage_gap_id,
+        canonicalize_plan_coverage_gap_ids,
+    )
+
+    mapping: dict[str, str] = {}
+    drop_fill: set[str] = set()
+    stored_owners: dict[str, set[str]] = {}
+    root = chapters_cut_dir(project)
+    if not root.is_dir():
+        return mapping, drop_fill
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        plan_path = child / UNIFIED_CUT_PLAN_FILENAME
+        plan = load_model(plan_path, UnifiedCutPlanDocument)
+        if plan is None or not plan.slots:
+            continue
+        resolved = load_model(
+            chapter_resolved_timeline_path(project, child.name),
+            ResolvedTimelineDocument,
+        )
+        rewritten = False
+        for slot in plan.slots:
+            fit = str(getattr(slot, "asset_fit", "") or "").strip().lower()
+            if fit not in GAP_FIT_VALUES:
+                continue
+            slot_id = str(getattr(slot, "slot_id", "") or "").strip()
+            stored = str(getattr(slot, "coverage_gap_id", "") or "").strip()
+            canonical = canonical_coverage_gap_id(slot_id)
+            if not canonical:
+                continue
+            if stored and stored != canonical:
+                mapping[stored] = canonical
+                stored_owners.setdefault(stored, set()).add(canonical)
+                if _slot_has_blocking_placeholder(resolved, slot_id):
+                    drop_fill.add(canonical)
+            if stored != canonical:
+                rewritten = True
+        if rewritten:
+            write_json(plan_path, canonicalize_plan_coverage_gap_ids(plan))
+    # Dieselbe Zähler-ID an zwei Slots: Fill gehört keinem sicher.
+    for stored, owners in stored_owners.items():
+        if len(owners) > 1:
+            mapping.pop(stored, None)
+            drop_fill.update(owners)
+    return mapping, drop_fill
+
+
+def _rewrite_funnel_gap_ids(
+    funnel: SupplementFunnelReport,
+    mapping: dict[str, str],
+    *,
+    drop_fill: set[str],
+) -> SupplementFunnelReport:
+    by_new: dict[str, object] = {}
+    for gap_rep in funnel.gaps or []:
+        old = str(gap_rep.gap_id or "").strip()
+        new = mapping.get(old, old)
+        if not new:
+            continue
+        updated = gap_rep.model_copy(update={"gap_id": new})
+        if new in drop_fill:
+            updated = updated.model_copy(
+                update={"filled": False, "export_ready_candidate_id": None}
+            )
+        prev = by_new.get(new)
+        if prev is None:
+            by_new[new] = updated
+            continue
+        # Zwei Einträge auf dieselbe ID: erfüllten behalten, außer drop_fill.
+        if new in drop_fill:
+            by_new[new] = updated
+        elif bool(getattr(updated, "filled", False)) and not bool(
+            getattr(prev, "filled", False)
+        ):
+            by_new[new] = updated
+    filled = [
+        gid
+        for gid in _rewrite_id_list(list(funnel.filled_gap_ids or []), mapping)
+        if gid not in drop_fill
+    ]
+    filled_set = set(filled)
+    open_ids = [
+        gid
+        for gid in _rewrite_id_list(
+            list(funnel.open_gap_ids or []) + sorted(drop_fill), mapping
+        )
+        if gid not in filled_set
+    ]
+    return funnel.model_copy(
+        update={
+            "gaps": list(by_new.values()),
+            "filled_gap_ids": filled,
+            "open_gap_ids": open_ids,
+            "requested_gap_ids": _rewrite_id_list(funnel.requested_gap_ids, mapping),
+            "skipped_gap_ids": _rewrite_id_list(funnel.skipped_gap_ids, mapping),
+        }
+    )
+
+
+def migrate_legacy_plan_gap_ids(project: Project) -> list[str]:
+    """Biegt ``Kapitel_gap_001`` auf ``gap_{slot_id}`` um und nimmt Fills mit.
+
+    Sonst entstehen Doppelungen: alte ID bleibt erfüllt, die Slot-ID zählt
+    extra als offen (Funnel „offen 52 · erfüllt 54“). Platzhalter-Slots
+    (kein Clip im Timing) erben den alten Fill nicht — das war die Lücke
+    ohne Bild.
+    """
+    mapping, drop_fill = _legacy_gap_aliases(project)
+    if not mapping:
+        return []
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    if coverage is None or not coverage.gaps:
+        return []
+
+    by_id: dict[str, CoverageGap] = {}
+    for gap in coverage.gaps:
+        gid = str(gap.gap_id or "").strip()
+        if not gid:
+            continue
+        new = mapping.get(gid, gid)
+        related = [
+            str(item).strip()
+            for item in (gap.related_shot_ids or [])
+            if str(item).strip()
+        ]
+        updated = gap.model_copy(update={"gap_id": new, "related_shot_ids": related})
+        if new in drop_fill:
+            updated = updated.model_copy(update={"user_confirmed_weak": False})
+        prev = by_id.get(new)
+        if prev is None:
+            by_id[new] = updated
+            continue
+        # Alte erfüllte ID gewinnt gegen die frisch nachgetragene offene Kopie.
+        if gid in mapping:
+            by_id[new] = updated
+        if new in drop_fill:
+            by_id[new] = by_id[new].model_copy(
+                update={"user_confirmed_weak": False}
+            )
+
+    new_gaps = list(by_id.values())
+    coverage = coverage.model_copy(update={"gaps": new_gaps})
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        persist_coverage_gaps,
+    )
+
+    persist_coverage_gaps(project, coverage)
+
+    funnel = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
+    if funnel is not None:
+        write_json(
+            supplement_funnel_report_path(project),
+            _rewrite_funnel_gap_ids(funnel, mapping, drop_fill=drop_fill),
+        )
+
+    accepted = load_model(
+        accepted_supplements_path(project), AcceptedSupplementsDocument
+    )
+    if accepted is not None and accepted.supplements:
+        updated_supplements: list[StockCandidate] = []
+        for cand in accepted.supplements:
+            old = str(cand.gap_id or "").strip()
+            new = mapping.get(old, old)
+            if new in drop_fill and old in mapping:
+                # Fill gehörte nicht zu diesem Slot — Bindung lösen, Datei bleibt.
+                updated_supplements.append(
+                    cand.model_copy(update={"gap_id": "", "cut_plan_run_id": ""})
+                )
+            elif new != old:
+                updated_supplements.append(cand.model_copy(update={"gap_id": new}))
+            else:
+                updated_supplements.append(cand)
+        write_json(
+            accepted_supplements_path(project),
+            accepted.model_copy(update={"supplements": updated_supplements}),
+        )
+
+    search = load_model(stock_search_results_path(project), StockSearchResultsDocument)
+    if search is not None and search.candidates:
+        write_json(
+            stock_search_results_path(project),
+            search.model_copy(
+                update={
+                    "candidates": [
+                        cand.model_copy(
+                            update={
+                                "gap_id": mapping.get(
+                                    str(cand.gap_id or "").strip(),
+                                    str(cand.gap_id or "").strip(),
+                                )
+                            }
+                        )
+                        for cand in search.candidates
+                    ]
+                }
+            ),
+        )
+
+    merge = load_model(gap_merge_report_path(project), GapMergeReport)
+    if merge is not None:
+        slots = []
+        for slot in merge.slots or []:
+            old = str(slot.coverage_gap_id or "").strip()
+            new = mapping.get(old, old)
+            slots.append(slot.model_copy(update={"coverage_gap_id": new}))
+        write_json(
+            gap_merge_report_path(project),
+            merge.model_copy(
+                update={
+                    "slots": slots,
+                    "open_none_gap_ids": _rewrite_id_list(
+                        list(merge.open_none_gap_ids or []) + sorted(drop_fill),
+                        mapping,
+                    ),
+                }
+            ),
+        )
+
+    return sorted(mapping.values())
 
 
 def sync_missing_plan_gaps_into_coverage(project: Project) -> list[str]:
@@ -695,6 +961,7 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
     - Stale Funnel/Merge (andere/fehlende Run-ID) zählen nicht — Accepted-
       Fills mit gleicher Gap-ID werden zuvor auf den aktuellen Lauf rebound.
     """
+    renamed_ids = migrate_legacy_plan_gap_ids(project)
     added_from_plans = sync_missing_plan_gaps_into_coverage(project)
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     if coverage is None or not coverage.gaps:
@@ -772,6 +1039,10 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
         notes.append("Funnel-Report gehört zu einem älteren Cut-Plan-Lauf")
     if merge_stale:
         notes.append("Gap-Merge-Report gehört zu einem älteren Cut-Plan-Lauf")
+    if renamed_ids:
+        notes.append(
+            f"{len(renamed_ids)} Gap-ID(s) von LLM-Zählern auf Slot-IDs umgebogen"
+        )
     if added_from_plans:
         notes.append(
             f"{len(added_from_plans)} Gap(s) aus Kapitel-Plänen nachgetragen "
