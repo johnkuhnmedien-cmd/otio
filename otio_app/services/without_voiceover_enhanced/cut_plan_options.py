@@ -993,6 +993,10 @@ SHOT / ASSET CONSTRAINTS (PROJECT SETTINGS — BINDING):
   shorten that shot and lengthen a neighbor (even past shot_max). Beyond it choose
   another asset, shorten the span, or emit a coverage_gap. Python will NOT freeze-pad / tpad motion video.
 - Never plan a motion-video shot longer than planning_usable. There is no video hold.
+- Python REJECTS motion local_asset_id with asset_fit strong/acceptable when
+  planning_usable is shorter than the slot span (first slot includes Vorlauf,
+  last slot includes Nachlauf). Too-short videos become coverage gaps. Use a
+  longer clip, a still/photo, shorten the slot, or emit asset_fit none.
 {preroll_rule}
 {postroll_rule}
 {opening_closing_rules}

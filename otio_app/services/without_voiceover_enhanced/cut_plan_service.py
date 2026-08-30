@@ -22,6 +22,17 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     format_shot_constraints_for_prompt,
     load_cut_plan_options,
 )
+from otio_app.services.without_voiceover_enhanced.cut_slot_duration_guard import (
+    TOO_SHORT_ERROR_PREFIX,
+    catalog_from_prompt_assets,
+    chapter_edge_rolls,
+    chapter_segment_offsets,
+    collect_too_short_for_chapter_cut,
+    demote_too_short_motion_slots,
+    format_too_short_error,
+    sentence_index_from_timing_rows,
+    stamp_slot_target_durations,
+)
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.style_reference_service import (
     style_context_text_for_prompts,
@@ -1783,8 +1794,18 @@ UNIFIED_CUT_PARSE_ATTEMPTS = 2
 def _unified_cut_parse_repair_instruction(error: str) -> str:
     """Anhang für den zweiten LLM-Versuch nach kaputtem Unified-Cut-JSON."""
     detail = (error or "").strip()
-    if len(detail) > 500:
-        detail = detail[:500] + "…"
+    if len(detail) > 800:
+        detail = detail[:800] + "…"
+    duration_hint = ""
+    if TOO_SHORT_ERROR_PREFIX.lower() in detail.lower() or "planning_usable" in detail:
+        duration_hint = (
+            "- Motion local_asset_id MUST have planning_usable "
+            "(duration_seconds - usable_in_s - 1.0s) covering the slot span.\n"
+            "- First slot includes Vorlauf/preroll; last slot includes "
+            "Nachlauf/postroll. There is no video hold.\n"
+            "- If the clip is shorter: pick a longer motion asset or a still, "
+            "shorten the slot, or set asset_fit none with coverage_gap_id.\n"
+        )
     return (
         "REPAIR — PREVIOUS JSON WAS INVALID\n"
         "Your previous response failed validation and must be regenerated.\n"
@@ -1796,6 +1817,7 @@ def _unified_cut_parse_repair_instruction(error: str) -> str:
         "- Every consecutive boundary pair defines exactly one slot.\n"
         "- Do not omit slots; do not add orphan boundaries.\n"
         "- pause_directives must be [].\n"
+        f"{duration_hint}"
         "Count boundaries and slots before returning."
     )
 
@@ -2098,6 +2120,18 @@ def generate_unified_cut_for_folder(
             if include_frames
             else []
         )
+        duration_catalog = catalog_from_prompt_assets(local_assets)
+        sentence_index = sentence_index_by_id(load_segment_alignments(project))
+        if not sentence_index and sentence_timings_json:
+            try:
+                timing_rows = json.loads(sentence_timings_json)
+            except (TypeError, json.JSONDecodeError):
+                timing_rows = []
+            if isinstance(timing_rows, list):
+                sentence_index = sentence_index_from_timing_rows(timing_rows)
+        segment_offsets = chapter_segment_offsets(
+            list(context.timings_slice.segments)
+        )
         model_id = resolve_llm_model_id(provider, model)
         plan = None
         last_parse_error = ""
@@ -2142,6 +2176,16 @@ def generate_unified_cut_for_folder(
                 )
                 if not plan.slots:
                     raise CutPlanError("LLM-Antwort enthielt keine Slots.")
+                too_short = collect_too_short_for_chapter_cut(
+                    plan,
+                    duration_catalog,
+                    options=options,
+                    sentence_index=sentence_index,
+                    segment_offsets=segment_offsets,
+                    is_intro=is_intro,
+                )
+                if too_short and attempt + 1 < UNIFIED_CUT_PARSE_ATTEMPTS:
+                    raise CutPlanError(format_too_short_error(too_short))
                 break
             except (UnifiedCutPlanError, CutPlanError) as exc:
                 last_parse_error = str(exc)
@@ -2175,6 +2219,38 @@ def generate_unified_cut_for_folder(
                 prior_editorial_asset_ids=prior_editorial_asset_ids,
                 reuse_key_index=build_asset_reuse_key_index(project),
             )
+        remaining_short = collect_too_short_for_chapter_cut(
+            plan,
+            duration_catalog,
+            options=options,
+            sentence_index=sentence_index,
+            segment_offsets=segment_offsets,
+            is_intro=is_intro,
+        )
+        envelope_short = [
+            item
+            for item in remaining_short
+            if item.slot_id in {"intro_opener_asset_id", "intro_closing_asset_id"}
+        ]
+        slot_short = [
+            item
+            for item in remaining_short
+            if item.slot_id not in {"intro_opener_asset_id", "intro_closing_asset_id"}
+        ]
+        if envelope_short:
+            raise CutPlanError(format_too_short_error(envelope_short))
+        if slot_short:
+            plan, _short_notes = demote_too_short_motion_slots(plan, slot_short)
+        edge_preroll, edge_postroll = chapter_edge_rolls(
+            plan, options, is_intro=is_intro
+        )
+        plan = stamp_slot_target_durations(
+            plan,
+            sentence_index=sentence_index,
+            segment_offsets=segment_offsets,
+            preroll_sec=edge_preroll,
+            postroll_sec=edge_postroll,
+        )
         _rough, coverage = unified_to_rough(plan)
         return FolderUnifiedCutResult(
             folder_name=display_name,
