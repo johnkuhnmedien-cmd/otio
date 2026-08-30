@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from otio_app.models import Project
+from otio_app.services.media_utils import is_image_media, is_video_media
 from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     load_segment_timings,
 )
@@ -73,6 +74,7 @@ from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
     _segment_to_chapter_map,
     build_asset_catalog,
     lookup_catalog_entry,
+    still_image_path_from_catalog_entry,
 )
 from otio_app.services.without_voiceover_enhanced.local_media_service import is_http_url
 from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
@@ -298,6 +300,13 @@ def usable_media_duration_seconds(
     head_trim: float = 0.0,
 ) -> float | None:
     """Nutzbare Motion-Video-Dauer; ``None`` = kein Media-Constraint (Still/unbekannt)."""
+    original = str(entry.get("original_image_path") or "").strip()
+    if original:
+        orig = Path(original)
+        if is_image_media(orig) and not is_video_media(orig):
+            return None
+    if still_image_path_from_catalog_entry(entry) is not None:
+        return None
     media_kind = str(entry.get("media_kind") or entry.get("media_type") or "").lower()
     if media_kind in {"image", "photo"}:
         return None

@@ -57,6 +57,11 @@ def is_still_asset(entry: Mapping[str, Any] | None) -> bool:
     """Foto/Still darf die Slot-Spanne halten; Motion-Video nicht."""
     if not entry:
         return False
+    original = str(entry.get("original_image_path") or "").strip()
+    if original:
+        orig_path = Path(original)
+        if is_image_media(orig_path) and not is_video_media(orig_path):
+            return True
     media = str(entry.get("media_type") or entry.get("media_kind") or "").strip().lower()
     if media in {"photo", "image", "still"}:
         return True
