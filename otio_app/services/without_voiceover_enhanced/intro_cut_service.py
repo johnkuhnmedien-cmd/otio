@@ -537,8 +537,11 @@ def intro_resolved_matches_plan(
             return False
     from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
         _is_non_plan_envelope_shot,
+        production_blocking_placeholder_labels,
     )
 
+    if production_blocking_placeholder_labels(resolved):
+        return False
     parent_shots = [
         shot
         for shot in resolved.shots
@@ -774,6 +777,20 @@ def resolve_intro_timeline(
             "repairs": list(resolved.repairs or []),
         }
     )
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        _reconcile_chapter_envelope_ends,
+        production_blocking_placeholder_labels,
+    )
+
+    intro_resolved = _reconcile_chapter_envelope_ends(intro_resolved)
+    blockers = production_blocking_placeholder_labels(intro_resolved)
+    if blockers:
+        preview = ", ".join(blockers[:8])
+        more = f" (+{len(blockers) - 8})" if len(blockers) > 8 else ""
+        raise IntroCutError(
+            "Intro-Timing nicht exportfähig: Placeholder/Shortfall "
+            f"({preview}{more}). Längeres Material, dann Timing erneut."
+        )
     write_json(intro_resolved_timeline_path(project), intro_resolved)
     return intro_resolved
 
