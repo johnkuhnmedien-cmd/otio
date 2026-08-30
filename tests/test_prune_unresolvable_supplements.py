@@ -1,4 +1,4 @@
-"""Tote Stock-IDs ohne Datei aus Inventar und Slim entfernen."""
+"""Stock-IDs ohne Datei bleiben im Inventar; nur Pfade werden korrigiert."""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def _slim_ids(inv_path: Path) -> set[str]:
     return ids
 
 
-def test_prune_drops_missing_openverse_id_from_inventory_and_slim(tmp_path: Path) -> None:
+def test_prune_keeps_missing_openverse_id_in_inventory_and_slim(tmp_path: Path) -> None:
     project = _project(tmp_path)
     original = _original(project)
     inv_path = _save_inventory(project, [original, _ghost_asset()])
@@ -111,12 +111,12 @@ def test_prune_drops_missing_openverse_id_from_inventory_and_slim(tmp_path: Path
 
     dropped = prune_unresolvable_supplement_assets(project, FOLDER)
 
-    assert GHOST_ID in dropped
+    assert dropped == []
     loaded = load_folder_inventory_file(inv_path)
     assert loaded is not None
     ids = {asset.asset_id for asset in loaded.assets}
-    assert ids == {"vogel_clip"}
-    assert GHOST_ID not in _slim_ids(inv_path)
+    assert ids == {"vogel_clip", GHOST_ID}
+    assert GHOST_ID in _slim_ids(inv_path)
 
 
 def test_prune_keeps_row_when_file_lives_in_sibling_language(tmp_path: Path) -> None:
@@ -229,7 +229,7 @@ def test_materialize_keeps_existing_inventory_rows_even_if_file_missing(
     assert "vogel_clip" in ids
 
 
-def test_materialize_does_not_add_missing_file_from_supplement_cache(
+def test_materialize_restores_missing_file_from_supplement_cache(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -251,7 +251,7 @@ def test_materialize_does_not_add_missing_file_from_supplement_cache(
     assert error is None
     assert item is not None
     ids = {asset.asset_id for asset in item.assets}
-    assert GHOST_ID not in ids
+    assert GHOST_ID in ids
     assert "vogel_clip" in ids
 
 
@@ -309,7 +309,7 @@ def test_demote_slots_with_unknown_local_assets_clears_ghost_slot() -> None:
     assert updated.closing_fallback_asset_id is None
 
 
-def test_generate_chapter_unified_cut_prunes_ghost_before_llm(tmp_path: Path) -> None:
+def test_generate_chapter_unified_cut_keeps_ghost_id_for_llm(tmp_path: Path) -> None:
     from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
         generate_chapter_unified_cut,
     )
@@ -374,7 +374,7 @@ def test_generate_chapter_unified_cut_prunes_ghost_before_llm(tmp_path: Path) ->
         generate_chapter_unified_cut(project, FOLDER)
 
     assert seen_ids
-    assert GHOST_ID not in seen_ids[0]
+    assert GHOST_ID in seen_ids[0]
     assert "vogel_clip" in seen_ids[0]
 
 
