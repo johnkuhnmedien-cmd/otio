@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from otio_app.models import Project
-from otio_app.services.media_utils import is_image_media, is_video_media
+from otio_app.services.media_utils import (
+    is_image_media,
+    is_video_media,
+    probe_duration_seconds,
+)
 from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     load_segment_timings,
 )
@@ -339,7 +343,24 @@ def _slot_usable_max_from_catalog(
         if entry is None:
             out.append(None)
             continue
-        out.append(usable_media_duration_seconds(entry, head_trim=head_trim))
+        usable = usable_media_duration_seconds(entry, head_trim=head_trim)
+        if usable is None and still_image_path_from_catalog_entry(entry) is None:
+            media_kind = str(entry.get("media_kind") or entry.get("media_type") or "").lower()
+            if media_kind not in {"image", "photo"}:
+                path = Path(str(entry.get("path") or ""))
+                probed: float | None = None
+                try:
+                    if path.is_file():
+                        probed = probe_duration_seconds(path)
+                except Exception:  # noqa: BLE001
+                    probed = None
+                if probed is not None and float(probed) > 0:
+                    filled = dict(entry)
+                    filled["duration_seconds"] = float(probed)
+                    usable = usable_media_duration_seconds(
+                        filled, head_trim=head_trim
+                    )
+        out.append(usable)
     return out
 
 
@@ -374,6 +395,120 @@ def _plan_has_intro_slots(
         _is_intro_plan_slot(plan, index, segment_to_chapter)
         for index in range(len(plan.slots))
     )
+
+
+def allocate_mini_gap_to_neighbors(
+    need_sec: float,
+    *,
+    spare_prev: float,
+    spare_next: float,
+    fps: float = 25.0,
+) -> tuple[float, float]:
+    """Teilt eine Mini-Lücke auf Vorgänger/Nachfolger (bevorzugt hälftig).
+
+    Letzter/erster Slot: ``spare_*`` vorher auf 0 setzen. Extra-Frame geht
+    an den Nachfolger, damit links-nach-rechts Resolve den Vorgänger seltener
+    neu auflösen muss.
+    """
+    rate = float(fps) if float(fps) > 0 else 25.0
+
+    def _to_frames(seconds: float) -> int:
+        return int(round(max(0.0, float(seconds)) * rate))
+
+    def _from_frames(frames: int) -> float:
+        return round(max(0, int(frames)) / rate, 6)
+
+    need_f = _to_frames(need_sec)
+    prev_f = _to_frames(spare_prev)
+    next_f = _to_frames(spare_next)
+    if need_f <= 0 or (prev_f <= 0 and next_f <= 0):
+        return 0.0, 0.0
+    if prev_f <= 0:
+        return 0.0, _from_frames(min(need_f, next_f))
+    if next_f <= 0:
+        return _from_frames(min(need_f, prev_f)), 0.0
+    to_next = min((need_f + 1) // 2, next_f)
+    to_prev = min(need_f - to_next, prev_f)
+    leftover = need_f - to_prev - to_next
+    extra = min(leftover, next_f - to_next)
+    to_next += extra
+    leftover -= extra
+    extra = min(leftover, prev_f - to_prev)
+    to_prev += extra
+    return _from_frames(to_prev), _from_frames(to_next)
+
+
+def absorb_timed_slot_mini_shortfall(
+    timed_slots: list[TimedSlot],
+    index: int,
+    *,
+    usable: float,
+    neighbor_usables: list[float | None],
+    fps: float,
+    short_tolerance: float,
+    repairs: list[str],
+) -> tuple[bool, bool]:
+    """Kürzt ``timed_slots[index]`` auf usable und gibt den Rest an Nachbarn.
+
+    Rückgabe: ``(changed, prev_changed)``. ``prev_changed`` heißt: der
+    Vorgänger wurde verlängert und muss neu aufgelöst werden.
+    """
+    if index < 0 or index >= len(timed_slots):
+        return False, False
+    rate = float(fps) if float(fps) > 0 else 25.0
+    slot = timed_slots[index]
+    need = float(slot.duration_seconds)
+    target = _seconds_to_frame(float(usable), rate)
+    cut_need = need - target
+    if cut_need <= 1e-9:
+        return False, False
+    if cut_need > float(short_tolerance) + 1e-9:
+        return False, False
+
+    def _spare(neighbor: int) -> float:
+        if neighbor < 0 or neighbor >= len(timed_slots):
+            return 0.0
+        n_usable = (
+            neighbor_usables[neighbor] if neighbor < len(neighbor_usables) else None
+        )
+        n_span = float(timed_slots[neighbor].duration_seconds)
+        if n_usable is None:
+            return 10_000.0
+        return max(0.0, float(n_usable) + float(short_tolerance) - n_span)
+
+    spare_prev = 0.0 if index == 0 else _spare(index - 1)
+    spare_next = 0.0 if index == len(timed_slots) - 1 else _spare(index + 1)
+    to_prev, to_next = allocate_mini_gap_to_neighbors(
+        cut_need,
+        spare_prev=spare_prev,
+        spare_next=spare_next,
+        fps=rate,
+    )
+    if to_prev + to_next <= 1e-9:
+        if index == len(timed_slots) - 1:
+            return False, False
+        to_next = cut_need
+    prev_changed = False
+    if to_prev > 1e-9 and index > 0:
+        new_start = _seconds_to_frame(slot.start_seconds + to_prev, rate)
+        prev = timed_slots[index - 1]
+        if new_start + 1e-9 >= prev.start_seconds:
+            prev.end_seconds = new_start
+            slot.start_seconds = new_start
+            prev_changed = True
+    if to_next > 1e-9 and index < len(timed_slots) - 1:
+        new_end = _seconds_to_frame(slot.end_seconds - to_next, rate)
+        nxt = timed_slots[index + 1]
+        if new_end + 1e-9 >= slot.start_seconds:
+            slot.end_seconds = new_end
+            nxt.start_seconds = new_end
+    if not prev_changed and abs(float(slot.duration_seconds) - need) <= 1e-9:
+        return False, False
+    repairs.append(
+        f"{slot.slot_id}: Mini-Lücke {cut_need:.2f}s an Nachbarn "
+        f"(Vorgänger +{to_prev:.2f}s, Folgeslot +{to_next:.2f}s)."
+    )
+    return True, prev_changed
 
 
 def _clamp_boundary_times(
@@ -471,15 +606,15 @@ def _clamp_boundary_times(
         uf = usable_frames[index]
         return uf is not None and uf < min_frames_by_slot[index]
 
-    def _neighbor_can_absorb(neighbor: int, extra_sec: float) -> bool:
-        """Nachbar kann Extra aufnehmen, ohne selbst über usable+tol zu gehen."""
+    def _neighbor_spare_sec(neighbor: int) -> float:
+        """Wie viel Extra der Nachbar aufnehmen kann (usable + Toleranz)."""
         if neighbor < 0 or neighbor >= n_slots:
-            return False
+            return 0.0
         neighbor_usable = usables[neighbor]
-        if neighbor_usable is None:
-            return True
         neighbor_span = out[neighbor + 1] - out[neighbor]
-        return neighbor_span + float(extra_sec) <= float(neighbor_usable) + tol + 1e-9
+        if neighbor_usable is None:
+            return 10_000.0
+        return max(0.0, float(neighbor_usable) + tol - neighbor_span)
 
     def _editorial_pass(*, enforce_shot_max: bool = True) -> None:
         # Zu lang: Ende nach vorne (spätere Slots werden länger).
@@ -534,44 +669,53 @@ def _clamp_boundary_times(
             if shortfall > tol + 1e-9:
                 # Über Toleranz: Grenzen unverändert → is_short/Gap-Pfad.
                 continue
-            # Innerhalb Toleranz: Shortfall an Nachbar abgeben (shot_max ok).
+            # Innerhalb Toleranz: Mini-Lücke auf Nachbarn verteilen (shot_max ok).
             clamped = _from_frames(uf)
-            prefer_next = index < n_slots - 1 and _neighbor_can_absorb(
-                index + 1, shortfall
-            )
-            prefer_prev = index > 0 and _neighbor_can_absorb(index - 1, shortfall)
-            # Letzter Slot: nie Endgrenze nach vorne (sonst Timeline kürzer).
-            if index == n_slots - 1:
-                if not prefer_prev:
-                    continue
-                use_prev = True
-            else:
-                use_prev = prefer_prev and not prefer_next
-            if use_prev:
-                new_start = _seconds_to_frame(out[index + 1] - clamped, rate)
-                if new_start + 1e-9 < out[index - 1]:
-                    continue
-                out[index] = new_start
-                shot_max_exempt.add(index - 1)
-                repairs.append(
-                    f"slot[{index}]: nutzbare Dauer knapp "
-                    f"(span {duration:.2f}s → usable {float(usable):.2f}s / "
-                    f"frame {clamped:.2f}s, "
-                    f"shortfall {shortfall:.2f}s ≤ Toleranz {tol:.1f}s) — "
-                    "Startgrenze nach hinten (Vorgänger-Slot länger, "
-                    "shot_max-Überschreitung erlaubt)."
-                )
-                changed = True
+            cut_need = duration - clamped
+            if cut_need <= 1e-9:
                 continue
-            out[index + 1] = _seconds_to_frame(out[index] + clamped, rate)
-            shot_max_exempt.add(index + 1)
+            spare_prev = 0.0 if index == 0 else _neighbor_spare_sec(index - 1)
+            spare_next = 0.0 if index == n_slots - 1 else _neighbor_spare_sec(index + 1)
+            to_prev, to_next = allocate_mini_gap_to_neighbors(
+                cut_need,
+                spare_prev=spare_prev,
+                spare_next=spare_next,
+                fps=rate,
+            )
+            if to_prev + to_next <= 1e-9:
+                if index == n_slots - 1:
+                    continue
+                # Kein nachweisbarer Spare: Folge-Slot nimmt alles (wie bisher).
+                to_next = cut_need
+            applied_prev = False
+            applied_next = False
+            if to_prev > 1e-9:
+                new_start = _seconds_to_frame(out[index] + to_prev, rate)
+                if new_start + 1e-9 >= out[index - 1]:
+                    out[index] = new_start
+                    shot_max_exempt.add(index - 1)
+                    applied_prev = True
+            if to_next > 1e-9:
+                new_end = _seconds_to_frame(out[index + 1] - to_next, rate)
+                if new_end + 1e-9 >= out[index]:
+                    out[index + 1] = new_end
+                    if index < n_slots - 1:
+                        shot_max_exempt.add(index + 1)
+                    applied_next = True
+            if not applied_prev and not applied_next:
+                continue
+            parts: list[str] = []
+            if applied_prev:
+                parts.append("Vorgänger-Slot länger")
+            if applied_next:
+                parts.append("Folge-Slot länger")
             repairs.append(
                 f"slot[{index}]: nutzbare Dauer knapp "
                 f"(span {duration:.2f}s → usable {float(usable):.2f}s / "
                 f"frame {clamped:.2f}s, "
                 f"shortfall {shortfall:.2f}s ≤ Toleranz {tol:.1f}s) — "
-                "Endgrenze nach vorne (Folge-Slot länger, "
-                "shot_max-Überschreitung erlaubt)."
+                + " und ".join(parts)
+                + " (shot_max-Überschreitung erlaubt)."
             )
             changed = True
         if changed:
@@ -1430,7 +1574,12 @@ def resolve_unified_timeline(
 
     resolved_shots: list[ResolvedShot] = []
     running_usage: dict[str, int] = {}
-    for timed in timed_slots:
+    timed_usables = _slot_usable_max_from_catalog(
+        plan, catalog, head_trim=head_trim
+    )
+    while len(timed_usables) < len(timed_slots):
+        timed_usables.append(None)
+    for index, timed in enumerate(timed_slots):
         # E2E-4: Legacy-Bridge-Slots aus alten Plänen überspringen.
         if (
             str(timed.slot_id).startswith("bridge_")
@@ -1556,7 +1705,94 @@ def resolve_unified_timeline(
             )
         except TimelineResolveError as exc:
             msg = str(exc)
-            if is_keyword_flow_closing:
+            mini_resolved = None
+            if not is_keyword_flow_closing:
+                usable_now = usable_media_duration_seconds(
+                    entry, head_trim=head_trim
+                )
+                if (
+                    usable_now is not None
+                    and timed.duration_seconds > float(usable_now) + 1e-6
+                    and (timed.duration_seconds - float(usable_now))
+                    <= short_tolerance + 1e-6
+                ):
+                    changed, prev_changed = absorb_timed_slot_mini_shortfall(
+                        timed_slots,
+                        index,
+                        usable=float(usable_now),
+                        neighbor_usables=timed_usables,
+                        fps=fps,
+                        short_tolerance=short_tolerance,
+                        repairs=repairs,
+                    )
+                    if changed:
+                        prev_ok = True
+                        if prev_changed and index > 0:
+                            prev_timed = timed_slots[index - 1]
+                            prev_entry, _prev_err = lookup_catalog_entry(
+                                catalog, str(prev_timed.asset_id or "")
+                            )
+                            prev_shot_i = next(
+                                (
+                                    i
+                                    for i, shot in enumerate(resolved_shots)
+                                    if shot.shot_id == prev_timed.slot_id
+                                ),
+                                None,
+                            )
+                            if prev_entry is not None and prev_shot_i is not None:
+                                try:
+                                    new_prev = _resolve_shot_media(
+                                        project,
+                                        shot_id=prev_timed.slot_id,
+                                        asset_id=str(
+                                            prev_entry.get("canonical_id")
+                                            or prev_timed.asset_id
+                                        ),
+                                        entry=prev_entry,
+                                        timeline_start=prev_timed.start_seconds,
+                                        timeline_end=prev_timed.end_seconds,
+                                        fps=fps,
+                                        head_trim=head_trim,
+                                        short_tolerance=short_tolerance,
+                                        editorial_function=prev_timed.narrative_function,
+                                        may_overlap_pause=False,
+                                        repairs=repairs,
+                                    )
+                                    keep = resolved_shots[prev_shot_i]
+                                    new_prev.asset_fit = keep.asset_fit
+                                    new_prev.asset_fit_reason = keep.asset_fit_reason
+                                    new_prev.cut_alignment = keep.cut_alignment
+                                    new_prev.coverage_gap_id = keep.coverage_gap_id
+                                    new_prev.open_gap = False
+                                    if not new_prev.folder_name:
+                                        new_prev.folder_name = keep.folder_name
+                                    resolved_shots[prev_shot_i] = new_prev
+                                except TimelineResolveError:
+                                    prev_ok = False
+                        if prev_ok:
+                            try:
+                                mini_resolved = _resolve_shot_media(
+                                    project,
+                                    shot_id=timed.slot_id,
+                                    asset_id=str(
+                                        entry.get("canonical_id") or asset_id
+                                    ),
+                                    entry=entry,
+                                    timeline_start=timed.start_seconds,
+                                    timeline_end=timed.end_seconds,
+                                    fps=fps,
+                                    head_trim=head_trim,
+                                    short_tolerance=short_tolerance,
+                                    editorial_function=timed.narrative_function,
+                                    may_overlap_pause=False,
+                                    repairs=repairs,
+                                )
+                            except TimelineResolveError:
+                                mini_resolved = None
+            if mini_resolved is not None:
+                resolved = mini_resolved
+            elif is_keyword_flow_closing:
                 from otio_app.services.without_voiceover_enhanced.keyword_flow_closing import (
                     KeywordFlowClosingError,
                     choose_closing_asset_for_resolve,
@@ -1598,7 +1834,9 @@ def resolve_unified_timeline(
                     errors.append(f"{timed.slot_id}: {fb_exc}")
                     continue
             else:
-                is_short = "zu kurz" in msg.lower()
+                is_short = (
+                    "zu kurz" in msg.lower() or "knapp über usable" in msg.lower()
+                )
                 # Zu kurz: Asset behalten + roter Shortfall-Placeholder (statt
                 # komplettem Slate). Andere open-gap-Fälle: voller Placeholder.
                 if allow_open_gaps and (

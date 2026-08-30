@@ -909,6 +909,84 @@ def test_over_tolerance_does_not_clamp_leaves_span_for_gap_path() -> None:
     assert not any("nutzbare Dauer knapp" in note for note in repairs)
 
 
+def test_allocate_mini_gap_splits_half_when_both_neighbors_have_spare() -> None:
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        allocate_mini_gap_to_neighbors,
+    )
+
+    to_prev, to_next = allocate_mini_gap_to_neighbors(
+        1.0, spare_prev=5.0, spare_next=5.0, fps=25.0
+    )
+    assert to_prev + to_next == pytest.approx(1.0)
+    assert to_prev == pytest.approx(0.48)  # 12 frames
+    assert to_next == pytest.approx(0.52)  # 13 frames (extra frame → next)
+
+
+def test_mini_gap_splits_between_both_neighbors() -> None:
+    """0,1s Mini-Lücke: Vorgänger und Folgeslot teilen sich die fehlende Zeit."""
+    timeline = NarrationTimelineDocument(
+        script_version="v1",
+        total_duration_seconds=40.0,
+        entries=[
+            NarrationTimelineEntry(
+                segment_id="seg_001",
+                start_seconds=0.0,
+                end_seconds=40.0,
+                audio_duration_seconds=40.0,
+            )
+        ],
+    )
+    sentences = {
+        "seg_001__s001": _sentence("seg_001__s001", start=0.0, end=1.0),
+        "seg_001__s002": _sentence("seg_001__s002", start=10.0, end=11.0),
+        "seg_001__s003": _sentence("seg_001__s003", start=21.3, end=22.3),
+        "seg_001__s004": _sentence("seg_001__s004", start=31.3, end=32.3),
+    }
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            CutBoundary(cut_id="b0", sentence_id="seg_001__s001", position="start"),
+            CutBoundary(cut_id="b1", sentence_id="seg_001__s002", position="start"),
+            CutBoundary(cut_id="b2", sentence_id="seg_001__s003", position="start"),
+            CutBoundary(cut_id="b3", sentence_id="seg_001__s004", position="start"),
+        ],
+        slots=[
+            CutSlot(slot_id="slot_a", local_asset_id="asset_a", asset_fit="strong"),
+            CutSlot(slot_id="slot_b", local_asset_id="asset_b", asset_fit="strong"),
+            CutSlot(slot_id="slot_c", local_asset_id="asset_c", asset_fit="strong"),
+        ],
+    )
+    options = CutPlanOptions(
+        shot_min_sec=0.4,
+        shot_max_sec=120.0,
+        short_asset_tolerance_sec=1.0,
+        video_head_trim_sec=0.0,
+    )
+    repairs: list[str] = []
+    timed = resolve_timed_slots(
+        plan,
+        timeline,
+        sentence_index=sentences,
+        options=options,
+        fps=25.0,
+        repairs=repairs,
+        slot_usable_max=[None, 11.2, None],
+    )
+    assert timed[1].duration_seconds == pytest.approx(11.2, abs=0.05)
+    assert timed[0].duration_seconds == pytest.approx(10.04, abs=0.08)
+    assert timed[2].duration_seconds == pytest.approx(10.06, abs=0.08)
+    assert timed[0].end_seconds == timed[1].start_seconds
+    assert timed[1].end_seconds == timed[2].start_seconds
+    assert_timed_slots_contiguous(timed, fps=25.0)
+    total = sum(s.duration_seconds for s in timed)
+    span = timed[-1].end_seconds - timed[0].start_seconds
+    assert total == pytest.approx(span)
+    assert timed[0].duration_seconds > 10.0
+    assert timed[2].duration_seconds > 10.0
+    assert any("Vorgänger-Slot länger" in note for note in repairs)
+    assert any("Folge-Slot länger" in note for note in repairs)
+
+
 def test_resolve_shot_media_never_shortens_timeline_end(tmp_path) -> None:
     """Fix 1.2: Media-Auflösung ändert timeline_end nicht (auch innerhalb Toleranz)."""
     from otio_app.models import Project, ProjectMode

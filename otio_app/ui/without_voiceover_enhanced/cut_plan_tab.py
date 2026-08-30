@@ -787,8 +787,11 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             value=bool(current.enable_unified_mini_repair),
             key=f"enh_opt_mini_repair_{project.id}",
             help=(
-                "Nur wenn (offene none + Review) / Slots > Schwellwert. "
-                "Repariert betroffene Slots ± Nachbarn."
+                "Nicht für zu kurze Clips. Nur wenn nach Gap-Merge zu viele "
+                "offene Lücken/Reviews da sind: ein extra LLM-Lauf ändert "
+                "betroffene Slots ± Nachbarn. Default aus. "
+                "Mini-Lücken unter 1s löst Python Timing selbst "
+                "(Einstellung „Toleranz Asset zu kurz“)."
             ),
             disabled=cut_plan_mode != CUT_PLAN_MODE_UNIFIED,
         )
@@ -942,10 +945,10 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 step=0.5,
                 key=f"enh_opt_short_tol_{project.id}",
                 help=(
-                    "Fehlt dem Asset höchstens so viel nutzbare Dauer: Python "
-                    "kürzt den Slot und verlängert Nachbar-Clips (davor/danach) "
-                    "statt Placeholder — auch wenn shot_max dabei überschritten "
-                    "wird. Darüber: Gap/Placeholder."
+                    "Fehlt dem Asset höchstens so viel nutzbare Dauer (Default 1s): "
+                    "Python kürzt den Slot und verlängert den Clip davor und/oder "
+                    "danach — möglichst hälftig, z. B. je 0,5s. Darüber: "
+                    "roter Shortfall/Placeholder."
                 ),
             )
         with col2:
