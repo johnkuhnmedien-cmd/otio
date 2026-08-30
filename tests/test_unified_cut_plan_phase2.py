@@ -203,6 +203,18 @@ def test_parse_applies_folder_slug_prefix() -> None:
     assert plan.slots[1].coverage_gap_id == "gap_Rocamadour_slot_002"
 
 
+def test_parse_rewrites_llm_counter_gap_ids_to_slot() -> None:
+    """LLM-Zähler wie Piran_gap_001 dürfen keinen alten Funnel-Fill erben."""
+    payload = _sample_payload()
+    payload["slots"][1]["coverage_gap_id"] = "Piran_gap_001"
+    payload["slots"][1]["slot_id"] = "Piran_slot_011"
+    plan = parse_unified_cut_response(payload, "v1", folder_slug="Piran")
+    assert plan.slots[1].slot_id == "Piran_slot_011"
+    assert plan.slots[1].coverage_gap_id == "gap_Piran_slot_011"
+    _rough, coverage = unified_to_rough(plan)
+    assert coverage.gaps[0].gap_id == "gap_Piran_slot_011"
+
+
 def test_parse_clears_gap_id_for_strong_and_nulls_asset_for_none() -> None:
     payload = _sample_payload()
     payload["slots"][0]["coverage_gap_id"] = "should_be_cleared"

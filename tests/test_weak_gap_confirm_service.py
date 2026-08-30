@@ -77,14 +77,14 @@ def _plan_with_weak_and_none() -> UnifiedCutPlanDocument:
                 slot_id="A_slot_weak",
                 local_asset_id="loc_weak",
                 asset_fit="weak",
-                coverage_gap_id="gap_weak",
+                coverage_gap_id="gap_A_slot_weak",
                 needed_visual="better light",
             ),
             CutSlot(
                 slot_id="A_slot_none",
                 local_asset_id=None,
                 asset_fit="none",
-                coverage_gap_id="gap_none",
+                coverage_gap_id="gap_A_slot_none",
                 needed_visual="street",
             ),
         ],
@@ -100,19 +100,19 @@ def test_confirm_weak_closes_gap_and_unblocks_status(tmp_path: Path) -> None:
     write_json(coverage_gaps_path(project), coverage)
 
     before = summarize_gap_status(project)
-    assert "gap_weak" in before.open_gap_ids
-    assert "gap_none" in before.open_gap_ids
+    assert "gap_A_slot_weak" in before.open_gap_ids
+    assert "gap_A_slot_none" in before.open_gap_ids
 
     confirmable = list_confirmable_weak_gaps(project)
-    assert [g.gap_id for g in confirmable] == ["gap_weak"]
+    assert [g.gap_id for g in confirmable] == ["gap_A_slot_weak"]
 
-    result = confirm_weak_local_asset_for_gap(project, "gap_weak")
+    result = confirm_weak_local_asset_for_gap(project, "gap_A_slot_weak")
     assert result.local_asset_id == "loc_weak"
 
     after = summarize_gap_status(project)
-    assert "gap_weak" not in after.open_gap_ids
-    assert "gap_weak" in after.filled_gap_ids
-    assert "gap_none" in after.open_gap_ids
+    assert "gap_A_slot_weak" not in after.open_gap_ids
+    assert "gap_A_slot_weak" in after.filled_gap_ids
+    assert "gap_A_slot_none" in after.open_gap_ids
 
 
 def test_confirm_weak_rejects_none_gap(tmp_path: Path) -> None:
@@ -124,7 +124,7 @@ def test_confirm_weak_rejects_none_gap(tmp_path: Path) -> None:
     write_json(coverage_gaps_path(project), coverage)
 
     with pytest.raises(WeakGapConfirmError, match="Weak-Upgrade"):
-        confirm_weak_local_asset_for_gap(project, "gap_none")
+        confirm_weak_local_asset_for_gap(project, "gap_A_slot_none")
 
 
 def test_confirm_weak_requires_local_asset(tmp_path: Path) -> None:

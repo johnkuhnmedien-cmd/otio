@@ -182,7 +182,13 @@ def _coverage_gap_from_plan_slot(slot: object) -> CoverageGap | None:
     is_bridge = slot_id.startswith("bridge_") or narrative == "chapter_transition"
     if fit not in GAP_FIT_VALUES or is_bridge or not slot_id:
         return None
-    gap_id = str(getattr(slot, "coverage_gap_id", "") or "").strip() or f"gap_{slot_id}"
+    from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+        canonical_coverage_gap_id,
+    )
+
+    gap_id = canonical_coverage_gap_id(slot_id) or str(
+        getattr(slot, "coverage_gap_id", "") or ""
+    ).strip()
     needed = (
         str(getattr(slot, "needed_visual", "") or "").strip()
         or str(getattr(slot, "visual_intent", "") or "").strip()

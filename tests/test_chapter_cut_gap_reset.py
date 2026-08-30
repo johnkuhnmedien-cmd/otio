@@ -252,7 +252,10 @@ def test_persisting_a_new_chapter_plan_resets_open_gaps(project_with_two_chapter
     stored = load_model(
         chapter_unified_cut_plan_path(project, "Athens"), UnifiedCutPlanDocument
     )
-    assert [s.coverage_gap_id for s in stored.slots] == ["gap_slot_003", "gap_slot_009"]
+    assert [s.coverage_gap_id for s in stored.slots] == [
+        "gap_ath_slot_001",
+        "gap_ath_slot_002",
+    ]
 
 
 def test_new_cut_still_creates_gaps_after_the_reset(project_with_two_chapters, monkeypatch):
@@ -315,12 +318,12 @@ def test_new_cut_still_creates_gaps_after_the_reset(project_with_two_chapters, m
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     gap_ids = [gap.gap_id for gap in coverage.gaps]
 
-    # Neuer Gap ist da.
-    assert "gap_slot_001" in gap_ids
-    # Wiederkehrende ID ebenfalls — aber als frischer Gap ohne Altzustand.
-    assert ATHENS_OPEN in gap_ids
-    # Corfu bleibt unberührt.
-    assert CORFU_OPEN in gap_ids
+    # Nach dem Merge heißen Gaps nach dem Slot, nicht nach LLM-Zählern.
+    assert "gap_ath_slot_001" in gap_ids
+    assert "gap_ath_slot_002" in gap_ids
+    assert "gap_cor_slot_001" in gap_ids
+    # Corfu-Funnel-Zustand bleibt am alten Eintrag; Coverage folgt der Slot-ID.
+    assert CORFU_OPEN not in gap_ids
 
     search = load_model(stock_search_results_path(project), StockSearchResultsDocument)
     assert "c_athens_open" not in [c.candidate_id for c in search.candidates]

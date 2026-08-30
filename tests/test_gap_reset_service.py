@@ -382,7 +382,11 @@ def test_chapter_gap_ids_reads_the_slots(tmp_path):
         ],
     )
 
-    assert chapter_gap_ids(plan) == ["gap_slot_002", "gap_slot_003"]
+    assert chapter_gap_ids(plan) == [
+        "gap_slot_002",
+        "gap_slot_003",
+        "gap_slot_004",
+    ]
     assert chapter_gap_ids(None) == []
 
 

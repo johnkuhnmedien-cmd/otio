@@ -77,8 +77,46 @@ def _boundary_to_narration_anchor(boundary: CutBoundary) -> NarrationAnchor:
     )
 
 
+def canonical_coverage_gap_id(slot_id: str) -> str:
+    """Stabile Funnel-ID: immer ``gap_{slot_id}``, nie LLM-Zähler wie ``Piran_gap_001``.
+
+    Modelle nummerieren Gaps kapitelweit (``Kapitel_gap_001``). Dieselbe ID
+    trifft beim nächsten Cut oft einen anderen Slot. Dann erbt der neue leere
+    Slot den alten Funnel-Fill, Timing läuft durch, und der Funnel bleibt leer.
+    """
+    text = (slot_id or "").strip()
+    if not text:
+        return ""
+    return f"gap_{text}"
+
+
 def _default_gap_id(slot_id: str) -> str:
-    return f"gap_{slot_id}"
+    return canonical_coverage_gap_id(slot_id)
+
+
+def canonicalize_slot_coverage_gap_id(slot: CutSlot) -> CutSlot:
+    """weak/none → ``gap_{slot_id}``; strong/acceptable → keine Gap-ID."""
+    fit = str(slot.asset_fit or "").strip().lower()
+    if fit in {"strong", "acceptable"}:
+        if slot.coverage_gap_id:
+            return slot.model_copy(update={"coverage_gap_id": None})
+        return slot
+    if fit not in GAP_FIT_VALUES:
+        return slot
+    wanted = canonical_coverage_gap_id(slot.slot_id)
+    if not wanted or slot.coverage_gap_id == wanted:
+        return slot
+    return slot.model_copy(update={"coverage_gap_id": wanted})
+
+
+def canonicalize_plan_coverage_gap_ids(
+    plan: UnifiedCutPlanDocument,
+) -> UnifiedCutPlanDocument:
+    """Bestehende Pläne (JSON mit LLM-Zähler-IDs) auf Slot-IDs umbiegen."""
+    slots = [canonicalize_slot_coverage_gap_id(slot) for slot in plan.slots]
+    if slots == list(plan.slots):
+        return plan
+    return plan.model_copy(update={"slots": slots})
 
 
 def _demote_slot_to_coverage_gap(
@@ -87,7 +125,9 @@ def _demote_slot_to_coverage_gap(
     reason: str,
 ) -> CutSlot:
     """Asset entfernen und Slot als ehrliche Coverage-Gap markieren."""
-    gap_id = (slot.coverage_gap_id or "").strip() or _default_gap_id(slot.slot_id)
+    gap_id = canonical_coverage_gap_id(slot.slot_id) or (
+        (slot.coverage_gap_id or "").strip()
+    )
     needed = (
         (slot.needed_visual or "").strip()
         or (slot.visual_intent or "").strip()
@@ -563,16 +603,12 @@ def parse_unified_cut_response(
             slot.slot_id = _with_folder_prefix(
                 slot.slot_id, folder_slug, "slot", index
             )
-            if slot.coverage_gap_id:
-                slot.coverage_gap_id = _with_folder_prefix(
-                    slot.coverage_gap_id, folder_slug, "gap", index
-                )
 
-    # Gap-IDs für weak/none nachziehen, falls Modell sie wegließ.
+    # Gap-IDs immer aus der Slot-ID, nie aus LLM-Zählern (Piran_gap_001).
     for slot in slots:
         fit = str(slot.asset_fit or "none")
-        if fit in GAP_FIT_VALUES and not slot.coverage_gap_id:
-            slot.coverage_gap_id = _default_gap_id(slot.slot_id)
+        if fit in GAP_FIT_VALUES:
+            slot.coverage_gap_id = canonical_coverage_gap_id(slot.slot_id) or None
         if fit in {"strong", "acceptable"}:
             slot.coverage_gap_id = None
         if fit == "none":
@@ -665,7 +701,13 @@ def unified_to_rough(
         needs_gap = (fit in GAP_FIT_VALUES) and not is_bridge
         gap_id = None
         if needs_gap:
-            gap_id = (slot.coverage_gap_id or "").strip() or _default_gap_id(slot.slot_id)
+            # Kapitel-Pläne kommen bereits kanonisch (gap_{slot_id}) aus Parse/Load.
+            # Intro behält Intro_gap_auto_* — deshalb gespeicherte ID nicht überschreiben.
+            gap_id = (
+                (slot.coverage_gap_id or "").strip()
+                or canonical_coverage_gap_id(slot.slot_id)
+                or None
+            )
 
         shots.append(
             RoughShot(
