@@ -1824,6 +1824,19 @@ def _render_intro_cut_section(
                     "altes Timing. Bitte **Intro: Python Timing** erneut, sonst "
                     "exportiert OTIO den alten Stand."
                 )
+        if intro_resolved is not None:
+            from otio_app.services.without_voiceover_enhanced.shortfall_inspect import (
+                collect_shortfall_rows_from_resolved,
+            )
+
+            _render_shortfall_inspect_rows(
+                collect_shortfall_rows_from_resolved(
+                    intro_resolved, folder_name="Intro", project=project
+                ),
+                folder="Intro",
+                key_prefix=f"enh_sf_intro_{project.id}",
+                expanded=True,
+            )
     st.divider()
 
 
@@ -1846,6 +1859,46 @@ def _inject_chapter_done_button_css(done_keys: list[str]) -> None:
             "}"
         )
     st.markdown(f"<style>{''.join(rules)}</style>", unsafe_allow_html=True)
+
+
+def _render_shortfall_inspect_rows(
+    rows,
+    *,
+    folder: str,
+    key_prefix: str,
+    expanded: bool = True,
+) -> None:
+    """Zeigt vorgesehene Shortfall-Videos zum Prüfen (Länge vs. Slot)."""
+    if not rows:
+        return
+    from otio_app.services.without_voiceover_enhanced.shortfall_inspect import (
+        format_shortfall_inspect_label,
+    )
+
+    title = f"Zu kurze Clips ansehen · {folder} ({len(rows)})"
+    with st.expander(title, expanded=expanded):
+        st.caption(
+            "Das ist das Video, das für den Slot vorgesehen war — nicht nur die "
+            "Slot-Nummer. So siehst du, ob der Clip wirklich zu kurz ist oder "
+            "ob ein anderer Fehler vorliegt."
+        )
+        for index, row in enumerate(rows):
+            st.markdown(f"**{format_shortfall_inspect_label(row)}**")
+            if row.media_exists and row.is_video:
+                st.video(row.media_path)
+            elif row.media_exists and row.is_image:
+                st.image(row.media_path)
+            elif row.media_path:
+                st.caption(f"Datei nicht gefunden: `{row.media_path}`")
+            else:
+                st.caption(
+                    "Kein Dateipfad in der Timeline. Asset-ID oben prüfen "
+                    "oder Inventar neu aufbauen."
+                )
+            if row.reason:
+                st.caption(row.reason)
+            if index + 1 < len(rows):
+                st.divider()
 
 
 def _render_chapter_cut_rows(
@@ -2083,6 +2136,19 @@ def _render_chapter_cut_rows(
                 if len(plan.slots) > 40:
                     st.caption(f"… +{len(plan.slots) - 40} weitere Slots")
         resolved = load_chapter_resolved(project, folder)
+        if resolved is not None:
+            from otio_app.services.without_voiceover_enhanced.shortfall_inspect import (
+                collect_shortfall_rows_from_resolved,
+            )
+
+            _render_shortfall_inspect_rows(
+                collect_shortfall_rows_from_resolved(
+                    resolved, folder_name=folder, project=project
+                ),
+                folder=folder,
+                key_prefix=f"enh_sf_{key_base}",
+                expanded=True,
+            )
         if resolved is not None and resolved.shots:
             stale = " · Plan geändert — Timing neu" if not status.matches else ""
             with st.expander(
@@ -2107,11 +2173,16 @@ def _render_chapter_cut_rows(
                         gap = f"filled:{gap_id}"
                     else:
                         gap = "—"
+                    marker = ""
+                    if str(shot.shot_id).endswith("__shortfall") or bool(
+                        getattr(shot, "is_placeholder", False)
+                    ):
+                        marker = " ⚠ zu kurz"
                     st.caption(
                         f"{shot.shot_id}: "
                         f"{start:.2f}–{end:.2f}s ({dur:.2f}s) · "
                         f"asset={shot.asset_id or '—'} · "
-                        f"fit={fit} · gap={gap}"
+                        f"fit={fit} · gap={gap}{marker}"
                     )
                 if len(resolved.shots) > 40:
                     st.caption(f"… +{len(resolved.shots) - 40} weitere Shots")

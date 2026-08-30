@@ -156,18 +156,18 @@ def _is_non_plan_envelope_shot(shot: ResolvedShot) -> bool:
 
 def production_blocking_placeholder_labels(
     resolved: ResolvedTimelineDocument | None,
+    *,
+    folder_name: str = "",
+    project: Project | None = None,
 ) -> list[str]:
     """Shots, die Produktions-OTIO sperren (Placeholder / offener Gap / Shortfall)."""
-    if resolved is None:
-        return []
-    labels: list[str] = []
-    for shot in resolved.shots or []:
-        if bool(getattr(shot, "is_placeholder", False)) or bool(
-            getattr(shot, "open_gap", False)
-        ):
-            gap = str(getattr(shot, "coverage_gap_id", "") or "").strip() or "—"
-            labels.append(f"{shot.shot_id} ({gap})")
-    return labels
+    from otio_app.services.without_voiceover_enhanced.shortfall_inspect import (
+        production_blocking_placeholder_labels as _format_blocking_labels,
+    )
+
+    return _format_blocking_labels(
+        resolved, folder_name=folder_name, project=project
+    )
 
 
 def chapter_resolved_matches_plan(
@@ -906,14 +906,18 @@ def resolve_chapter_timeline(
     if abs(origin) > 1e-6:
         resolved = _shift_timeline(resolved, origin)
 
-    blockers = production_blocking_placeholder_labels(resolved)
+    blockers = production_blocking_placeholder_labels(
+        resolved, folder_name=folder_name, project=project
+    )
     if blockers:
         preview = ", ".join(blockers[:12])
         more = f" (+{len(blockers) - 12})" if len(blockers) > 12 else ""
+        write_json(chapter_resolved_timeline_path(project, folder_name), resolved)
         raise ChapterCutError(
             f"Python Timing für „{folder_name}“ nicht exportfähig: "
             f"{len(blockers)} Placeholder/Shortfall — das Video ist kürzer "
-            f"als die Sprecherzeit. Im Funnel längeres Material holen, dann "
+            f"als die Sprecherzeit. Unter „Zu kurze Clips ansehen“ liegt das "
+            f"vorgesehene Video. Im Funnel längeres Material holen, dann "
             f"Timing erneut. Betroffen: {preview}{more}."
         )
 
@@ -1267,7 +1271,9 @@ def build_merged_resolved_timeline(
         if resolved is None:
             missing.append(f"{name} (kein passendes Python-Timing)")
             continue
-        blockers = production_blocking_placeholder_labels(resolved)
+        blockers = production_blocking_placeholder_labels(
+            resolved, folder_name=name, project=project
+        )
         if blockers:
             preview = ", ".join(blockers[:3])
             more = f" (+{len(blockers) - 3})" if len(blockers) > 3 else ""
