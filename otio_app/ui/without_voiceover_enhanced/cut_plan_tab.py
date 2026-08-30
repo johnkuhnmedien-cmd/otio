@@ -100,6 +100,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
 )
 from otio_app.services.without_voiceover_enhanced.timing_error_summary import (
     classify_timing_errors,
+    match_named_chapters,
     timing_failure_headline,
 )
 from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
@@ -1413,16 +1414,54 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         return draft
 
 
-def _render_timing_group_body(group) -> None:
+def _render_timing_group_body(
+    group,
+    *,
+    key_scope: str = "timing",
+    on_missing_llm_cut=None,
+) -> None:
     st.markdown(f"**Was los ist:** {group.explanation}")
     st.markdown(f"**Was du tun kannst:** {group.next_step}")
     for item in group.items[:40]:
         st.markdown(f"- {item}")
     if len(group.items) > 40:
         st.caption(f"… +{len(group.items) - 40} weitere")
+    if (
+        group.category == "missing_asset"
+        and group.chapters
+        and callable(on_missing_llm_cut)
+    ):
+        names = list(group.chapters)
+        count = len(names)
+        preview = ", ".join(names[:6])
+        if count > 6:
+            preview = f"{preview} …"
+        label = (
+            f"LLM Cut für {count} Kapitel ohne Clip"
+            if count != 1
+            else "LLM Cut für dieses Kapitel ohne Clip"
+        )
+        if st.button(
+            label,
+            key=f"enh_missing_llm_{key_scope}",
+            use_container_width=True,
+            help=(
+                "Erzeugt den Schnittplan für diese Kapitel neu. "
+                "Der LLM soll die leeren Stellen mit vorhandenem Material füllen. "
+                "Pro Kapitel oft mehrere Minuten. Danach Python Timing erneut."
+            ),
+        ):
+            on_missing_llm_cut(names)
+        st.caption(f"{preview} — danach Python Timing erneut.")
 
 
-def _render_timing_error_summary(messages, *, nested: bool = False) -> None:
+def _render_timing_error_summary(
+    messages,
+    *,
+    nested: bool = False,
+    key_scope: str = "timing",
+    on_missing_llm_cut=None,
+) -> None:
     """Gruppierte, verständliche Timing-Fehler statt Roh-Blob."""
     groups = classify_timing_errors(messages)
     if not groups:
@@ -1431,11 +1470,16 @@ def _render_timing_error_summary(messages, *, nested: bool = False) -> None:
             st.error(text)
         return
     headline = timing_failure_headline(messages)
+    callback = None if nested else on_missing_llm_cut
     if nested:
         st.markdown(f"**{headline}**")
         for group in groups:
             st.markdown(f"**{group.title}** · {len(group.items)}")
-            _render_timing_group_body(group)
+            _render_timing_group_body(
+                group,
+                key_scope=f"{key_scope}_{group.category}",
+                on_missing_llm_cut=None,
+            )
         return
     st.error(f"**{headline}**")
     for group in groups:
@@ -1443,16 +1487,29 @@ def _render_timing_error_summary(messages, *, nested: bool = False) -> None:
             f"{group.title} · {len(group.items)}",
             expanded=True,
         ):
-            _render_timing_group_body(group)
+            _render_timing_group_body(
+                group,
+                key_scope=f"{key_scope}_{group.category}",
+                on_missing_llm_cut=callback,
+            )
 
 
-def _render_chapter_timing_error(exc: Exception) -> None:
+def _render_chapter_timing_error(
+    exc: Exception,
+    *,
+    key_scope: str = "chapter",
+    on_missing_llm_cut=None,
+) -> None:
     """Batch- oder Kapitel-Timing-Fehler in denselben Gruppen zeigen."""
     text = str(exc or "").strip()
     if not text:
         return
     if classify_timing_errors(exc):
-        _render_timing_error_summary(exc)
+        _render_timing_error_summary(
+            exc,
+            key_scope=key_scope,
+            on_missing_llm_cut=on_missing_llm_cut,
+        )
         return
     st.error(text)
 
@@ -2432,6 +2489,7 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         )
 
     batch_flash_key = f"_enh_llm_batch_flash_{project.id}"
+    timing_err_key = f"_enh_timing_batch_err_{project.id}"
     flash = st.session_state.pop(batch_flash_key, None)
     if isinstance(flash, dict):
         level = str(flash.get("level") or "info")
@@ -2516,6 +2574,7 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
                 )
             shots = sum(len(r.shots) for _, r in timed)
             still_open = list_chapters_needing_python_timing(project)
+            st.session_state.pop(timing_err_key, None)
             if still_open:
                 preview = ", ".join(still_open[:8])
                 more = (
@@ -2537,11 +2596,81 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
                 }
             st.rerun()
         except ChapterCutError as exc:
-            _render_chapter_timing_error(exc)
+            st.session_state[timing_err_key] = str(exc)
+            st.rerun()
         except Exception as exc:  # noqa: BLE001
             st.error(f"Timing-Fehler: {exc}")
         finally:
             progress.empty()
+
+    def _run_llm_for_named_chapters(chapter_names: list[str]) -> None:
+        try:
+            available = list_body_chapter_names(project)
+        except Exception:  # noqa: BLE001 — Fallback: Namen aus der Fehlergruppe
+            available = list(chapter_names)
+        names = match_named_chapters(chapter_names, available)
+        if not names:
+            st.warning(
+                "Diese Kapitel sind in der Dramaturgie nicht mehr vorhanden: "
+                + ", ".join(chapter_names[:8])
+            )
+            return
+        progress = st.empty()
+
+        def _named_progress(folder_name: str, index: int, total: int) -> None:
+            chapter_model_id = _live_llm_cut_model_id(
+                project, cut_options, folder_name=folder_name
+            )
+            progress.info(
+                f"LLM Cut ohne Clip · Kapitel {index}/{total}: „{folder_name}“ "
+                f"({chapter_model_id}) — SEQUENZIELL…"
+            )
+
+        try:
+            with st.spinner(
+                f"LLM Cut für {len(names)} Kapitel ohne Clip SEQUENZIELL…"
+            ):
+                results = generate_all_chapter_unified_cuts(
+                    project,
+                    provider=rough_provider,
+                    model=rough_model,
+                    progress_callback=_named_progress,
+                    chapter_names=names,
+                    options=cut_options,
+                )
+            total_slots = sum(r.slot_count for r in results)
+            total_gaps = sum(r.gap_count for r in results)
+            preview = ", ".join(r.folder_name for r in results[:8])
+            st.session_state.pop(timing_err_key, None)
+            st.session_state[batch_flash_key] = {
+                "level": "success",
+                "text": (
+                    f"LLM Cut für {len(results)} Kapitel ohne Clip: {preview}. "
+                    f"{total_slots} Slots · {total_gaps} weak/none. "
+                    "Als Nächstes Python Timing für diese Kapitel."
+                ),
+            }
+            st.rerun()
+        except ChapterCutError as exc:
+            message = str(exc)
+            partial = " ok)" in message
+            st.session_state[batch_flash_key] = {
+                "level": "warning" if partial else "error",
+                "text": message,
+            }
+            st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"LLM-Fehler: {exc}")
+        finally:
+            progress.empty()
+
+    persisted_timing_err = st.session_state.get(timing_err_key)
+    if persisted_timing_err:
+        _render_timing_error_summary(
+            persisted_timing_err,
+            key_scope=f"batch_{project.id}",
+            on_missing_llm_cut=_run_llm_for_named_chapters,
+        )
 
     if run_all_llm:
         _run_llm_batch(only_open=False)
