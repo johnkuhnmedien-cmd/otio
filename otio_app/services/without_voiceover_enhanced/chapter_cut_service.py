@@ -154,17 +154,34 @@ def _is_non_plan_envelope_shot(shot: ResolvedShot) -> bool:
     return False
 
 
+def production_blocking_placeholder_labels(
+    resolved: ResolvedTimelineDocument | None,
+) -> list[str]:
+    """Shots, die Produktions-OTIO sperren (Placeholder / offener Gap / Shortfall)."""
+    if resolved is None:
+        return []
+    labels: list[str] = []
+    for shot in resolved.shots or []:
+        if bool(getattr(shot, "is_placeholder", False)) or bool(
+            getattr(shot, "open_gap", False)
+        ):
+            gap = str(getattr(shot, "coverage_gap_id", "") or "").strip() or "—"
+            labels.append(f"{shot.shot_id} ({gap})")
+    return labels
+
+
 def chapter_resolved_matches_plan(
     plan: UnifiedCutPlanDocument | None,
     resolved: ResolvedTimelineDocument | None,
 ) -> bool:
-    """True wenn jedes Plan-Slot einen Parent-Shot hat.
+    """True wenn jedes Plan-Slot einen Parent-Shot hat und nichts den Export sperrt.
 
-    ``__shortfall``-Tails, ``__closing_fallback`` und Keyword-Flow-Map-Opener
-    zählen nicht extra — sonst wirken gültige Kapitel permanent „offen“
-    (Timing/Alle-OTIO).
+    ``__shortfall``-Tails zählen nicht als Extra-Slot, machen das Kapitel aber
+    nicht exportfähig — sonst wirkt Timing fertig, Alle-OTIO scheitert später.
     """
     if plan is None or resolved is None:
+        return False
+    if production_blocking_placeholder_labels(resolved):
         return False
     parent_shots = [
         shot
@@ -183,6 +200,11 @@ def chapter_timing_mismatch_detail(
         return "kein Plan"
     if resolved is None:
         return "Timing fehlt"
+    blockers = production_blocking_placeholder_labels(resolved)
+    if blockers:
+        preview = ", ".join(blockers[:4])
+        more = f" (+{len(blockers) - 4})" if len(blockers) > 4 else ""
+        return f"Asset zu kurz / Placeholder: {preview}{more}"
     parent_count = sum(
         1 for shot in resolved.shots if not _is_non_plan_envelope_shot(shot)
     )
@@ -884,6 +906,17 @@ def resolve_chapter_timeline(
     if abs(origin) > 1e-6:
         resolved = _shift_timeline(resolved, origin)
 
+    blockers = production_blocking_placeholder_labels(resolved)
+    if blockers:
+        preview = ", ".join(blockers[:12])
+        more = f" (+{len(blockers) - 12})" if len(blockers) > 12 else ""
+        raise ChapterCutError(
+            f"Python Timing für „{folder_name}“ nicht exportfähig: "
+            f"{len(blockers)} Placeholder/Shortfall — das Video ist kürzer "
+            f"als die Sprecherzeit. Im Funnel längeres Material holen, dann "
+            f"Timing erneut. Betroffen: {preview}{more}."
+        )
+
     write_json(chapter_resolved_timeline_path(project, folder_name), resolved)
     return resolved
 
@@ -1051,6 +1084,75 @@ def _offset_timeline(
     )
 
 
+def _reconcile_chapter_envelope_ends(
+    resolved: ResolvedTimelineDocument,
+) -> ResolvedTimelineDocument:
+    """Video-Ende = Audio-Ende + Nachlauf (Frame-Raster), sonst OTIO-Gate.
+
+    Wenn der letzte Shot ein Hold ist, wird er bis zum Nachlauf gestreckt.
+    Motion-Video wird nicht künstlich verlängert — dann folgt der Nachlauf
+    dem tatsächlichen Shot-Ende.
+    """
+    if not resolved.chapters:
+        return resolved
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _seconds_to_frame,
+    )
+
+    fps = float(resolved.fps or 25.0)
+    shots = list(resolved.shots or [])
+    chapters: list[ResolvedChapterEnvelope] = []
+    for chapter in resolved.chapters:
+        expected = _seconds_to_frame(
+            float(chapter.chapter_audio_end) + float(chapter.postroll_seconds or 0.0),
+            fps,
+        )
+        if abs(float(chapter.chapter_video_end) - expected) <= 1e-3:
+            chapters.append(chapter)
+            continue
+        cid = str(chapter.chapter_id or chapter.folder_name or "")
+        chapter_shots = [
+            shot
+            for shot in shots
+            if str(shot.chapter_id or shot.folder_name or "") == cid
+        ]
+        if not chapter_shots:
+            chapters.append(chapter.model_copy(update={"chapter_video_end": expected}))
+            continue
+        last = max(chapter_shots, key=lambda shot: shot.timeline_end_seconds)
+        hold = str(last.hold_mode or "")
+        if hold in {"freeze_video", "still_hold", "placeholder_slate"}:
+            last.timeline_end_seconds = round(expected, 6)
+            chapters.append(
+                chapter.model_copy(update={"chapter_video_end": round(expected, 6)})
+            )
+            continue
+        actual_end = float(last.timeline_end_seconds)
+        chapters.append(
+            chapter.model_copy(
+                update={
+                    "chapter_video_end": round(actual_end, 6),
+                    "postroll_seconds": round(
+                        max(0.0, actual_end - float(chapter.chapter_audio_end)),
+                        6,
+                    ),
+                }
+            )
+        )
+    total = float(resolved.total_duration_seconds or 0.0)
+    if chapters:
+        total = max(total, max(ch.chapter_video_end for ch in chapters))
+    if shots:
+        total = max(total, max(s.timeline_end_seconds for s in shots))
+    return resolved.model_copy(
+        update={
+            "chapters": chapters,
+            "shots": shots,
+            "total_duration_seconds": round(total, 6),
+        }
+    )
+
+
 def concatenate_resolved_timelines(
     parts: list[ResolvedTimelineDocument],
     *,
@@ -1097,7 +1199,7 @@ def concatenate_resolved_timelines(
             cursor = max(
                 cursor, max(ch.chapter_video_end for ch in shifted.chapters)
             )
-    return ResolvedTimelineDocument(
+    merged = ResolvedTimelineDocument(
         script_version=script_version,
         fps=fps,
         total_duration_seconds=round(cursor, 6),
@@ -1109,6 +1211,7 @@ def concatenate_resolved_timelines(
         repairs=repairs,
         errors=errors,
     )
+    return _reconcile_chapter_envelope_ends(merged)
 
 
 def _ensure_intro_resolved(project: Project) -> ResolvedTimelineDocument | None:
@@ -1161,7 +1264,18 @@ def build_merged_resolved_timeline(
             continue
         # Kein stilles Python-Timing im OTIO-Merge — sonst dauert
         # „Alle OTIO“ bei offenen Kapiteln wie ein voller Timing-Lauf.
-        if resolved is None or not chapter_resolved_matches_plan(plan, resolved):
+        if resolved is None:
+            missing.append(f"{name} (kein passendes Python-Timing)")
+            continue
+        blockers = production_blocking_placeholder_labels(resolved)
+        if blockers:
+            preview = ", ".join(blockers[:3])
+            more = f" (+{len(blockers) - 3})" if len(blockers) > 3 else ""
+            missing.append(
+                f"{name} (Placeholder/Shortfall: {preview}{more})"
+            )
+            continue
+        if not chapter_resolved_matches_plan(plan, resolved):
             missing.append(f"{name} (kein passendes Python-Timing)")
             continue
         if resolved.shots or resolved.audio_segments:
