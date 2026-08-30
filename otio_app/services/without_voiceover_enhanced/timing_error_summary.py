@@ -11,6 +11,8 @@ __all__ = [
     "classify_timing_errors",
     "format_grouped_timing_errors",
     "format_timing_error_overview",
+    "match_named_chapters",
+    "missing_clip_chapter_names",
     "split_timing_error_blob",
     "timing_failure_headline",
 ]
@@ -23,6 +25,7 @@ class TimingIssueGroup:
     explanation: str
     next_step: str
     items: list[str] = field(default_factory=list)
+    chapters: list[str] = field(default_factory=list)
 
 
 _MINI_SHORTFALL_SEC = 1.01
@@ -390,8 +393,9 @@ def _empty_groups() -> dict[str, TimingIssueGroup]:
                 "Der Sprecher läuft, das Bild fehlt."
             ),
             next_step=(
-                "Im Funnel oder per Hand ein passendes Video/Foto zuweisen. "
-                "Danach Python Timing für dieses Kapitel erneut starten."
+                "Unten LLM Cut für diese Kapitel neu erzeugen — der Plan "
+                "soll die leeren Stellen mit vorhandenem Material füllen. "
+                "Oder im Funnel/per Hand ein Video zuweisen. Danach Python Timing erneut."
             ),
         ),
         "short_mini": TimingIssueGroup(
@@ -478,6 +482,12 @@ def _empty_groups() -> dict[str, TimingIssueGroup]:
     }
 
 
+def _remember_chapter(group: TimingIssueGroup, chapter: str) -> None:
+    chap = str(chapter or "").strip().strip("„“\"")
+    if chap and chap not in group.chapters:
+        group.chapters.append(chap)
+
+
 def classify_timing_errors(messages: list[str] | str | Exception) -> list[TimingIssueGroup]:
     """Gruppiert Roh-Fehler in wenige, erklärbare Blöcke."""
     if isinstance(messages, (str, Exception)):
@@ -488,6 +498,10 @@ def classify_timing_errors(messages: list[str] | str | Exception) -> list[Timing
             items.extend(split_timing_error_blob(str(raw)))
     groups = _empty_groups()
 
+    def _add(category: str, item: str, chapter: str) -> None:
+        groups[category].items.append(item)
+        _remember_chapter(groups[category], chapter)
+
     for message in items:
         chapter, rest = _split_chapter_prefix(message)
         body = rest or message
@@ -495,19 +509,13 @@ def classify_timing_errors(messages: list[str] | str | Exception) -> list[Timing
             continue
         lower = body.lower()
         if _NO_ASSET_RE.search(body) or "kein asset" in lower:
-            groups["missing_asset"].items.append(
-                _missing_item(body, chapter=chapter)
-            )
+            _add("missing_asset", _missing_item(body, chapter=chapter), chapter)
         elif "grenzen-klemme nicht stabil" in lower or (
             "innerhalb toleranz" in lower and "shortfall" in lower
         ):
-            groups["clamp_unstable"].items.append(
-                _clamp_item(body, chapter=chapter)
-            )
+            _add("clamp_unstable", _clamp_item(body, chapter=chapter), chapter)
         elif _UNKNOWN_ID_RE.search(body):
-            groups["unknown_id"].items.append(
-                _unknown_item(body, chapter=chapter)
-            )
+            _add("unknown_id", _unknown_item(body, chapter=chapter), chapter)
         elif (
             "zu kurz" in lower
             or "placeholder/shortfall" in lower
@@ -520,21 +528,41 @@ def classify_timing_errors(messages: list[str] | str | Exception) -> list[Timing
                 if missing is not None and missing <= _MINI_SHORTFALL_SEC
                 else "short_asset"
             )
-            groups[target].items.append(_short_item(body, chapter=chapter))
+            _add(target, _short_item(body, chapter=chapter), chapter)
         elif _BRIDGE_RE.search(body):
-            groups["chapter_bridge"].items.append(
-                _bridge_item(body, chapter=chapter)
-            )
+            _add("chapter_bridge", _bridge_item(body, chapter=chapter), chapter)
         elif _GAP_RE.search(body) or "lücke" in lower:
-            groups["visual_gap"].items.append(
-                _gap_item(body, chapter=chapter)
-            )
+            _add("visual_gap", _gap_item(body, chapter=chapter), chapter)
         else:
-            groups["other"].items.append(
-                _with_chapter(chapter, _strip_paths(body))
-            )
+            _add("other", _with_chapter(chapter, _strip_paths(body)), chapter)
 
     return [g for g in groups.values() if g.items]
+
+
+def missing_clip_chapter_names(messages: list[str] | str | Exception) -> list[str]:
+    """Kapitel, in denen Slots ohne Video/Foto liegen."""
+    for group in classify_timing_errors(messages):
+        if group.category == "missing_asset":
+            return list(group.chapters)
+    return []
+
+
+def match_named_chapters(requested: list[str], available: list[str]) -> list[str]:
+    """Ordnet Anzeige-Namen auf echte Kapitel-Ordner (Reihenfolge bleibt)."""
+    exact = {name: name for name in available}
+    folded = {name.casefold(): name for name in available}
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in requested:
+        name = str(raw or "").strip()
+        if not name:
+            continue
+        matched = exact.get(name) or folded.get(name.casefold())
+        if not matched or matched in seen:
+            continue
+        seen.add(matched)
+        out.append(matched)
+    return out
 
 
 def timing_failure_headline(messages: list[str] | str | Exception) -> str:

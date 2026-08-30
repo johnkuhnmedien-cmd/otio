@@ -6,6 +6,8 @@ from otio_app.services.without_voiceover_enhanced.timing_error_summary import (
     classify_timing_errors,
     format_grouped_timing_errors,
     format_timing_error_overview,
+    match_named_chapters,
+    missing_clip_chapter_names,
     split_timing_error_blob,
     timing_failure_headline,
 )
@@ -65,6 +67,8 @@ def test_classify_empty() -> None:
     assert classify_timing_errors("") == []
     assert format_timing_error_overview([]) == ""
     assert format_grouped_timing_errors("") == ""
+    assert missing_clip_chapter_names("") == []
+    assert match_named_chapters(["Piran"], []) == []
 
 
 def test_screenshot_blob_groups_by_kind() -> None:
@@ -100,6 +104,20 @@ def test_screenshot_blob_groups_by_kind() -> None:
     assert "Ptuj" in missing
     assert "Piran" in missing
     assert "kein Video/Foto" in missing
+    assert by_cat["missing_asset"].chapters == [
+        "Piran",
+        "Triglav-Nationalpark",
+        "Ptuj",
+    ]
+    assert missing_clip_chapter_names(_SCREENSHOT_BLOB) == [
+        "Piran",
+        "Triglav-Nationalpark",
+        "Ptuj",
+    ]
+    assert match_named_chapters(
+        ["piran", "Ptuj", "fehlt"],
+        ["Piran", "Ptuj", "Kropa"],
+    ) == ["Piran", "Ptuj"]
     assert "other" not in by_cat
 
     grouped = format_grouped_timing_errors(_SCREENSHOT_BLOB)
