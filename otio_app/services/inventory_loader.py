@@ -248,7 +248,7 @@ def _resolve_cached_asset(
 
 
 def _is_prunable_ghost_supplement(asset: AssetMediaAnalysis) -> bool:
-    """True für beschaffte Zeilen, die ohne Datei nicht im Inventar bleiben dürfen."""
+    """True für beschaffte Zeilen, deren Pfad wir bei Bedarf neu auflösen."""
     if is_supplement_asset(asset):
         return True
     aid = str(getattr(asset, "asset_id", "") or "").strip().casefold()
@@ -286,12 +286,13 @@ def filter_unresolvable_supplement_assets(
     folder_name: str,
     item: AssetFolderAnalysis,
 ) -> tuple[AssetFolderAnalysis, list[AssetMediaAnalysis]]:
-    """Entfernt Supplement-Zeilen ohne Datei; korrigiert gefundene Pfade.
+    """Korrigiert gefundene Pfade. Zeilen ohne Datei bleiben stehen.
 
-    Originale bleiben unangetastet. Rückgabe: (Inventar, entfernte Zeilen).
+    Originale bleiben unangetastet. Es werden keine IDs mehr gelöscht — sonst
+    fehlen Shots in Timing/Export, ohne dass die Lücke sichtbar wird.
+    Rückgabe: (Inventar, entfernte Zeilen) — die entfernte Liste ist immer leer.
     """
     kept: list[AssetMediaAnalysis] = []
-    dropped: list[AssetMediaAnalysis] = []
     changed = False
     for asset in item.assets or []:
         if not _is_prunable_ghost_supplement(asset):
@@ -299,8 +300,7 @@ def filter_unresolvable_supplement_assets(
             continue
         resolved = _resolved_supplement_or_none(project, folder_name, asset)
         if resolved is None:
-            dropped.append(asset)
-            changed = True
+            kept.append(asset)
             continue
         if resolved.path != asset.path:
             changed = True
@@ -309,11 +309,10 @@ def filter_unresolvable_supplement_assets(
     if not changed:
         return item, []
 
-    dropped_paths = {asset.path for asset in dropped}
     media_files: list[str] = []
     seen: set[str] = set()
     for path in item.media_files or []:
-        if path in dropped_paths or path in seen:
+        if path in seen:
             continue
         media_files.append(path)
         seen.add(path)
@@ -331,18 +330,17 @@ def filter_unresolvable_supplement_assets(
             "description": _folder_summary_from_assets(kept),
         }
     )
-    return updated, dropped
+    return updated, []
 
 
 def prune_unresolvable_supplement_assets(
     project: Project,
     folder_name: str,
 ) -> list[str]:
-    """Löscht Inventar-/Slim-Zeilen für beschaffte Assets ohne Datei.
+    """Korrigiert Inventar-Pfade, wenn die Datei noch auffindbar ist.
 
-    Wenn die Datei unter Clean oder in einer anderen Sprache liegt, bleibt die
-    Zeile und der Pfad wird korrigiert. Sonst fliegt die ID raus, damit der
-    LLM-Cut sie nicht erneut als lokales Asset vergibt.
+    IDs ohne Datei bleiben stehen. Frühere Versionen haben solche Zeilen
+    gelöscht — das hat Schnitte und OTIO-Lücken still zerstört.
     """
     inventory_path = get_folder_inventory_path(project.work_dir_path, folder_name)
     item = load_folder_inventory_file(inventory_path)
@@ -354,18 +352,6 @@ def prune_unresolvable_supplement_assets(
     if not dropped and updated is item:
         return []
 
-    for asset in dropped:
-        try:
-            cache_file = media_cache_path(
-                project,
-                folder_name,
-                Path(asset.path),
-                scope=CACHE_SCOPE_SUPPLEMENT,
-            )
-            cache_file.unlink(missing_ok=True)
-        except OSError:
-            pass
-
     try:
         save_folder_inventory(inventory_path, updated)
     except OSError:
@@ -373,6 +359,13 @@ def prune_unresolvable_supplement_assets(
             str(asset.asset_id or "").strip() or asset.path for asset in dropped
         ]
     return [str(asset.asset_id or "").strip() or asset.path for asset in dropped]
+
+
+def _supplement_preserve_key(asset: AssetMediaAnalysis) -> str:
+    aid = str(asset.asset_id or "").strip()
+    if aid:
+        return f"id:{aid.casefold()}"
+    return f"path:{asset.path}"
 
 
 def _supplement_assets_to_preserve(
@@ -385,39 +378,50 @@ def _supplement_assets_to_preserve(
     Zwei Quellen, damit ein einmal beschafftes Asset nicht an einer einzelnen
     Datei hängt: die vorherige Inventar-JSON und der Supplement-Cache. Letzterer
     holt Zeilen zurück, die eine ältere Programmversion bereits entfernt hat.
-    Zeilen ohne auffindbare Datei werden nicht übernommen — sonst vergibt der
-    LLM-Cut tot IDs und Python Timing scheitert an „Unbekannte Asset-ID“.
+    Auch Zeilen ohne Datei bleiben erhalten — sonst fehlen IDs still.
     """
     from otio_app.services.cut_plan_inventory_bridge import is_external_inventory_media_path
 
     primary_paths = {asset.path for asset in primary_assets}
+    primary_ids = {
+        str(asset.asset_id or "").strip().casefold()
+        for asset in primary_assets
+        if str(asset.asset_id or "").strip()
+    }
     preserved: dict[str, AssetMediaAnalysis] = {}
+
+    def _keep(asset: AssetMediaAnalysis) -> None:
+        aid = str(asset.asset_id or "").strip().casefold()
+        if aid and aid in primary_ids:
+            return
+        if asset.path in primary_paths:
+            return
+        resolved = _resolved_supplement_or_none(project, folder_name, asset)
+        kept = resolved if resolved is not None else asset
+        key = _supplement_preserve_key(kept)
+        existing = preserved.get(key)
+        if existing is not None and resolved is None:
+            return
+        if (
+            existing is not None
+            and resolved is not None
+            and not is_successfully_analyzed(kept)
+        ):
+            return
+        preserved[key] = kept
 
     previous = load_folder_inventory_file(
         get_folder_inventory_path(project.work_dir_path, folder_name)
     )
     for asset in getattr(previous, "assets", None) or []:
-        if asset.path in primary_paths:
-            continue
         if not (
             is_supplement_asset(asset) or is_external_inventory_media_path(asset.path)
         ):
             continue
-        resolved = _resolved_supplement_or_none(project, folder_name, asset)
-        if resolved is None:
-            continue
-        preserved[resolved.path] = resolved
+        _keep(asset)
 
     for asset in scan_folder_supplement_cache_assets(project, folder_name):
-        if asset.path in primary_paths:
-            continue
-        resolved = _resolved_supplement_or_none(project, folder_name, asset)
-        if resolved is None:
-            continue
-        # Analysierter Cache schlägt eine ältere Inventarzeile.
-        if resolved.path in preserved and not is_successfully_analyzed(resolved):
-            continue
-        preserved[resolved.path] = resolved
+        _keep(asset)
 
     return list(preserved.values())
 
@@ -429,10 +433,8 @@ def _with_preserved_supplements(
 ) -> AssetFolderAnalysis:
     """Ergänzt fehlende Supplement-Zeilen aus Inventar-Historie und Cache.
 
-    Bereits geladene Zeilen bleiben stehen. Nur *zusätzliche* Zeilen ohne
-    auffindbare Datei werden nicht ergänzt. Ein Inventar-Rebuild darf Stock
-    nicht stillschweigend löschen — sonst fehlen IDs in Timing/Export, ohne
-    dass Python Timing einen Fehler zeigt.
+    Bereits geladene Zeilen bleiben stehen. Ein Inventar-Rebuild darf Stock
+    nicht stillschweigend löschen — sonst fehlen IDs in Timing/Export.
     """
     extras = _supplement_assets_to_preserve(project, folder_name, item.assets)
     if not extras:
