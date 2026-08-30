@@ -100,7 +100,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
 )
 from otio_app.services.without_voiceover_enhanced.timing_error_summary import (
     classify_timing_errors,
-    format_timing_error_overview,
+    timing_failure_headline,
 )
 from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
     UnifiedTimelineError,
@@ -1411,31 +1411,48 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         return draft
 
 
-def _render_timing_error_summary(messages) -> None:
+def _render_timing_group_body(group) -> None:
+    st.markdown(f"**Was los ist:** {group.explanation}")
+    st.markdown(f"**Was du tun kannst:** {group.next_step}")
+    for item in group.items[:40]:
+        st.markdown(f"- {item}")
+    if len(group.items) > 40:
+        st.caption(f"… +{len(group.items) - 40} weitere")
+
+
+def _render_timing_error_summary(messages, *, nested: bool = False) -> None:
     """Gruppierte, verständliche Timing-Fehler statt Roh-Blob."""
     groups = classify_timing_errors(messages)
     if not groups:
+        text = str(messages or "").strip()
+        if text:
+            st.error(text)
         return
-    overview = format_timing_error_overview(messages)
-    st.error(
-        "**Python-Timing: Probleme gefunden** "
-        "(LLM-Plan bleibt erhalten).\n\n"
-        f"{overview}"
-    )
-    st.caption(
-        "Kurz: Das LLM plant redaktionell ohne exakte Sekunden. "
-        "Python prüft danach echte Clip-Dauern gegen die Narration — "
-        "zu kurze Clips sind Planungs-/Dauer-Konflikte, kein falsches Datei-Mapping."
-    )
+    headline = timing_failure_headline(messages)
+    if nested:
+        st.markdown(f"**{headline}**")
+        for group in groups:
+            st.markdown(f"**{group.title}** · {len(group.items)}")
+            _render_timing_group_body(group)
+        return
+    st.error(f"**{headline}**")
     for group in groups:
-        st.markdown(f"**{group.title}** · {len(group.items)}")
-        st.caption(group.explanation)
-        st.caption(f"Nächster Schritt: {group.next_step}")
-        with st.expander(f"Details ({len(group.items)})", expanded=len(groups) == 1):
-            for item in group.items[:40]:
-                st.markdown(f"- {item}")
-            if len(group.items) > 40:
-                st.caption(f"… +{len(group.items) - 40} weitere")
+        with st.expander(
+            f"{group.title} · {len(group.items)}",
+            expanded=True,
+        ):
+            _render_timing_group_body(group)
+
+
+def _render_chapter_timing_error(exc: Exception) -> None:
+    """Batch- oder Kapitel-Timing-Fehler in denselben Gruppen zeigen."""
+    text = str(exc or "").strip()
+    if not text:
+        return
+    if classify_timing_errors(exc):
+        _render_timing_error_summary(exc)
+        return
+    st.error(text)
 
 
 def _render_slim_status(project) -> None:
@@ -2060,10 +2077,12 @@ def _render_chapter_cut_rows(
                         f"Fehler „{folder}“ ({len(resolved.errors)})",
                         expanded=False,
                     ):
-                        _render_timing_error_summary(resolved.errors)
+                        _render_timing_error_summary(
+                            resolved.errors, nested=True
+                        )
                 st.rerun()
             except ChapterCutError as exc:
-                st.error(str(exc))
+                _render_chapter_timing_error(exc)
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Timing-Fehler ({folder}): {exc}")
 
@@ -2198,7 +2217,7 @@ def _render_chapter_cut_rows(
                 expanded=False,
             ):
                 if status.errors:
-                    _render_timing_error_summary(status.errors)
+                    _render_timing_error_summary(status.errors, nested=True)
                 for note in status.repairs[:30]:
                     st.caption(note)
 
@@ -2516,7 +2535,7 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
                 }
             st.rerun()
         except ChapterCutError as exc:
-            st.error(str(exc))
+            _render_chapter_timing_error(exc)
         except Exception as exc:  # noqa: BLE001
             st.error(f"Timing-Fehler: {exc}")
         finally:
@@ -2637,7 +2656,7 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             with st.expander(
                 f"Globale Timing-Fehler ({len(resolved.errors)})", expanded=False
             ):
-                _render_timing_error_summary(resolved.errors)
+                _render_timing_error_summary(resolved.errors, nested=True)
 
     merge_report = load_model(gap_merge_report_path(project), GapMergeReport)
     if merge_report is not None:
