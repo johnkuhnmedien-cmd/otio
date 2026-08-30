@@ -98,6 +98,11 @@ def render_cut_plan_defaults_form(
         value=bool(current.enable_unified_mini_repair),
         key=_k(key_suffix, "mini_repair"),
         disabled=cut_plan_mode != CUT_PLAN_MODE_UNIFIED,
+        help=(
+            "Nicht für zu kurze Clips. Extra-LLM nach Gap-Merge, nur wenn zu "
+            "viele offene Lücken da sind. Mini-Lücken unter 1s löst Python "
+            "Timing über „Toleranz Asset zu kurz“."
+        ),
     )
     unified_mini_repair_threshold = st.number_input(
         "Mini-Repair-Schwellwert",
@@ -218,6 +223,10 @@ def render_cut_plan_defaults_form(
             value=float(current.short_asset_tolerance_sec),
             step=0.5,
             key=_k(key_suffix, "short_tol"),
+            help=(
+                "Fehlt höchstens so viel Dauer: Python verlängert den Clip "
+                "davor und/oder danach (möglichst hälftig). Default 1s."
+            ),
         )
     with col2:
         max_asset_usage = st.number_input(
