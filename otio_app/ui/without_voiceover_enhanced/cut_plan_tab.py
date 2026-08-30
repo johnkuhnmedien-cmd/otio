@@ -791,7 +791,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 "offene Lücken/Reviews da sind: ein extra LLM-Lauf ändert "
                 "betroffene Slots ± Nachbarn. Default aus. "
                 "Mini-Lücken unter 1s löst Python Timing selbst "
-                "(Einstellung „Toleranz Asset zu kurz“)."
+                "(Einstellung „Toleranz Asset zu kurz“): erst Nachbarn, "
+                "dann deren Nachbarn."
             ),
             disabled=cut_plan_mode != CUT_PLAN_MODE_UNIFIED,
         )
@@ -946,9 +947,10 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 key=f"enh_opt_short_tol_{project.id}",
                 help=(
                     "Fehlt dem Asset höchstens so viel nutzbare Dauer (Default 1s): "
-                    "Python kürzt den Slot und verlängert den Clip davor und/oder "
-                    "danach — möglichst hälftig, z. B. je 0,5s. Darüber: "
-                    "roter Shortfall/Placeholder."
+                    "Python kürzt den Slot und verlängert zuerst den Clip davor "
+                    "und/oder danach (möglichst hälftig). Reicht das nicht, "
+                    "wandern die Mini-Zeit auf die nächsten Clips daneben. "
+                    "Darüber: roter Shortfall/Placeholder."
                 ),
             )
         with col2:
