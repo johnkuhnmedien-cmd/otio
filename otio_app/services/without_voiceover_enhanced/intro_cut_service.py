@@ -783,13 +783,17 @@ def resolve_intro_timeline(
     )
 
     intro_resolved = _reconcile_chapter_envelope_ends(intro_resolved)
-    blockers = production_blocking_placeholder_labels(intro_resolved)
+    blockers = production_blocking_placeholder_labels(
+        intro_resolved, folder_name="Intro", project=project
+    )
     if blockers:
         preview = ", ".join(blockers[:8])
         more = f" (+{len(blockers) - 8})" if len(blockers) > 8 else ""
+        write_json(intro_resolved_timeline_path(project), intro_resolved)
         raise IntroCutError(
             "Intro-Timing nicht exportfähig: Placeholder/Shortfall "
-            f"({preview}{more}). Längeres Material, dann Timing erneut."
+            f"({preview}{more}). Unter „Zu kurze Clips ansehen“ liegt das "
+            "vorgesehene Video. Längeres Material, dann Timing erneut."
         )
     write_json(intro_resolved_timeline_path(project), intro_resolved)
     return intro_resolved

@@ -239,6 +239,7 @@ def test_chapter_status_shortfall_tails_are_not_export_ready() -> None:
     assert not chapter_resolved_matches_plan(plan, resolved)
     detail = chapter_timing_mismatch_detail(plan, resolved)
     assert "Placeholder" in detail or "Shortfall" in detail or "Asset zu kurz" in detail
+    assert "asset_a" in detail
 
 
 def test_chapter_status_matches_ignores_closing_fallback() -> None:
@@ -1119,4 +1120,4 @@ def test_resolve_chapter_timeline_fails_when_shortfall_remains(tmp_path) -> None
     ):
         with pytest.raises(ChapterCutError, match="Shortfall"):
             resolve_chapter_timeline(project, "Yosemite")
-    assert not chapter_resolved_timeline_path(project, "Yosemite").is_file()
+    assert chapter_resolved_timeline_path(project, "Yosemite").is_file()
