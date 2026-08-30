@@ -574,6 +574,166 @@ def test_sync_uses_slot_id_not_llm_counter_gap_id(tmp_path: Path) -> None:
     assert "Piran_gap_001" not in status.filled_gap_ids
 
 
+def _piran_none_plan() -> UnifiedCutPlanDocument:
+    return UnifiedCutPlanDocument(
+        script_version="script-v1",
+        boundaries=[
+            CutBoundary(cut_id="b0", sentence_id="p__s001", position="start"),
+            CutBoundary(cut_id="b1", sentence_id="p__s002", position="end"),
+        ],
+        slots=[
+            CutSlot(
+                slot_id="Piran_slot_011",
+                local_asset_id=None,
+                asset_fit="none",
+                coverage_gap_id="Piran_gap_001",
+                needed_visual="Sečovlje salt harvesting",
+                search_concepts=["salt pans", "sečovlje harvest"],
+                asset_fit_reason="no matching local clip",
+            )
+        ],
+    )
+
+
+def test_migrate_merges_llm_counter_fill_onto_slot_id(tmp_path: Path) -> None:
+    """Alte erfüllte ID + neue offene Slot-ID werden eine erfüllte Lücke."""
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        chapter_unified_cut_plan_path,
+        supplement_funnel_report_path,
+    )
+
+    project = _project(tmp_path)
+    write_json(chapter_unified_cut_plan_path(project, "Piran"), _piran_none_plan())
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id="run_keep",
+            gaps=[
+                CoverageGap(
+                    gap_id="Piran_gap_001",
+                    needed_visual="Sečovlje salt harvesting",
+                    priority="high",
+                    related_shot_ids=["Piran_slot_011"],
+                ),
+                CoverageGap(
+                    gap_id="gap_Piran_slot_011",
+                    needed_visual="Sečovlje salt harvesting",
+                    priority="high",
+                    related_shot_ids=["Piran_slot_011"],
+                ),
+            ],
+        ),
+    )
+    write_json(
+        supplement_funnel_report_path(project),
+        SupplementFunnelReport(
+            run_id="funnel_x",
+            script_version="script-v1",
+            cut_plan_run_id="run_keep",
+            gaps=[
+                SupplementFunnelGapReport(
+                    gap_id="Piran_gap_001",
+                    filled=True,
+                    export_ready_candidate_id="cand_salt",
+                )
+            ],
+            filled_gap_ids=["Piran_gap_001"],
+            open_gap_ids=["gap_Piran_slot_011"],
+        ),
+    )
+
+    status = summarize_gap_status(project)
+
+    assert status.total == 1
+    assert status.open_gap_ids == []
+    assert status.filled_gap_ids == ["gap_Piran_slot_011"]
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    assert coverage is not None
+    assert [gap.gap_id for gap in coverage.gaps] == ["gap_Piran_slot_011"]
+
+
+def test_migrate_keeps_placeholder_slot_open(tmp_path: Path) -> None:
+    """Timing-Platzhalter ohne Clip: alter Fill darf die Slot-Lücke nicht schließen."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        ResolvedShot,
+        ResolvedTimelineDocument,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        chapter_resolved_timeline_path,
+        chapter_unified_cut_plan_path,
+        supplement_funnel_report_path,
+    )
+
+    project = _project(tmp_path)
+    write_json(chapter_unified_cut_plan_path(project, "Piran"), _piran_none_plan())
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id="run_keep",
+            gaps=[
+                CoverageGap(
+                    gap_id="Piran_gap_001",
+                    needed_visual="old fill",
+                    priority="high",
+                ),
+                CoverageGap(
+                    gap_id="gap_Piran_slot_011",
+                    needed_visual="Sečovlje salt harvesting",
+                    priority="high",
+                    related_shot_ids=["Piran_slot_011"],
+                ),
+            ],
+        ),
+    )
+    write_json(
+        supplement_funnel_report_path(project),
+        SupplementFunnelReport(
+            run_id="funnel_x",
+            script_version="script-v1",
+            cut_plan_run_id="run_keep",
+            gaps=[
+                SupplementFunnelGapReport(
+                    gap_id="Piran_gap_001",
+                    filled=True,
+                    export_ready_candidate_id="cand_old",
+                )
+            ],
+            filled_gap_ids=["Piran_gap_001"],
+        ),
+    )
+    write_json(
+        chapter_resolved_timeline_path(project, "Piran"),
+        ResolvedTimelineDocument(
+            script_version="script-v1",
+            fps=25.0,
+            total_duration_seconds=8.0,
+            shots=[
+                ResolvedShot(
+                    shot_id="Piran_slot_011",
+                    asset_id="",
+                    timeline_start_seconds=0.0,
+                    timeline_end_seconds=8.0,
+                    source_start_seconds=0.0,
+                    source_end_seconds=0.0,
+                    is_placeholder=True,
+                    hold_mode="placeholder_slate",
+                    open_gap=True,
+                )
+            ],
+        ),
+    )
+
+    status = summarize_gap_status(project)
+
+    assert status.total == 1
+    assert status.open_gap_ids == ["gap_Piran_slot_011"]
+    assert status.filled_gap_ids == []
+    assert "Piran_gap_001" not in status.open_gap_ids
+    assert "Piran_gap_001" not in status.filled_gap_ids
+
+
 def test_cut_plan_ui_lists_chapters_blocked_by_open_gaps() -> None:
     src = Path(
         "otio_app/ui/without_voiceover_enhanced/cut_plan_tab.py"
