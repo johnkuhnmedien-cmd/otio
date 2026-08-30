@@ -96,6 +96,66 @@ class AssetCatalog:
 
 
 _RESOLUTION_STEM_SUFFIX_RE = re.compile(r"_\d{3,5}x\d{3,5}$", re.IGNORECASE)
+_STILL_MEDIA_KINDS = frozenset({"image", "photo", "still"})
+
+
+def still_image_path_from_catalog_entry(
+    entry: dict[str, Any] | None,
+    media_path: Path | str | None = None,
+) -> Path | None:
+    """Echtes Foto hinter einem Katalogeintrag — nicht das 5s-Clean-MP4.
+
+    Motion-MP4s (auch falsch als ``image`` getaggt) liefern ``None``, damit
+    ffmpeg nicht ``-loop 1`` auf Video anwendet.
+    """
+    candidates: list[Path] = []
+    if entry:
+        raw = str(entry.get("original_image_path") or "").strip()
+        if raw:
+            candidates.append(Path(raw))
+        path_raw = str(entry.get("path") or "").strip()
+        if path_raw:
+            candidates.append(Path(path_raw))
+    if media_path is not None and str(media_path).strip():
+        candidates.append(Path(str(media_path)))
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if path.is_file() and is_image_media(path) and not is_video_media(path):
+                return path.resolve()
+        except OSError:
+            continue
+    return None
+
+
+def _catalog_still_image_for_paths(
+    project: Project,
+    folder: str,
+    *paths: Path | str | None,
+) -> Path | None:
+    """Foto-Original aus Inventarpfad oder Clean-Manifest."""
+    from otio_app.services.clean_media import original_still_image_for_clean
+
+    for raw in paths:
+        if raw is None or not str(raw).strip():
+            continue
+        path = Path(str(raw))
+        try:
+            if path.is_file() and is_image_media(path) and not is_video_media(path):
+                return path.resolve()
+        except OSError:
+            pass
+        try:
+            found = original_still_image_for_clean(project, folder, path)
+        except Exception:  # noqa: BLE001
+            found = None
+        if found is not None:
+            return found
+    return None
 
 
 def _resolve_local_path(project: Project, raw: str | Path) -> Path:
@@ -429,8 +489,15 @@ def _probe_entry(
     fps: float,
     known_duration: float | None = None,
     probe_cache: dict[str, dict] | None = None,
+    original_image_path: Path | None = None,
 ) -> dict:
-    kind = "image" if is_image_media(path) or media_type_hint in {"photo", "image"} else "video"
+    hint = str(media_type_hint or "").strip().lower()
+    still_original = original_image_path
+    if still_original is None and is_image_media(path) and not is_video_media(path):
+        still_original = path
+    is_still = still_original is not None or hint in _STILL_MEDIA_KINDS
+    kind = "image" if is_still else "video"
+    type_label = "photo" if kind == "image" else (hint or "video")
     try:
         cache_key = str(path.expanduser().resolve())
     except OSError:
@@ -440,8 +507,10 @@ def _probe_entry(
         cached = dict(probe_cache[cache_key])
         cached["folder"] = folder
         cached["canonical_id"] = asset_id
-        cached["media_type"] = media_type_hint or cached.get("media_type") or kind
+        cached["media_type"] = type_label or cached.get("media_type") or kind
         cached["media_kind"] = kind
+        if still_original is not None:
+            cached["original_image_path"] = str(still_original)
         if usable_in is not None:
             cached["usable_in_s"] = float(usable_in)
         return cached
@@ -477,12 +546,14 @@ def _probe_entry(
         "duration_seconds": float(duration) if duration else None,
         "usable_in_s": float(usable_in) if usable_in is not None else None,
         "folder": folder,
-        "media_type": media_type_hint or kind,
+        "media_type": type_label,
         "media_kind": kind,
         "available_start_seconds": start_sec,
         "media_rate": rate,
         "canonical_id": asset_id,
     }
+    if still_original is not None:
+        entry["original_image_path"] = str(still_original)
     if probe_cache is not None:
         probe_cache[cache_key] = dict(entry)
     return entry
@@ -664,9 +735,15 @@ def build_asset_catalog(
             if duration is None:
                 duration = getattr(asset, "duration_seconds", None)
             usable_in = getattr(asset, "usable_in_s", None)
-            media_type = getattr(asset, "media_type", None) or (
-                "photo" if is_image_media(path) else "video"
+            still_original = _catalog_still_image_for_paths(
+                project, folder, inventory_path, path, raw_path
             )
+            if still_original is not None:
+                media_type = "photo"
+            else:
+                media_type = getattr(asset, "media_type", None) or (
+                    "photo" if is_image_media(path) else "video"
+                )
             entry = _probe_entry(
                 project,
                 path=path,
@@ -677,6 +754,7 @@ def build_asset_catalog(
                 fps=fps,
                 known_duration=float(duration) if duration is not None else None,
                 probe_cache=probe_cache,
+                original_image_path=still_original,
             )
             if duration is not None and entry["duration_seconds"] is None:
                 entry["duration_seconds"] = float(duration)
@@ -749,6 +827,9 @@ def build_asset_catalog(
                 if canonical in result.by_id:
                     continue
                 register_id = stem_legacy or canonical
+                still_original = _catalog_still_image_for_paths(
+                    project, folder, media_path, path
+                )
                 entry = _probe_entry(
                     project,
                     path=path,
@@ -756,10 +837,13 @@ def build_asset_catalog(
                     asset_id=register_id,
                     usable_in=None,
                     media_type_hint=(
-                        "photo" if is_image_media(path) else "video"
+                        "photo"
+                        if still_original is not None or is_image_media(path)
+                        else "video"
                     ),
                     fps=fps,
                     probe_cache=probe_cache,
+                    original_image_path=still_original,
                 )
                 entry["canonical_id"] = register_id
                 _register(
@@ -2408,15 +2492,17 @@ def _resolve_shot_media(
     hold_mode = ""
     resolved_path = media_path
 
-    # Dateityp entscheidet — fehlende/0-Dauer darf ein MP4 nicht zum Still machen.
-    # Sonst ruft ffmpeg -loop 1 auf Video auf ("Option loop not found").
-    treat_as_still = is_image_media(media_path) and not is_video_media(media_path)
+    # Echte Fotos halten die Slot-Dauer — auch wenn Clean daraus ein 5s-MP4
+    # gemacht hat. Motion-MP4s (Győr: Dauer 0, fälschlich image getaggt) dürfen
+    # nicht über ffmpeg ``-loop 1``.
+    still_source = still_image_path_from_catalog_entry(entry, media_path)
+    treat_as_still = still_source is not None
     if treat_as_still:
         # Stills: Hold-Video über die volle Timeline-Dauer (Resolve-sicher).
         try:
             hold_path = ensure_still_hold_video(
                 project,
-                media_path,
+                still_source,
                 duration_seconds=max(duration, TECH_MIN_SHOT_SECONDS),
                 fps=fps,
             )

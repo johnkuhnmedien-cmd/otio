@@ -104,6 +104,36 @@ def test_still_closing_detected_from_jpeg_suffix_when_media_type_empty(
     assert "still" in reason
 
 
+def test_still_closing_holds_when_catalog_path_is_clean_mp4(tmp_path: Path) -> None:
+    jpeg = _jpeg(tmp_path / "Škocjan-Höhlen_Asset00009.jpeg")
+    clean = tmp_path / "Škocjan-Höhlen_Asset00009.mp4"
+    clean.write_bytes(b"\x00" * 32)
+    catalog = AssetCatalog()
+    catalog.by_id["asset_kocjan_h_hlen_asset00009"] = {
+        "path": str(clean),
+        "duration_seconds": 5.0,
+        "folder": "Škocjan-Höhlen",
+        "media_type": "video",
+        "media_kind": "video",
+        "original_image_path": str(jpeg),
+        "canonical_id": "asset_kocjan_h_hlen_asset00009",
+    }
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.keyword_flow_closing."
+        "validate_local_media_path",
+        return_value=("export_ready", None),
+    ) as validate_mock:
+        ok, reason, _ = assess_closing_asset_technical(
+            catalog,
+            "asset_kocjan_h_hlen_asset00009",
+            min_duration_seconds=10.3,
+        )
+    assert ok is True
+    assert "still" in reason
+    assert Path(validate_mock.call_args.args[0]).resolve() == jpeg.resolve()
+    assert validate_mock.call_args.kwargs["media_type"] == "photo"
+
+
 def test_short_video_closing_still_rejected(tmp_path: Path) -> None:
     catalog = _catalog_short_video(tmp_path)
     with patch(

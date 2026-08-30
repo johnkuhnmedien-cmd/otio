@@ -5,14 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from otio_app.services.media_utils import is_image_media
+from otio_app.services.media_utils import is_image_media, is_video_media
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
     STATUS_EXPORT_READY,
     is_http_url,
     validate_local_media_path,
 )
 from otio_app.services.without_voiceover_enhanced.models import UnifiedCutPlanDocument
-from otio_app.services.without_voiceover_enhanced.timeline_resolver import AssetCatalog
+from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+    AssetCatalog,
+    still_image_path_from_catalog_entry,
+)
 
 
 class KeywordFlowClosingError(ValueError):
@@ -25,6 +28,17 @@ _STILL_MEDIA_KINDS = frozenset({"image", "photo"})
 
 def _is_still_catalog_entry(entry: dict[str, Any]) -> bool:
     """True für Standbilder — die können den Closing-Slot per Hold tragen."""
+    still = still_image_path_from_catalog_entry(entry)
+    if still is not None:
+        return True
+    original = str(entry.get("original_image_path") or "").strip()
+    if original:
+        try:
+            orig = Path(original)
+            if is_image_media(orig) and not is_video_media(orig):
+                return True
+        except OSError:
+            pass
     kind = str(entry.get("media_kind") or "").strip().lower()
     media_type = str(entry.get("media_type") or "").strip().lower()
     if kind in _STILL_MEDIA_KINDS or media_type in _STILL_MEDIA_KINDS:
@@ -67,9 +81,17 @@ def assess_closing_asset_technical(
             entry,
         )
     media_type = str(entry.get("media_type") or entry.get("media_kind") or "video")
-    if _is_still_catalog_entry(entry):
-        # Inventar hat oft leeres media_type — Stills nicht als Video validieren.
+    still_source = still_image_path_from_catalog_entry(entry)
+    if still_source is not None:
         media_type = "photo"
+        path_text = str(still_source)
+    elif _is_still_catalog_entry(entry):
+        # Inventar hat oft leeres media_type — Stills nicht als Video validieren.
+        # Clean-MP4 eines Fotos ohne auffindbares Original: Datei als Video prüfen.
+        if is_video_media(Path(path_text)):
+            media_type = "video"
+        else:
+            media_type = "photo"
     status, detail = validate_local_media_path(path_text, media_type=media_type)
     if status != STATUS_EXPORT_READY:
         return False, detail or status, entry

@@ -1294,6 +1294,41 @@ def _entry_for_original(
     return None
 
 
+def original_still_image_for_clean(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+) -> Path | None:
+    """Foto-Original, wenn Clean aus einem Standbild entstanden ist.
+
+    Clean transkodiert JPEGs zu einem 5s-MP4. Timing darf das nicht als
+    Motion-Video mit fester Nutzdauer behandeln.
+    """
+    try:
+        resolved = media_path.expanduser()
+    except OSError:
+        resolved = Path(str(media_path))
+    if resolved.is_file() and is_image_media(resolved) and not is_video_media(resolved):
+        try:
+            return resolved.resolve()
+        except OSError:
+            return resolved
+    try:
+        manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
+    except Exception:  # noqa: BLE001
+        manifest = None
+    entry = _entry_for_original(manifest, resolved)
+    if entry is None or not str(entry.original_path or "").strip():
+        return None
+    original = Path(entry.original_path).expanduser()
+    try:
+        if original.is_file() and is_image_media(original) and not is_video_media(original):
+            return original.resolve()
+    except OSError:
+        return None
+    return None
+
+
 def resolve_effective_media_path(
     project: Project,
     folder_name: str,
