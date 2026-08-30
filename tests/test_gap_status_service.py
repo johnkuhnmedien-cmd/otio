@@ -63,14 +63,14 @@ def _plan() -> UnifiedCutPlanDocument:
                 slot_id="A_slot_weak",
                 local_asset_id="loc_weak",
                 asset_fit="weak",
-                coverage_gap_id="gap_weak",
+                coverage_gap_id="gap_A_slot_weak",
                 needed_visual="better light",
             ),
             CutSlot(
                 slot_id="A_slot_none",
                 local_asset_id=None,
                 asset_fit="none",
-                coverage_gap_id="gap_none",
+                coverage_gap_id="gap_A_slot_none",
                 needed_visual="street",
             ),
         ],
@@ -101,24 +101,24 @@ def test_weak_closes_when_funnel_export_ready(tmp_path: Path) -> None:
             cut_plan_run_id=coverage.cut_plan_run_id,
             gaps=[
                 SupplementFunnelGapReport(
-                    gap_id="gap_weak",
+                    gap_id="gap_A_slot_weak",
                     filled=True,
                     export_ready_candidate_id="cand_weak",
                 ),
                 SupplementFunnelGapReport(
-                    gap_id="gap_none",
+                    gap_id="gap_A_slot_none",
                     filled=True,
                     export_ready_candidate_id="cand_none",
                 ),
             ],
-            filled_gap_ids=["gap_weak", "gap_none"],
+            filled_gap_ids=["gap_A_slot_weak", "gap_A_slot_none"],
         ),
     )
 
     status = summarize_gap_status(project)
     assert status.total == 2
     assert status.open_count == 0
-    assert set(status.filled_gap_ids) == {"gap_weak", "gap_none"}
+    assert set(status.filled_gap_ids) == {"gap_A_slot_weak", "gap_A_slot_none"}
 
 
 def test_accepted_export_ready_closes_gap_without_funnel_entry(
@@ -146,7 +146,7 @@ def test_accepted_export_ready_closes_gap_without_funnel_entry(
                 StockCandidate(
                     candidate_id="cand_prev",
                     provider="pexels",
-                    gap_id="gap_weak",
+                    gap_id="gap_A_slot_weak",
                     media_validation_status="export_ready",
                     cut_plan_run_id=coverage.cut_plan_run_id,
                     local_media_path="/tmp/prev.mp4",
@@ -156,8 +156,8 @@ def test_accepted_export_ready_closes_gap_without_funnel_entry(
     )
 
     status = summarize_gap_status(project)
-    assert "gap_weak" in status.filled_gap_ids
-    assert "gap_none" in status.open_gap_ids
+    assert "gap_A_slot_weak" in status.filled_gap_ids
+    assert "gap_A_slot_none" in status.open_gap_ids
     assert status.filled_count == 1
     assert status.open_count == 1
 
@@ -176,12 +176,12 @@ def test_weak_closes_only_after_merge_decision(tmp_path: Path) -> None:
             slots=[
                 GapMergeSlotResult(
                     shot_id="A_slot_weak",
-                    coverage_gap_id="gap_weak",
+                    coverage_gap_id="gap_A_slot_weak",
                     status="kept_local_weak",
                 ),
                 GapMergeSlotResult(
                     shot_id="A_slot_none",
-                    coverage_gap_id="gap_none",
+                    coverage_gap_id="gap_A_slot_none",
                     status="merged",
                 ),
             ],
@@ -190,7 +190,7 @@ def test_weak_closes_only_after_merge_decision(tmp_path: Path) -> None:
 
     status = summarize_gap_status(project)
     assert status.open_count == 0
-    assert set(status.filled_gap_ids) == {"gap_weak", "gap_none"}
+    assert set(status.filled_gap_ids) == {"gap_A_slot_weak", "gap_A_slot_none"}
 
 
 def test_stale_funnel_without_accepted_does_not_count_as_filled(
@@ -210,20 +210,20 @@ def test_stale_funnel_without_accepted_does_not_count_as_filled(
             cut_plan_run_id="stale_run_id",
             gaps=[
                 SupplementFunnelGapReport(
-                    gap_id="gap_none",
+                    gap_id="gap_A_slot_none",
                     filled=True,
                     export_ready_candidate_id="old_cand",
                 )
             ],
-            filled_gap_ids=["gap_none"],
+            filled_gap_ids=["gap_A_slot_none"],
         ),
     )
 
     status = summarize_gap_status(project)
     assert status.funnel_stale is True
-    assert "gap_none" in status.open_gap_ids
+    assert "gap_A_slot_none" in status.open_gap_ids
     assert status.filled_count == 0
-    assert list_open_funnel_gap_ids(project) == ["gap_weak", "gap_none"]
+    assert list_open_funnel_gap_ids(project) == ["gap_A_slot_weak", "gap_A_slot_none"]
 
 
 def test_restore_accepted_from_funnel_when_accepted_was_purged(
@@ -246,7 +246,7 @@ def test_restore_accepted_from_funnel_when_accepted_was_purged(
     write_json(coverage_gaps_path(project), coverage)
 
     media_dir = stock_candidate_download_dir(
-        project, gap_id="gap_none", candidate_id="pexels_video_restore"
+        project, gap_id="gap_A_slot_none", candidate_id="pexels_video_restore"
     )
     media_dir.mkdir(parents=True)
     media = media_dir / "pexels_video_restore.mp4"
@@ -258,10 +258,10 @@ def test_restore_accepted_from_funnel_when_accepted_was_purged(
             run_id="funnel_old",
             script_version="script-v1",
             cut_plan_run_id="old_run",
-            filled_gap_ids=["gap_none"],
+            filled_gap_ids=["gap_A_slot_none"],
             gaps=[
                 SupplementFunnelGapReport(
-                    gap_id="gap_none",
+                    gap_id="gap_A_slot_none",
                     filled=True,
                     export_ready_candidate_id="pexels_video_restore",
                     candidates=[
@@ -278,7 +278,7 @@ def test_restore_accepted_from_funnel_when_accepted_was_purged(
     )
 
     status = summarize_gap_status(project)
-    assert "gap_none" in status.filled_gap_ids
+    assert "gap_A_slot_none" in status.filled_gap_ids
     assert "wiederhergestellt" in (status.message or "").lower() or status.filled_count >= 1
     accepted = load_model(
         accepted_supplements_path(project), AcceptedSupplementsDocument
@@ -310,7 +310,7 @@ def test_accepted_with_old_run_id_rebinds_to_current_plan(tmp_path: Path) -> Non
                 StockCandidate(
                     candidate_id="cand_manual",
                     provider="manual",
-                    gap_id="gap_none",
+                    gap_id="gap_A_slot_none",
                     media_validation_status="export_ready",
                     cut_plan_run_id="old_run_before_llm_recut",
                     local_media_path="/tmp/manual.mp4",
@@ -318,7 +318,7 @@ def test_accepted_with_old_run_id_rebinds_to_current_plan(tmp_path: Path) -> Non
                 StockCandidate(
                     candidate_id="cand_weak",
                     provider="pexels",
-                    gap_id="gap_weak",
+                    gap_id="gap_A_slot_weak",
                     media_validation_status="export_ready",
                     cut_plan_run_id="old_run_before_llm_recut",
                     local_media_path="/tmp/weak.mp4",
@@ -332,15 +332,15 @@ def test_accepted_with_old_run_id_rebinds_to_current_plan(tmp_path: Path) -> Non
             run_id="funnel_old",
             script_version="script-v1",
             cut_plan_run_id="old_run_before_llm_recut",
-            filled_gap_ids=["gap_none", "gap_weak"],
+            filled_gap_ids=["gap_A_slot_none", "gap_A_slot_weak"],
             gaps=[
                 SupplementFunnelGapReport(
-                    gap_id="gap_none",
+                    gap_id="gap_A_slot_none",
                     filled=True,
                     export_ready_candidate_id="cand_manual",
                 ),
                 SupplementFunnelGapReport(
-                    gap_id="gap_weak",
+                    gap_id="gap_A_slot_weak",
                     filled=True,
                     export_ready_candidate_id="cand_weak",
                 ),
@@ -350,7 +350,7 @@ def test_accepted_with_old_run_id_rebinds_to_current_plan(tmp_path: Path) -> Non
 
     status = summarize_gap_status(project)
     assert status.open_count == 0
-    assert set(status.filled_gap_ids) == {"gap_weak", "gap_none"}
+    assert set(status.filled_gap_ids) == {"gap_A_slot_weak", "gap_A_slot_none"}
     assert status.funnel_stale is False
     assert "Accepted-Fill" in (status.message or "")
 
@@ -377,10 +377,10 @@ def test_missing_funnel_run_id_treated_as_stale_when_coverage_has_run(
             run_id="funnel_legacy",
             script_version="script-v1",
             cut_plan_run_id="",  # alter Report
-            filled_gap_ids=["gap_none"],
+            filled_gap_ids=["gap_A_slot_none"],
             gaps=[
                 SupplementFunnelGapReport(
-                    gap_id="gap_none",
+                    gap_id="gap_A_slot_none",
                     filled=True,
                     export_ready_candidate_id="legacy",
                 )
@@ -390,8 +390,8 @@ def test_missing_funnel_run_id_treated_as_stale_when_coverage_has_run(
 
     status = summarize_gap_status(project)
     assert status.funnel_stale is True
-    assert "gap_none" in status.open_gap_ids
-    assert list_open_funnel_gap_ids(project) == ["gap_weak", "gap_none"]
+    assert "gap_A_slot_none" in status.open_gap_ids
+    assert list_open_funnel_gap_ids(project) == ["gap_A_slot_weak", "gap_A_slot_none"]
 
 
 def test_legacy_coverage_without_run_id_still_lists_open_gaps(tmp_path: Path) -> None:
@@ -501,7 +501,7 @@ def test_summarize_adds_plan_gaps_missing_from_coverage_json(tmp_path: Path) -> 
                 slot_id="A_slot_009",
                 local_asset_id=None,
                 asset_fit="none",
-                coverage_gap_id="gap_plan_only",
+                coverage_gap_id="gap_A_slot_009",
                 needed_visual="stork",
                 asset_fit_reason="Datei fehlt",
             )
@@ -514,7 +514,7 @@ def test_summarize_adds_plan_gaps_missing_from_coverage_json(tmp_path: Path) -> 
     status = summarize_gap_status(project)
 
     assert "gap_already_filled" in status.filled_gap_ids
-    assert "gap_plan_only" in status.open_gap_ids
+    assert "gap_A_slot_009" in status.open_gap_ids
     assert status.cut_plan_run_id == "run_keep"
     assert "nachgetragen" in (status.message or "")
 
@@ -522,9 +522,56 @@ def test_summarize_adds_plan_gaps_missing_from_coverage_json(tmp_path: Path) -> 
     assert coverage is not None
     assert {gap.gap_id for gap in coverage.gaps} == {
         "gap_already_filled",
-        "gap_plan_only",
+        "gap_A_slot_009",
     }
-    assert "gap_plan_only" in list_open_funnel_gap_ids(project)
+    assert "gap_A_slot_009" in list_open_funnel_gap_ids(project)
+
+
+def test_sync_uses_slot_id_not_llm_counter_gap_id(tmp_path: Path) -> None:
+    """Bestehende JSON mit Piran_gap_001 öffnet gap_Piran_slot_011 im Funnel."""
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        sync_missing_plan_gaps_into_coverage,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        chapter_unified_cut_plan_path,
+    )
+
+    project = _project(tmp_path)
+    plan = UnifiedCutPlanDocument(
+        script_version="script-v1",
+        boundaries=[
+            CutBoundary(cut_id="b0", sentence_id="p__s001", position="start"),
+            CutBoundary(cut_id="b1", sentence_id="p__s002", position="end"),
+        ],
+        slots=[
+            CutSlot(
+                slot_id="Piran_slot_011",
+                local_asset_id=None,
+                asset_fit="none",
+                coverage_gap_id="Piran_gap_001",
+                needed_visual="Sečovlje salt harvesting",
+                search_concepts=["salt pans", "sečovlje harvest"],
+                asset_fit_reason="no matching local clip",
+            )
+        ],
+    )
+    write_json(chapter_unified_cut_plan_path(project, "Piran"), plan)
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id="run_keep",
+            gaps=[],
+        ),
+    )
+
+    added = sync_missing_plan_gaps_into_coverage(project)
+    assert added == ["gap_Piran_slot_011"]
+
+    status = summarize_gap_status(project)
+    assert "gap_Piran_slot_011" in status.open_gap_ids
+    assert "Piran_gap_001" not in status.open_gap_ids
+    assert "Piran_gap_001" not in status.filled_gap_ids
 
 
 def test_cut_plan_ui_lists_chapters_blocked_by_open_gaps() -> None:

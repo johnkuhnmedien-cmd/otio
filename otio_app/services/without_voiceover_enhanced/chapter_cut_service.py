@@ -27,6 +27,10 @@ from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
     is_intro_folder_name,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
+from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+    canonical_coverage_gap_id,
+    canonicalize_plan_coverage_gap_ids,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     ResolvedAudioSegment,
     ResolvedChapterEnvelope,
@@ -111,12 +115,20 @@ def chapter_folder_slug(folder_name: str) -> str:
 
 
 def load_chapter_unified_plan(
-    project: Project, folder_name: str
+    project: Project,
+    folder_name: str,
+    *,
+    canonicalize_gap_ids: bool = True,
 ) -> UnifiedCutPlanDocument | None:
-    return load_model(
+    plan = load_model(
         chapter_unified_cut_plan_path(project, folder_name),
         UnifiedCutPlanDocument,
     )
+    if plan is None:
+        return None
+    if canonicalize_gap_ids:
+        return canonicalize_plan_coverage_gap_ids(plan)
+    return plan
 
 
 def load_chapter_resolved(
@@ -262,9 +274,11 @@ def chapter_open_gap_ids(
         fit = str(getattr(slot, "asset_fit", "") or "").strip().lower()
         if fit not in {"weak", "none"}:
             continue
-        gid = str(getattr(slot, "coverage_gap_id", "") or "").strip()
+        gid = canonical_coverage_gap_id(str(getattr(slot, "slot_id", "") or ""))
         if not gid:
-            gid = f"gap_{slot.slot_id}"
+            gid = str(getattr(slot, "coverage_gap_id", "") or "").strip()
+        if not gid:
+            continue
         if gid in filled or gid in seen:
             continue
         seen.add(gid)
@@ -496,12 +510,22 @@ def chapter_gap_ids(plan: UnifiedCutPlanDocument | None) -> list[str]:
     Aus den Slots gelesen statt aus dem Namen abgeleitet: der Merge vergibt
     keine Kapitel-Prefixe an Slot-IDs, ein Namensmuster wäre also nicht
     verlässlich.
+
+    Enthält die gespeicherte ID (auch LLM-Zähler wie ``Piran_gap_001``) und
+    die kanonische ``gap_{slot_id}``, damit ein Reset beide räumt.
     """
     out: list[str] = []
     for slot in getattr(plan, "slots", None) or []:
-        gap_id = str(getattr(slot, "coverage_gap_id", "") or "").strip()
-        if gap_id and gap_id not in out:
-            out.append(gap_id)
+        fit = str(getattr(slot, "asset_fit", "") or "").strip().lower()
+        stored = str(getattr(slot, "coverage_gap_id", "") or "").strip()
+        if stored and stored not in out:
+            out.append(stored)
+        if fit in {"weak", "none"}:
+            canonical = canonical_coverage_gap_id(
+                str(getattr(slot, "slot_id", "") or "")
+            )
+            if canonical and canonical not in out:
+                out.append(canonical)
     return out
 
 
@@ -520,7 +544,9 @@ def reset_open_gaps_for_chapter(project: Project, folder_name: str) -> list[str]
         reset_open_coverage_gaps,
     )
 
-    previous = load_chapter_unified_plan(project, folder_name)
+    previous = load_chapter_unified_plan(
+        project, folder_name, canonicalize_gap_ids=False
+    )
     gap_ids = chapter_gap_ids(previous)
     if not gap_ids:
         return []
@@ -545,6 +571,7 @@ def persist_chapter_unified_plan(
     if reset_open_gaps:
         # Vor dem Überschreiben: der alte Plan nennt die Gap-IDs des Kapitels.
         reset_open_gaps_for_chapter(project, folder_name)
+    plan = canonicalize_plan_coverage_gap_ids(plan)
     write_json(chapter_unified_cut_plan_path(project, folder_name), plan)
     invalidate_chapter_resolved_timeline(project, folder_name)
     if refresh_merged:

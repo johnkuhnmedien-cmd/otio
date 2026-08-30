@@ -169,6 +169,44 @@ def test_chapter_status_matches() -> None:
     assert not chapter_resolved_matches_plan(plan, stale)
 
 
+def test_chapter_open_gap_ids_ignores_stale_llm_counter_fill(tmp_path) -> None:
+    """Gespeicherte Piran_gap_001 + alter Fill dürfen Timing nicht freigeben."""
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        chapter_open_gap_ids,
+        load_chapter_unified_plan,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        chapter_unified_cut_plan_path,
+    )
+
+    project = _project(tmp_path)
+    folder = "Piran"
+    plan = _plan("Piran", slots=2)
+    plan.slots[0] = plan.slots[0].model_copy(
+        update={
+            "slot_id": "Piran_slot_011",
+            "asset_fit": "none",
+            "local_asset_id": None,
+            "coverage_gap_id": "Piran_gap_001",
+            "needed_visual": "Sečovlje salt harvesting",
+        }
+    )
+    # Roh auf die Platte: wie ein bestehender Cut mit LLM-Zähler-ID.
+    write_json(chapter_unified_cut_plan_path(project, folder), plan)
+
+    loaded = load_chapter_unified_plan(project, folder)
+    assert loaded is not None
+    assert loaded.slots[0].coverage_gap_id == "gap_Piran_slot_011"
+
+    open_ids = chapter_open_gap_ids(
+        project,
+        folder,
+        open_gap_id_set=set(),
+        filled_gap_id_set={"Piran_gap_001"},
+    )
+    assert open_ids == ["gap_Piran_slot_011"]
+
+
 def test_chapter_open_gap_ids_uses_plan_even_if_coverage_missing(tmp_path) -> None:
     """Plan-none-Slot blockiert Timing auch ohne Eintrag in coverage_gaps.json."""
     from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
@@ -193,17 +231,27 @@ def test_chapter_open_gap_ids_uses_plan_even_if_coverage_missing(tmp_path) -> No
         persist_chapter_unified_plan(project, folder, plan, refresh_merged=False)
 
     # coverage_gaps fehlt / leer → früher: open=[], Timing freigegeben.
+    # LLM-Zähler-ID wird auf die Slot-ID umgeschrieben.
     open_ids = chapter_open_gap_ids(
         project, folder, open_gap_id_set=set(), filled_gap_id_set=set()
     )
-    assert open_ids == ["Achill_Island_gap_001"]
+    assert open_ids == ["gap_Achill_Island_slot_001"]
 
-    # Nach Manual/Funnel-Fill: nicht mehr offen.
-    filled = chapter_open_gap_ids(
+    # Alter Funnel-Fill unter der Zähler-ID schließt den Slot nicht.
+    still_open = chapter_open_gap_ids(
         project,
         folder,
         open_gap_id_set=set(),
         filled_gap_id_set={"Achill_Island_gap_001"},
+    )
+    assert still_open == ["gap_Achill_Island_slot_001"]
+
+    # Nach Manual/Funnel-Fill der kanonischen ID: nicht mehr offen.
+    filled = chapter_open_gap_ids(
+        project,
+        folder,
+        open_gap_id_set=set(),
+        filled_gap_id_set={"gap_Achill_Island_slot_001"},
     )
     assert filled == []
 
