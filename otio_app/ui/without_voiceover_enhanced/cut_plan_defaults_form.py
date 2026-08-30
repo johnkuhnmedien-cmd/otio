@@ -101,7 +101,8 @@ def render_cut_plan_defaults_form(
         help=(
             "Nicht für zu kurze Clips. Extra-LLM nach Gap-Merge, nur wenn zu "
             "viele offene Lücken da sind. Mini-Lücken unter 1s löst Python "
-            "Timing über „Toleranz Asset zu kurz“."
+            "Timing über „Toleranz Asset zu kurz“ (erst Nachbarn, dann "
+            "deren Nachbarn)."
         ),
     )
     unified_mini_repair_threshold = st.number_input(
@@ -224,8 +225,9 @@ def render_cut_plan_defaults_form(
             step=0.5,
             key=_k(key_suffix, "short_tol"),
             help=(
-                "Fehlt höchstens so viel Dauer: Python verlängert den Clip "
-                "davor und/oder danach (möglichst hälftig). Default 1s."
+                "Fehlt höchstens so viel Dauer: Python verlängert zuerst den "
+                "Clip davor und/oder danach (möglichst hälftig). Reicht das "
+                "nicht, die nächsten Clips daneben. Default 1s."
             ),
         )
     with col2:

@@ -922,6 +922,117 @@ def test_allocate_mini_gap_splits_half_when_both_neighbors_have_spare() -> None:
     assert to_next == pytest.approx(0.52)  # 13 frames (extra frame → next)
 
 
+def test_allocate_mini_gap_uses_direct_neighbors_before_extended() -> None:
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        allocate_mini_gap_across_neighbor_rings,
+    )
+
+    take_prev, take_next = allocate_mini_gap_across_neighbor_rings(
+        0.4,
+        spare_prev_by_ring=[5.0, 5.0],
+        spare_next_by_ring=[5.0, 5.0],
+        fps=25.0,
+    )
+    assert take_prev[0] + take_next[0] == pytest.approx(0.4)
+    assert take_prev[1] == 0.0
+    assert take_next[1] == 0.0
+
+
+def test_allocate_mini_gap_falls_through_to_extended_neighbors() -> None:
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        allocate_mini_gap_across_neighbor_rings,
+    )
+
+    take_prev, take_next = allocate_mini_gap_across_neighbor_rings(
+        0.4,
+        spare_prev_by_ring=[0.0, 5.0],
+        spare_next_by_ring=[0.0, 5.0],
+        fps=25.0,
+    )
+    assert take_prev[0] == 0.0
+    assert take_next[0] == 0.0
+    assert take_prev[1] + take_next[1] == pytest.approx(0.4)
+    assert take_prev[1] == pytest.approx(0.2)
+    assert take_next[1] == pytest.approx(0.2)
+
+
+def test_mini_gap_pushes_through_tight_direct_neighbors() -> None:
+    """Direkte Nachbarn am Limit → Mini-Zeit auf Nachbar-des-Nachbarn."""
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        _clamp_boundary_times,
+    )
+
+    repairs: list[str] = []
+    times = _clamp_boundary_times(
+        [0.0, 8.0, 16.0, 24.0, 32.0, 40.0],
+        editorial_min=0.4,
+        editorial_max=120.0,
+        repairs=repairs,
+        slot_usable_max=[None, 8.0, 7.6, 8.0, None],
+        short_tolerance=1.0,
+        fps=25.0,
+    )
+    spans = [times[i + 1] - times[i] for i in range(5)]
+    assert spans[2] == pytest.approx(7.6, abs=0.04)
+    assert spans[1] == pytest.approx(8.0, abs=0.04)
+    assert spans[3] == pytest.approx(8.0, abs=0.04)
+    assert spans[0] > 8.0
+    assert spans[4] > 8.0
+    assert sum(spans) == pytest.approx(40.0, abs=0.04)
+    assert times[-1] == pytest.approx(40.0, abs=0.04)
+    assert any("erweiterte Nachbarn" in note for note in repairs)
+
+
+def test_kropa_style_consecutive_shorts_use_extended_next() -> None:
+    """Zwei knappe Slots hintereinander: Rest geht durch den zweiten hindurch."""
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        _clamp_boundary_times,
+    )
+
+    repairs: list[str] = []
+    times = _clamp_boundary_times(
+        [0.0, 10.0, 20.0, 30.0, 40.0],
+        editorial_min=0.4,
+        editorial_max=120.0,
+        repairs=repairs,
+        slot_usable_max=[10.0, 9.7, 9.8, None],
+        short_tolerance=1.0,
+        fps=25.0,
+    )
+    spans = [times[i + 1] - times[i] for i in range(4)]
+    assert spans[1] == pytest.approx(9.7, abs=0.04)
+    assert spans[2] == pytest.approx(9.8, abs=0.04)
+    assert spans[0] == pytest.approx(10.0, abs=0.04)
+    assert spans[3] == pytest.approx(10.5, abs=0.08)
+    assert times[-1] == pytest.approx(40.0)
+    assert any("erweiterte Nachbarn" in note for note in repairs)
+    assert not any("nicht stabil" in note for note in repairs)
+
+
+def test_extended_prev_does_not_move_timeline_end() -> None:
+    """Letzter Slot knapp, direkter Vorgänger voll → weiter links, Ende bleibt."""
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        _clamp_boundary_times,
+    )
+
+    repairs: list[str] = []
+    times = _clamp_boundary_times(
+        [0.0, 10.0, 20.0, 30.0],
+        editorial_min=0.4,
+        editorial_max=120.0,
+        repairs=repairs,
+        slot_usable_max=[None, 10.0, 9.6],
+        short_tolerance=1.0,
+        fps=25.0,
+    )
+    spans = [times[i + 1] - times[i] for i in range(3)]
+    assert spans[2] == pytest.approx(9.6, abs=0.04)
+    assert spans[1] == pytest.approx(10.0, abs=0.04)
+    assert spans[0] == pytest.approx(10.4, abs=0.08)
+    assert times[-1] == pytest.approx(30.0)
+    assert any("erweiterte Nachbarn" in note for note in repairs)
+
+
 def test_mini_gap_splits_between_both_neighbors() -> None:
     """0,1s Mini-Lücke: Vorgänger und Folgeslot teilen sich die fehlende Zeit."""
     timeline = NarrationTimelineDocument(

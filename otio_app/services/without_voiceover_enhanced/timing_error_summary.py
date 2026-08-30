@@ -426,12 +426,13 @@ def _empty_groups() -> dict[str, TimingIssueGroup]:
             title="Mini-Zeit ließ sich nicht auf Nachbarn legen",
             explanation=(
                 "Es fehlt nur wenig, und das liegt noch in der Toleranz. "
-                "Python wollte die fehlende Zeit auf den Clip davor/danach "
-                "schieben, hat die Schnittgrenzen aber nicht sauber hinbekommen."
+                "Python legt die Mini-Zeit zuerst auf den Clip davor/danach, "
+                "und wenn die selbst knapp sind, auf die nächsten Clips daneben. "
+                "Hier hat das nicht gereicht."
             ),
             next_step=(
                 "Python Timing erneut starten. "
-                "Wenn es bleibt: Nachbarclips ansehen — oft sind die selbst knapp. "
+                "Wenn es bleibt: auch zwei Clips weiter sind zu knapp. "
                 "Dann im Funnel längeres Material holen."
             ),
         ),
