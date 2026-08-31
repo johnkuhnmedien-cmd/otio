@@ -62,6 +62,7 @@ from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
     build_asset_catalog,
     coalesce_same_media_audio_segments,
     lookup_catalog_entry,
+    still_image_path_from_catalog_entry,
 )
 
 
@@ -322,22 +323,18 @@ def _original_still_path_for_export(
     catalog: AssetCatalog | None,
     fps: float,
 ) -> Path | None:
-    """Original-JPEG/PNG für Stil — auch wenn resolved_media_path schon Hold-MP4 ist."""
-    if is_image_media(path):
+    """Original-JPEG/PNG für Cover+Pan — auch hinter Clean-MP4 / still_hold.
+
+    Clean legt Fotos oft als 5s-MP4 ab. Ohne das Original gibt der Export
+    nur Letterbox/Video-Hold aus — kein Cover-Zoom und kein Schwenk.
+    """
+    if is_image_media(path) and not is_video_media(path):
         return path
-    if not _is_still_hold_shot(shot, path):
-        return None
     cat = catalog if catalog is not None else build_asset_catalog(project, fps=fps)
     entry, _err = lookup_catalog_entry(cat, str(shot.asset_id or ""))
-    if entry is None:
-        return None
-    original = Path(str(entry.get("path") or "")).expanduser()
-    try:
-        original = original.resolve()
-    except OSError:
-        pass
-    if original.is_file() and is_image_media(original):
-        return original
+    found = still_image_path_from_catalog_entry(entry, path)
+    if found is not None:
+        return found
     return None
 
 
@@ -467,6 +464,7 @@ def _ensure_shot_media_for_export(
     pan_direction = resolve_still_pan_direction(
         str(options.still_image_pan_mode),
         shot_id=str(shot.shot_id or ""),
+        shot_index=shot_index,
     )
     original_still = _original_still_path_for_export(
         project, shot, path=path, catalog=catalog, fps=fps
