@@ -647,7 +647,8 @@ def _clamp_boundary_times(
     Wenn ``floor(usable) < shot_min``: kein editorial-Hochschieben
     (sonst Pingpong mit usable-Klemme) → Gap-Pfad.
     Max. ``max_media_iterations`` Links-nach-rechts-Pässe; danach noch
-    innerhalb-Toleranz verletzt → Fehler.
+    innerhalb-Toleranz verletzt → Repair (roter Placeholder im Shot-Resolve),
+    kein Abbruch. Sub-Frame-Reste werden ignoriert.
 
     ``slot_editorial_mins`` / ``slot_editorial_maxes``: optional pro Slot
     (Intro nutzt TECH_MIN/TECH_MAX statt Cut-Plan shot_min/max — sonst
@@ -833,7 +834,8 @@ def _clamp_boundary_times(
         if not changed:
             break
 
-    remaining_tol_violations: list[str] = []
+    remaining_notes: list[str] = []
+    frame = 1.0 / rate
     for index in range(n_slots):
         usable = usables[index]
         if usable is None:
@@ -842,17 +844,15 @@ def _clamp_boundary_times(
         if duration <= float(usable) + 1e-9:
             continue
         shortfall = duration - float(usable)
+        if shortfall <= frame + 1e-9:
+            continue
         if shortfall <= tol + 1e-9:
-            remaining_tol_violations.append(
+            remaining_notes.append(
                 f"slot[{index}]: span {duration:.2f}s > usable {float(usable):.2f}s "
                 f"(shortfall {shortfall:.2f}s innerhalb Toleranz {tol:.1f}s) "
-                "nach Grenzen-Klemme nicht stabil."
+                "nach Grenzen-Klemme — Rest als roter Placeholder."
             )
-    if remaining_tol_violations:
-        raise UnifiedTimelineError(
-            "\n".join(remaining_tol_violations),
-            errors=remaining_tol_violations,
-        )
+    repairs.extend(remaining_notes)
     return out
 
 

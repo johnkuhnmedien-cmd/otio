@@ -1033,6 +1033,50 @@ def test_extended_prev_does_not_move_timeline_end() -> None:
     assert any("erweiterte Nachbarn" in note for note in repairs)
 
 
+def test_leftover_mini_gap_becomes_placeholder_repair_not_error() -> None:
+    """Nachbarn ohne Reserve: Mini-Rest bleibt, Timing bricht nicht ab."""
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        _clamp_boundary_times,
+    )
+
+    repairs: list[str] = []
+    times = _clamp_boundary_times(
+        [0.0, 8.0, 16.5, 24.5],
+        editorial_min=0.4,
+        editorial_max=120.0,
+        repairs=repairs,
+        slot_usable_max=[8.0, 8.0, 8.0],
+        short_tolerance=2.0,
+        fps=25.0,
+    )
+    spans = [times[i + 1] - times[i] for i in range(3)]
+    assert spans[1] == pytest.approx(8.5, abs=0.04)
+    assert times[-1] == pytest.approx(24.5, abs=0.04)
+    assert any("roter Placeholder" in note for note in repairs)
+    assert not any("nicht stabil" in note for note in repairs)
+
+
+def test_subframe_leftover_is_ignored() -> None:
+    """Sub-Frame (~0s Anzeige) ist kein Timing-Abbruch und kein Repair."""
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        _clamp_boundary_times,
+    )
+
+    repairs: list[str] = []
+    times = _clamp_boundary_times(
+        [0.0, 8.0, 16.03, 24.03],
+        editorial_min=0.4,
+        editorial_max=120.0,
+        repairs=repairs,
+        slot_usable_max=[8.0, 8.0, 8.0],
+        short_tolerance=2.0,
+        fps=25.0,
+    )
+    assert times[-1] == pytest.approx(24.03, abs=0.04)
+    assert not any("roter Placeholder" in note for note in repairs)
+    assert not any("nicht stabil" in note for note in repairs)
+
+
 def test_mini_gap_splits_between_both_neighbors() -> None:
     """0,1s Mini-Lücke: Vorgänger und Folgeslot teilen sich die fehlende Zeit."""
     timeline = NarrationTimelineDocument(
