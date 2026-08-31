@@ -819,9 +819,10 @@ def _clamp_boundary_times(
                 f"slot[{index}]: nutzbare Dauer knapp "
                 f"(span {duration:.2f}s → usable {float(usable):.2f}s / "
                 f"frame {clamped:.2f}s, "
-                f"shortfall {shortfall:.2f}s ≤ Toleranz {tol:.1f}s) — "
+                f"fehlend {shortfall:.2f}s) — "
                 + label
-                + " (shot_max-Überschreitung erlaubt)."
+                + " (erst direkte Nachbarn, dann weiter außen; "
+                "shot_max-Überschreitung erlaubt)."
             )
             changed = True
         if changed:

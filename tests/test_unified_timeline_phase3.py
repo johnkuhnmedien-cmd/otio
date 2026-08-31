@@ -1032,6 +1032,33 @@ def test_mini_gap_pushes_through_tight_direct_neighbors() -> None:
     assert any("erweiterte Nachbarn" in note for note in repairs)
 
 
+def test_over_tolerance_pushes_through_tight_direct_neighbors() -> None:
+    """Kropa-Fall: 1.8s zu kurz, direkte Nachbarn voll → Clip zwei weiter."""
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        _clamp_boundary_times,
+    )
+
+    repairs: list[str] = []
+    # Slots: 8, 8, 8.8, 8, 8 — Mitte braucht 8.8s, hat 7.0s (fehlend 1.8s > 1s).
+    times = _clamp_boundary_times(
+        [0.0, 8.0, 16.0, 24.8, 32.8, 40.8],
+        editorial_min=0.4,
+        editorial_max=120.0,
+        repairs=repairs,
+        slot_usable_max=[8.0, 8.0, 7.0, 8.0, 12.0],
+        short_tolerance=1.0,
+        fps=25.0,
+    )
+    spans = [times[i + 1] - times[i] for i in range(5)]
+    assert spans[2] == pytest.approx(7.0, abs=0.08)
+    assert spans[1] == pytest.approx(8.0, abs=0.04)
+    assert spans[3] == pytest.approx(8.0, abs=0.04)
+    assert spans[4] > 8.0
+    assert sum(spans) == pytest.approx(40.8, abs=0.04)
+    assert times[-1] == pytest.approx(40.8, abs=0.04)
+    assert any("erweiterte Nachbarn" in note for note in repairs)
+
+
 def test_kropa_style_consecutive_shorts_use_extended_next() -> None:
     """Zwei knappe Slots hintereinander: Rest geht durch den zweiten hindurch."""
     from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
