@@ -952,9 +952,10 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
     Regeln:
     - Gap-Liste kommt aus coverage_gaps.json (aktueller Plan), ergänzt um
       weak/none-Slots aus den Kapitel-Plänen, falls die JSON sie nicht kennt.
-    - Funnel export_ready / Download (gleiche Run-ID) schließt weak und none.
-    - Accepted export_ready (gleiche Run-ID) schließt ebenfalls — auch ohne
-      aktuellen Funnel-Eintrag.
+    - Funnel export_ready schließt nur mit merge-fähigem Accepted (Datei,
+      Dauer bzw. Still). Funnel-„filled“ allein reicht nicht — sonst zeigt
+      die UI 0 offen, während der Auto-Lauf dasselbe Gap noch blockiert.
+    - Accepted export_ready mit merge-fähigem Clip (gleiche Run-ID, nach Rebind).
     - Merge (merged | kept_local_weak) schließt weiterhin.
     - ``user_confirmed_weak`` schließt nur Weak-Upgrade-Gaps (priority=medium).
       Stale Flags auf high/none werden zurückgesetzt.
@@ -985,7 +986,6 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
         funnel, expected_run_id=run_id
     )
     merge_closed, merge_stale = _merge_closed_ids(merge, expected_run_id=run_id)
-    accepted_ready = _accepted_export_ready_gap_ids(project, expected_run_id=run_id)
 
     # Zusätzlich: Coverage neuer als Funnel → Funnel-Zähler stale.
     cov_path = coverage_gaps_path(project)
@@ -1001,6 +1001,16 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
         funnel_stale = True
         funnel_ready = set()
 
+    from otio_app.services.without_voiceover_enhanced.local_media_service import (
+        list_export_ready_supplements,
+    )
+    from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
+        _gap_already_export_ready,
+    )
+
+    supplements = list_export_ready_supplements(project)
+    active_funnel = None if funnel_stale else funnel
+
     open_ids: list[str] = []
     filled_ids: list[str] = []
     for gap in coverage.gaps:
@@ -1010,12 +1020,17 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
         weak_confirmed = bool(getattr(gap, "user_confirmed_weak", False)) and (
             is_weak_upgrade_gap(gap)
         )
-        if (
-            gid in merge_closed
-            or gid in funnel_ready
-            or gid in accepted_ready
-            or weak_confirmed
-        ):
+        merge_ok = gid in merge_closed
+        accepted_ok = _gap_already_export_ready(
+            active_funnel,
+            gap_id=gid,
+            project=project,
+            trust_accepted=True,
+            gap=gap,
+            expected_run_id=run_id,
+            export_ready_supplements=supplements,
+        )
+        if merge_ok or accepted_ok or weak_confirmed:
             filled_ids.append(gid)
         else:
             open_ids.append(gid)
@@ -1047,6 +1062,14 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
         notes.append(
             f"{len(added_from_plans)} Gap(s) aus Kapitel-Plänen nachgetragen "
             "(Cut-Plan und Funnel waren nicht synchron)"
+        )
+    phantom_filled = [gid for gid in open_ids if gid in funnel_ready]
+    if phantom_filled:
+        preview = ", ".join(phantom_filled[:6])
+        more = f" (+{len(phantom_filled) - 6})" if len(phantom_filled) > 6 else ""
+        notes.append(
+            "Funnel meldet erfüllt, Clip aber nicht merge-fähig "
+            f"(zu kurz oder Datei fehlt): {preview}{more}"
         )
     return GapStatusSummary(
         total=len(open_ids) + len(filled_ids),

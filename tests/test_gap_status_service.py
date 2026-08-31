@@ -50,6 +50,15 @@ def _project(tmp_path: Path) -> Project:
     )
 
 
+def _photo(project: Project, name: str) -> Path:
+    from PIL import Image
+
+    path = project.work_dir_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (8, 8), color=(20, 80, 40)).save(path, format="JPEG")
+    return path
+
+
 def _plan() -> UnifiedCutPlanDocument:
     return UnifiedCutPlanDocument(
         script_version="script-v1",
@@ -87,12 +96,48 @@ def test_unified_to_rough_writes_cut_plan_run_id() -> None:
 
 
 def test_weak_closes_when_funnel_export_ready(tmp_path: Path) -> None:
-    """Download/export_ready schließt weak sofort in der UI (nicht erst Merge)."""
+    """Merge-fähiges Accepted (Still) schließt weak/none — Funnel-JSON allein nicht."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        AcceptedSupplementsDocument,
+        StockCandidate,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        accepted_supplements_path,
+    )
+
     project = _project(tmp_path)
     plan = _plan()
     write_json(unified_cut_plan_path(project), plan)
     _rough, coverage = unified_to_rough(plan)
     write_json(coverage_gaps_path(project), coverage)
+    weak_path = _photo(project, "weak.jpg")
+    none_path = _photo(project, "none.jpg")
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="cand_weak",
+                    provider="pexels",
+                    media_type="photo",
+                    gap_id="gap_A_slot_weak",
+                    local_media_path=str(weak_path),
+                    media_validation_status="export_ready",
+                    cut_plan_run_id=coverage.cut_plan_run_id,
+                ),
+                StockCandidate(
+                    candidate_id="cand_none",
+                    provider="pexels",
+                    media_type="photo",
+                    gap_id="gap_A_slot_none",
+                    local_media_path=str(none_path),
+                    media_validation_status="export_ready",
+                    cut_plan_run_id=coverage.cut_plan_run_id,
+                ),
+            ],
+        ),
+    )
     write_json(
         supplement_funnel_report_path(project),
         SupplementFunnelReport(
@@ -119,6 +164,7 @@ def test_weak_closes_when_funnel_export_ready(tmp_path: Path) -> None:
     assert status.total == 2
     assert status.open_count == 0
     assert set(status.filled_gap_ids) == {"gap_A_slot_weak", "gap_A_slot_none"}
+    assert list_open_funnel_gap_ids(project) == []
 
 
 def test_accepted_export_ready_closes_gap_without_funnel_entry(
@@ -138,6 +184,7 @@ def test_accepted_export_ready_closes_gap_without_funnel_entry(
     write_json(unified_cut_plan_path(project), plan)
     _rough, coverage = unified_to_rough(plan)
     write_json(coverage_gaps_path(project), coverage)
+    prev = _photo(project, "prev.jpg")
     write_json(
         accepted_supplements_path(project),
         AcceptedSupplementsDocument(
@@ -146,10 +193,11 @@ def test_accepted_export_ready_closes_gap_without_funnel_entry(
                 StockCandidate(
                     candidate_id="cand_prev",
                     provider="pexels",
+                    media_type="photo",
                     gap_id="gap_A_slot_weak",
                     media_validation_status="export_ready",
                     cut_plan_run_id=coverage.cut_plan_run_id,
-                    local_media_path="/tmp/prev.mp4",
+                    local_media_path=str(prev),
                 )
             ],
         ),
@@ -160,6 +208,7 @@ def test_accepted_export_ready_closes_gap_without_funnel_entry(
     assert "gap_A_slot_none" in status.open_gap_ids
     assert status.filled_count == 1
     assert status.open_count == 1
+    assert list_open_funnel_gap_ids(project) == ["gap_A_slot_none"]
 
 
 def test_weak_closes_only_after_merge_decision(tmp_path: Path) -> None:
@@ -191,6 +240,65 @@ def test_weak_closes_only_after_merge_decision(tmp_path: Path) -> None:
     status = summarize_gap_status(project)
     assert status.open_count == 0
     assert set(status.filled_gap_ids) == {"gap_A_slot_weak", "gap_A_slot_none"}
+    assert list_open_funnel_gap_ids(project) == []
+
+
+def test_still_image_closes_gap_even_if_labeled_video(tmp_path: Path) -> None:
+    """Wikimedia-Foto als video getaggt darf Auto-Lauf und UI nicht spalten."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        AcceptedSupplementsDocument,
+        StockCandidate,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        accepted_supplements_path,
+    )
+
+    project = _project(tmp_path)
+    plan = _plan()
+    write_json(unified_cut_plan_path(project), plan)
+    _rough, coverage = unified_to_rough(plan)
+    write_json(coverage_gaps_path(project), coverage)
+    still = _photo(project, "gorge.jpg")
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="wiki_tolmin",
+                    provider="wikimedia",
+                    media_type="video",
+                    gap_id="gap_A_slot_none",
+                    local_media_path=str(still),
+                    media_validation_status="export_ready",
+                    cut_plan_run_id=coverage.cut_plan_run_id,
+                    duration_seconds=0.0,
+                )
+            ],
+        ),
+    )
+    status = summarize_gap_status(project)
+    assert "gap_A_slot_none" in status.filled_gap_ids
+    assert "gap_A_slot_none" not in list_open_funnel_gap_ids(project)
+
+
+def test_cut_plan_tab_lists_same_open_ids_as_auto_run() -> None:
+    ui = (
+        Path(__file__).resolve().parents[1]
+        / "otio_app"
+        / "ui"
+        / "without_voiceover_enhanced"
+        / "cut_plan_tab.py"
+    ).read_text(encoding="utf-8")
+    assert "Noch offen (gleiche Liste wie Auto-Lauf)" in ui
+    funnel = (
+        Path(__file__).resolve().parents[1]
+        / "otio_app"
+        / "services"
+        / "without_voiceover_enhanced"
+        / "supplement_funnel_service.py"
+    ).read_text(encoding="utf-8")
+    assert "list(summarize_gap_status(project).open_gap_ids)" in funnel
 
 
 def test_stale_funnel_without_accepted_does_not_count_as_filled(
@@ -249,8 +357,10 @@ def test_restore_accepted_from_funnel_when_accepted_was_purged(
         project, gap_id="gap_A_slot_none", candidate_id="pexels_video_restore"
     )
     media_dir.mkdir(parents=True)
-    media = media_dir / "pexels_video_restore.mp4"
-    media.write_bytes(b"\x00" * 128)
+    media = media_dir / "pexels_video_restore.jpg"
+    from PIL import Image
+
+    Image.new("RGB", (8, 8), color=(20, 80, 40)).save(media, format="JPEG")
 
     write_json(
         supplement_funnel_report_path(project),
@@ -302,6 +412,8 @@ def test_accepted_with_old_run_id_rebinds_to_current_plan(tmp_path: Path) -> Non
     write_json(unified_cut_plan_path(project), plan)
     _rough, coverage = unified_to_rough(plan)
     write_json(coverage_gaps_path(project), coverage)
+    none_path = _photo(project, "manual.jpg")
+    weak_path = _photo(project, "weak.jpg")
     write_json(
         accepted_supplements_path(project),
         AcceptedSupplementsDocument(
@@ -310,18 +422,20 @@ def test_accepted_with_old_run_id_rebinds_to_current_plan(tmp_path: Path) -> Non
                 StockCandidate(
                     candidate_id="cand_manual",
                     provider="manual",
+                    media_type="photo",
                     gap_id="gap_A_slot_none",
                     media_validation_status="export_ready",
                     cut_plan_run_id="old_run_before_llm_recut",
-                    local_media_path="/tmp/manual.mp4",
+                    local_media_path=str(none_path),
                 ),
                 StockCandidate(
                     candidate_id="cand_weak",
                     provider="pexels",
+                    media_type="photo",
                     gap_id="gap_A_slot_weak",
                     media_validation_status="export_ready",
                     cut_plan_run_id="old_run_before_llm_recut",
-                    local_media_path="/tmp/weak.mp4",
+                    local_media_path=str(weak_path),
                 ),
             ],
         ),
@@ -353,6 +467,7 @@ def test_accepted_with_old_run_id_rebinds_to_current_plan(tmp_path: Path) -> Non
     assert set(status.filled_gap_ids) == {"gap_A_slot_weak", "gap_A_slot_none"}
     assert status.funnel_stale is False
     assert "Accepted-Fill" in (status.message or "")
+    assert list_open_funnel_gap_ids(project) == []
 
     accepted = load_model(
         accepted_supplements_path(project), AcceptedSupplementsDocument
@@ -424,12 +539,12 @@ def test_legacy_coverage_without_run_id_still_lists_open_gaps(tmp_path: Path) ->
             ],
         ),
     )
-    # Kein Accepted mit lokaler Datei → Gap bleibt für Funnel offen.
+    # Kein Accepted mit lokaler Datei → Gap bleibt für Funnel UND UI offen.
     assert list_open_funnel_gap_ids(project) == ["gap_1", "gap_2"]
     status = summarize_gap_status(project)
-    # summarize_gap_status: Funnel-filled zählt für UI none weiterhin.
-    assert "gap_1" in status.filled_gap_ids
+    assert "gap_1" in status.open_gap_ids
     assert "gap_2" in status.open_gap_ids
+    assert "merge-fähig" in (status.message or "")
 
 
 def test_stale_weak_confirm_on_high_gap_is_reset(tmp_path: Path) -> None:
@@ -459,6 +574,7 @@ def test_stale_weak_confirm_on_high_gap_is_reset(tmp_path: Path) -> None:
     status = summarize_gap_status(project)
     assert "Dublin_gap_001" in status.open_gap_ids
     assert "gap_weak_ok" in status.filled_gap_ids
+    assert "gap_weak_ok" not in list_open_funnel_gap_ids(project)
     assert "veraltete Weak-Bestätigung" in (status.message or "")
 
     reloaded = load_model(coverage_gaps_path(project), CoverageGapsDocument)
@@ -597,12 +713,18 @@ def _piran_none_plan() -> UnifiedCutPlanDocument:
 
 def test_migrate_merges_llm_counter_fill_onto_slot_id(tmp_path: Path) -> None:
     """Alte erfüllte ID + neue offene Slot-ID werden eine erfüllte Lücke."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        AcceptedSupplementsDocument,
+        StockCandidate,
+    )
     from otio_app.services.without_voiceover_enhanced.paths import (
+        accepted_supplements_path,
         chapter_unified_cut_plan_path,
         supplement_funnel_report_path,
     )
 
     project = _project(tmp_path)
+    fill = _photo(project, "salt.jpg")
     write_json(chapter_unified_cut_plan_path(project, "Piran"), _piran_none_plan())
     write_json(
         coverage_gaps_path(project),
@@ -622,6 +744,23 @@ def test_migrate_merges_llm_counter_fill_onto_slot_id(tmp_path: Path) -> None:
                     priority="high",
                     related_shot_ids=["Piran_slot_011"],
                 ),
+            ],
+        ),
+    )
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="cand_salt",
+                    provider="pexels",
+                    media_type="photo",
+                    gap_id="Piran_gap_001",
+                    local_media_path=str(fill),
+                    media_validation_status="export_ready",
+                    cut_plan_run_id="run_keep",
+                )
             ],
         ),
     )

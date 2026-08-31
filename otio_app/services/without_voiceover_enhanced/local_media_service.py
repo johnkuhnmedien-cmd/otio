@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from otio_app.models import Project
+from otio_app.services.media_utils import is_image_media
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.models import (
     AcceptedSupplementsDocument,
@@ -256,6 +257,8 @@ def validate_local_media_path(
     if normalized in _IMAGE_MEDIA_TYPES:
         return _validate_image_media(path)
     if normalized in _VIDEO_MEDIA_TYPES:
+        if is_image_media(path):
+            return _validate_image_media(path)
         return _validate_video_media(path)
     return (
         STATUS_LOCAL_MEDIA_INVALID,
