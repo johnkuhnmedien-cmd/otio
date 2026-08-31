@@ -2098,8 +2098,8 @@ def _render_chapter_cut_rows(
                 use_container_width=True,
                 disabled=not status.has_plan,
                 help=(
-                    "Kapitel-OTIO schreiben. Zu kurze Clips und Lücken werden "
-                    "als rote Platzhalter gelegt und in der Timeline markiert."
+                    "Kapitel-OTIO schreiben. Zu kurze Clips, Lücken und dasselbe "
+                    "Asset zweimal hintereinander werden rot markiert."
                 ),
             )
 
@@ -2443,8 +2443,8 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             use_container_width=True,
             help=(
                 "Intro + vorhandene Kapitel-Timelines mergen → eine OTIO. "
-                "Zu kurze Clips und offene Lücken werden als rote Platzhalter "
-                "gelegt und in der Timeline markiert — der Export bricht "
+                "Zu kurze Clips, offene Lücken und dasselbe Asset zweimal "
+                "hintereinander werden rot markiert — der Export bricht "
                 "daran nicht ab. Kapitel ohne Python-Timing werden übersprungen."
             ),
         )

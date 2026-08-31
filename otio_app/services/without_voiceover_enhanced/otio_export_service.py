@@ -178,6 +178,44 @@ def _shot_needs_manual_marker(shot: ResolvedShot) -> bool:
     return shot_id.endswith("__shortfall")
 
 
+def _shot_media_identity(shot: ResolvedShot) -> str:
+    """Vergleichsschlüssel für denselben Clip hintereinander."""
+    if bool(getattr(shot, "is_placeholder", False)) or bool(
+        getattr(shot, "open_gap", False)
+    ):
+        return ""
+    asset_id = str(getattr(shot, "asset_id", "") or "").strip()
+    if asset_id:
+        return f"id:{asset_id.casefold()}"
+    path = str(getattr(shot, "resolved_media_path", "") or "").strip()
+    if path:
+        return f"file:{Path(path).name.casefold()}"
+    return ""
+
+
+def consecutive_duplicate_shot_ids(shots: list[ResolvedShot]) -> set[str]:
+    """Shot-IDs, die direkt vor/nach demselben Asset stehen."""
+    ordered = sorted(
+        shots,
+        key=lambda shot: (
+            float(getattr(shot, "timeline_start_seconds", 0.0) or 0.0),
+            str(getattr(shot, "shot_id", "") or ""),
+        ),
+    )
+    flagged: set[str] = set()
+    for prev, curr in zip(ordered, ordered[1:]):
+        key = _shot_media_identity(prev)
+        if not key or key != _shot_media_identity(curr):
+            continue
+        prev_id = str(getattr(prev, "shot_id", "") or "")
+        curr_id = str(getattr(curr, "shot_id", "") or "")
+        if prev_id:
+            flagged.add(prev_id)
+        if curr_id:
+            flagged.add(curr_id)
+    return flagged
+
+
 def _attach_resolve_markers(
     *,
     clip: otio.schema.Clip,
@@ -185,11 +223,16 @@ def _attach_resolve_markers(
     shot: ResolvedShot,
     fps: float,
     source_duration: float,
+    duplicate: bool = False,
 ) -> None:
     """Rote Marker an Clip + Track für manuelle Nacharbeit in DaVinci Resolve."""
-    if not _shot_needs_manual_marker(shot):
+    shortfall = _shot_needs_manual_marker(shot)
+    if not shortfall and not duplicate:
         return
-    label = "SHORTFALL" if str(shot.shot_id).endswith("__shortfall") else "SHORT ASSET"
+    if shortfall:
+        label = "SHORTFALL" if str(shot.shot_id).endswith("__shortfall") else "SHORT ASSET"
+    else:
+        label = "DUPLICATE ASSET"
     name = f"{label}: {shot.shot_id}"
     if shot.coverage_gap_id:
         name = f"{name} ({shot.coverage_gap_id})"
@@ -200,6 +243,7 @@ def _attach_resolve_markers(
         "asset_fit": shot.asset_fit or "",
         "reason": shot.asset_fit_reason or "",
         "placeholder": bool(shot.is_placeholder or shot.open_gap),
+        "duplicate_asset": bool(duplicate),
     }
     try:
         color = otio.schema.MarkerColor.RED
@@ -1072,6 +1116,7 @@ def export_otio_from_resolved_timeline(
 
     cursor = 0.0
     sorted_shots = sorted(resolved.shots, key=_resolved_shot_sort_key)
+    duplicate_ids = consecutive_duplicate_shot_ids(sorted_shots)
     for shot_index, shot in enumerate(sorted_shots):
         if shot.timeline_start_seconds > cursor + 1e-6:
             if allow_errors:
@@ -1164,6 +1209,7 @@ def export_otio_from_resolved_timeline(
             shot=shot,
             fps=fps,
             source_duration=source_duration,
+            duplicate=shot.shot_id in duplicate_ids,
         )
         video_track.append(clip)
         planned = max(
@@ -1367,7 +1413,9 @@ def export_portable_otio_package(
         _resolved_shot_sort_key as _sort_shots,
     )
 
-    for shot_index, shot in enumerate(sorted(resolved.shots, key=_sort_shots)):
+    sorted_shots = sorted(resolved.shots, key=_sort_shots)
+    duplicate_ids = consecutive_duplicate_shot_ids(sorted_shots)
+    for shot_index, shot in enumerate(sorted_shots):
         if shot.timeline_start_seconds > cursor + 1e-6:
             gap = shot.timeline_start_seconds - cursor
             video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
@@ -1427,6 +1475,7 @@ def export_portable_otio_package(
             shot=shot,
             fps=fps,
             source_duration=source_duration,
+            duplicate=shot.shot_id in duplicate_ids,
         )
         video_track.append(clip)
         pending_video.append((clip, media_path, shot.asset_id))
