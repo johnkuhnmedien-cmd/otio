@@ -178,6 +178,64 @@ def _shot_needs_manual_marker(shot: ResolvedShot) -> bool:
     return shot_id.endswith("__shortfall")
 
 
+def _shot_identity_keys(shot: ResolvedShot) -> frozenset[str]:
+    """Vergleichsschlüssel: Asset-ID und Dateiname, Platzhalter zählen nicht."""
+    if bool(getattr(shot, "is_placeholder", False)) or bool(
+        getattr(shot, "open_gap", False)
+    ):
+        return frozenset()
+    keys: list[str] = []
+    asset_id = str(getattr(shot, "asset_id", "") or "").strip()
+    if asset_id:
+        keys.append(f"id:{asset_id.casefold()}")
+        keys.append(f"stem:{Path(asset_id).stem.casefold()}")
+    path = str(getattr(shot, "resolved_media_path", "") or "").strip()
+    if path:
+        name = Path(path).name
+        keys.append(f"file:{name.casefold()}")
+        keys.append(f"stem:{Path(name).stem.casefold()}")
+    return frozenset(k for k in keys if k.split(":", 1)[-1])
+
+
+def consecutive_duplicate_shot_ids(shots: list[ResolvedShot]) -> set[str]:
+    """Shot-IDs, die direkt vor/nach demselben Asset stehen."""
+    ordered = sorted(
+        shots,
+        key=lambda shot: (
+            float(getattr(shot, "timeline_start_seconds", 0.0) or 0.0),
+            str(getattr(shot, "shot_id", "") or ""),
+        ),
+    )
+    flagged: set[str] = set()
+    for prev, curr in zip(ordered, ordered[1:]):
+        if not (_shot_identity_keys(prev) & _shot_identity_keys(curr)):
+            continue
+        prev_id = str(getattr(prev, "shot_id", "") or "")
+        curr_id = str(getattr(curr, "shot_id", "") or "")
+        if prev_id:
+            flagged.add(prev_id)
+        if curr_id:
+            flagged.add(curr_id)
+    return flagged
+
+
+def _paint_clip_resolve_red(clip: otio.schema.Clip) -> None:
+    """Clipfarbe, die Resolve auf der Timeline tatsächlich einfärbt."""
+    try:
+        clip.color = otio.core.Color(r=1.0, g=0.0, b=0.0, a=1.0, name="Red")
+    except Exception:  # noqa: BLE001 — ältere OTIO-Varianten
+        pass
+    resolve_meta = dict(clip.metadata.get("Resolve_OTIO") or {})
+    # Orange ist in Resolve die übliche Warnfarbe und als Clip Color gültig.
+    resolve_meta["Clip Color"] = "Orange"
+    clip.metadata["Resolve_OTIO"] = resolve_meta
+
+
+def _one_frame_range(fps: float, *, start_sec: float) -> otio.opentime.TimeRange:
+    rate = max(1.0, float(fps) or 25.0)
+    return _time_range(1.0 / rate, rate, start_sec=start_sec)
+
+
 def _attach_resolve_markers(
     *,
     clip: otio.schema.Clip,
@@ -185,11 +243,19 @@ def _attach_resolve_markers(
     shot: ResolvedShot,
     fps: float,
     source_duration: float,
+    duplicate: bool = False,
 ) -> None:
-    """Rote Marker an Clip + Track für manuelle Nacharbeit in DaVinci Resolve."""
-    if not _shot_needs_manual_marker(shot):
+    """Rote Marker + Clipfarbe für manuelle Nacharbeit in DaVinci Resolve."""
+    shortfall = _shot_needs_manual_marker(shot)
+    if not shortfall and not duplicate:
         return
-    label = "SHORTFALL" if str(shot.shot_id).endswith("__shortfall") else "SHORT ASSET"
+    if shortfall:
+        label = "SHORTFALL" if str(shot.shot_id).endswith("__shortfall") else "SHORT ASSET"
+    else:
+        label = "DUPLICATE ASSET"
+        _paint_clip_resolve_red(clip)
+        if not str(clip.name or "").startswith("DUPLICATE"):
+            clip.name = f"DUPLICATE · {clip.name or shot.shot_id}"
     name = f"{label}: {shot.shot_id}"
     if shot.coverage_gap_id:
         name = f"{name} ({shot.coverage_gap_id})"
@@ -200,32 +266,98 @@ def _attach_resolve_markers(
         "asset_fit": shot.asset_fit or "",
         "reason": shot.asset_fit_reason or "",
         "placeholder": bool(shot.is_placeholder or shot.open_gap),
+        "duplicate_asset": bool(duplicate),
     }
     try:
         color = otio.schema.MarkerColor.RED
     except Exception:  # noqa: BLE001 — ältere OTIO-Varianten
         color = "RED"
+    # 1 Frame: Resolve zeigt Timeline-Flags nur so, nicht über die ganze Clip-Länge.
     clip_marker = otio.schema.Marker(
         name=name,
         color=color,
-        marked_range=_time_range(max(0.04, source_duration), fps, start_sec=0.0),
+        marked_range=_one_frame_range(fps, start_sec=0.0),
         metadata=meta,
     )
     clip.markers.append(clip_marker)
-    track_duration = max(
-        0.04, float(shot.timeline_end_seconds) - float(shot.timeline_start_seconds)
-    )
     track_marker = otio.schema.Marker(
         name=name,
         color=color,
-        marked_range=_time_range(
-            track_duration,
-            fps,
-            start_sec=float(shot.timeline_start_seconds),
+        marked_range=_one_frame_range(
+            fps, start_sec=float(shot.timeline_start_seconds)
         ),
         metadata=meta,
     )
     video_track.markers.append(track_marker)
+
+
+def _build_duplicate_review_track(
+    project: Project,
+    shots: list[ResolvedShot],
+    duplicate_ids: set[str],
+    *,
+    fps: float,
+) -> otio.schema.Track | None:
+    """Eigene Video-Spur mit rotem Slate über doppelten Clips — in Resolve sichtbar."""
+    if not duplicate_ids:
+        return None
+    ordered = sorted(
+        shots,
+        key=lambda shot: (
+            float(getattr(shot, "timeline_start_seconds", 0.0) or 0.0),
+            str(getattr(shot, "shot_id", "") or ""),
+        ),
+    )
+    flagged = [shot for shot in ordered if str(shot.shot_id) in duplicate_ids]
+    if not flagged:
+        return None
+    max_dur = max(
+        1.0,
+        max(
+            float(shot.timeline_end_seconds) - float(shot.timeline_start_seconds)
+            for shot in flagged
+        ),
+    )
+    slate = ensure_gap_placeholder_slate(
+        project,
+        shot_id="duplicate_asset",
+        gap_id="duplicate_asset",
+        needed_visual="Dasselbe Asset direkt hintereinander",
+        start_seconds=0.0,
+        end_seconds=max(60.0, max_dur + 1.0),
+        fps=fps,
+        color="0xCC0000",
+        title="DUPLICATE ASSET / MANUAL FIX",
+    )
+    slate_dur = probe_duration_seconds(slate) or max(60.0, max_dur + 1.0)
+    track = otio.schema.Track(name="Review", kind=otio.schema.TrackKind.Video)
+    cursor = 0.0
+    for shot in ordered:
+        start = float(shot.timeline_start_seconds)
+        end = float(shot.timeline_end_seconds)
+        if start > cursor + 1e-6:
+            track.append(
+                otio.schema.Gap(source_range=_time_range(start - cursor, fps))
+            )
+        duration = max(0.04, end - start)
+        if str(shot.shot_id) in duplicate_ids:
+            clip = otio.schema.Clip(
+                name=f"DUPLICATE ASSET: {shot.shot_id}",
+                media_reference=otio.schema.ExternalReference(
+                    target_url=str(slate),
+                    available_range=_time_range(slate_dur, fps, start_sec=0.0),
+                ),
+                source_range=_time_range(
+                    min(duration, slate_dur), fps, start_sec=0.0
+                ),
+            )
+            _paint_clip_resolve_red(clip)
+            clip.metadata["duplicate_asset"] = True
+            track.append(clip)
+        else:
+            track.append(otio.schema.Gap(source_range=_time_range(duration, fps)))
+        cursor = end
+    return track
 
 
 def _assert_local_file(path: str, *, label: str) -> Path:
@@ -1072,6 +1204,7 @@ def export_otio_from_resolved_timeline(
 
     cursor = 0.0
     sorted_shots = sorted(resolved.shots, key=_resolved_shot_sort_key)
+    duplicate_ids = consecutive_duplicate_shot_ids(sorted_shots)
     for shot_index, shot in enumerate(sorted_shots):
         if shot.timeline_start_seconds > cursor + 1e-6:
             if allow_errors:
@@ -1164,6 +1297,7 @@ def export_otio_from_resolved_timeline(
             shot=shot,
             fps=fps,
             source_duration=source_duration,
+            duplicate=shot.shot_id in duplicate_ids,
         )
         video_track.append(clip)
         planned = max(
@@ -1229,8 +1363,14 @@ def export_otio_from_resolved_timeline(
         fail_closed=not allow_errors,
     )
     title_track = _build_v2_title_track(title_items, rate=fps) if title_items else None
+    review_track = _build_duplicate_review_track(
+        project, sorted_shots, duplicate_ids, fps=fps
+    )
 
     timeline.tracks.append(video_track)
+    if review_track is not None:
+        timeline.tracks.append(review_track)
+        timeline.metadata["duplicate_asset_review_track"] = True
     if title_track is not None:
         timeline.tracks.append(title_track)
         timeline.metadata["opening_title_count"] = len(title_items)
@@ -1367,7 +1507,9 @@ def export_portable_otio_package(
         _resolved_shot_sort_key as _sort_shots,
     )
 
-    for shot_index, shot in enumerate(sorted(resolved.shots, key=_sort_shots)):
+    sorted_shots = sorted(resolved.shots, key=_sort_shots)
+    duplicate_ids = consecutive_duplicate_shot_ids(sorted_shots)
+    for shot_index, shot in enumerate(sorted_shots):
         if shot.timeline_start_seconds > cursor + 1e-6:
             gap = shot.timeline_start_seconds - cursor
             video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
@@ -1427,6 +1569,7 @@ def export_portable_otio_package(
             shot=shot,
             fps=fps,
             source_duration=source_duration,
+            duplicate=shot.shot_id in duplicate_ids,
         )
         video_track.append(clip)
         pending_video.append((clip, media_path, shot.asset_id))
@@ -1498,7 +1641,28 @@ def export_portable_otio_package(
             child.metadata["original_media_path"] = str(media_path.resolve())
             pending_titles.append((child, media_path.resolve(), asset_id))
 
+    review_track = _build_duplicate_review_track(
+        project, sorted_shots, duplicate_ids, fps=fps
+    )
+    pending_review: list[tuple[otio.schema.Clip, Path, str]] = []
+    if review_track is not None:
+        for child in review_track:
+            media = getattr(child, "media_reference", None)
+            if media is None:
+                continue
+            target = str(getattr(media, "target_url", "") or "").strip()
+            if not target:
+                continue
+            media_path = Path(target)
+            if media_path.is_file():
+                stage_items.append((media_path, "duplicate_asset", "video"))
+                child.metadata["original_media_path"] = str(media_path.resolve())
+                pending_review.append((child, media_path.resolve(), "duplicate_asset"))
+
     timeline.tracks.append(video_track)
+    if review_track is not None:
+        timeline.tracks.append(review_track)
+        timeline.metadata["duplicate_asset_review_track"] = True
     if title_track is not None:
         timeline.tracks.append(title_track)
         timeline.metadata["opening_title_count"] = len(title_items)
@@ -1572,7 +1736,12 @@ def export_portable_otio_package(
 
     # Rewrite target_urls → relative media/<unique>
     for clip, original, _asset_id in (
-        pending_video + pending_audio + pending_titles + pending_music + pending_sfx
+        pending_video
+        + pending_audio
+        + pending_titles
+        + pending_music
+        + pending_sfx
+        + pending_review
     ):
         try:
             entry = lookup_packaged_path(entries, original)

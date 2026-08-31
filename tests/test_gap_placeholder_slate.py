@@ -338,6 +338,133 @@ def test_resolve_markers_for_shortfall_shots() -> None:
     assert "SHORTFALL" in clip.markers[0].name
 
 
+def _dup_shot(shot_id: str, asset_id: str, start: float, end: float) -> ResolvedShot:
+    return ResolvedShot(
+        shot_id=shot_id,
+        asset_id=asset_id,
+        timeline_start_seconds=start,
+        timeline_end_seconds=end,
+        source_start_seconds=0.0,
+        source_end_seconds=end - start,
+        resolved_media_path=f"/media/{asset_id}.mp4",
+    )
+
+
+def test_consecutive_duplicate_shot_ids_marks_both_neighbors() -> None:
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        consecutive_duplicate_shot_ids,
+    )
+
+    shots = [
+        _dup_shot("still_a", "other", 0.0, 2.0),
+        _dup_shot("velika_slot_03", "Velika_Planina_Asset00001", 2.0, 6.0),
+        _dup_shot("velika_slot_04", "Velika_Planina_Asset00001", 6.0, 10.0),
+        _dup_shot("velika_slot_05", "Velika_Planina_Asset00006", 10.0, 14.0),
+    ]
+    flagged = consecutive_duplicate_shot_ids(shots)
+    assert flagged == {"velika_slot_03", "velika_slot_04"}
+
+
+def test_consecutive_duplicate_ignores_placeholder_and_separated_reuse() -> None:
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        consecutive_duplicate_shot_ids,
+    )
+
+    shots = [
+        _dup_shot("a", "Asset00001", 0.0, 2.0),
+        ResolvedShot(
+            shot_id="gap",
+            asset_id="",
+            timeline_start_seconds=2.0,
+            timeline_end_seconds=4.0,
+            source_start_seconds=0.0,
+            source_end_seconds=2.0,
+            is_placeholder=True,
+            open_gap=True,
+        ),
+        _dup_shot("b", "Asset00001", 4.0, 6.0),
+        _dup_shot("c", "Asset00002", 6.0, 8.0),
+        _dup_shot("d", "Asset00001", 8.0, 10.0),
+    ]
+    assert consecutive_duplicate_shot_ids(shots) == set()
+
+
+def test_three_consecutive_same_assets_all_flagged() -> None:
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        consecutive_duplicate_shot_ids,
+    )
+
+    shots = [
+        _dup_shot("s1", "Asset00001", 0.0, 2.0),
+        _dup_shot("s2", "Asset00001", 2.0, 4.0),
+        _dup_shot("s3", "Asset00001", 4.0, 6.0),
+    ]
+    assert consecutive_duplicate_shot_ids(shots) == {"s1", "s2", "s3"}
+
+
+def test_resolve_markers_for_duplicate_assets() -> None:
+    shot = _dup_shot("velika_slot_04", "Velika_Planina_Asset00001", 6.0, 10.0)
+    track = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
+    clip = otio.schema.Clip(name=shot.shot_id)
+    _attach_resolve_markers(
+        clip=clip,
+        video_track=track,
+        shot=shot,
+        fps=25.0,
+        source_duration=4.0,
+        duplicate=True,
+    )
+    assert len(clip.markers) == 1
+    assert clip.markers[0].name.startswith("DUPLICATE ASSET")
+    assert clip.markers[0].metadata["duplicate_asset"] is True
+    assert clip.name.startswith("DUPLICATE ·")
+    assert (clip.metadata.get("Resolve_OTIO") or {}).get("Clip Color") == "Orange"
+    assert clip.color is not None
+    assert clip.markers[0].marked_range.duration.to_frames() == 1
+    assert track.markers[0].marked_range.duration.to_frames() == 1
+
+
+def test_consecutive_duplicate_matches_same_filename_different_ids() -> None:
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        consecutive_duplicate_shot_ids,
+    )
+
+    first = _dup_shot("s1", "id_a", 0.0, 2.0)
+    second = _dup_shot("s2", "id_b", 2.0, 4.0)
+    first.resolved_media_path = "/a/Velika_Planina_Asset00001.mp4"
+    second.resolved_media_path = "/b/Velika_Planina_Asset00001.mp4"
+    assert consecutive_duplicate_shot_ids([first, second]) == {"s1", "s2"}
+
+
+def test_duplicate_review_track_lays_red_slate(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        _build_duplicate_review_track,
+        consecutive_duplicate_shot_ids,
+    )
+
+    project = _project(tmp_path)
+    shots = [
+        _dup_shot("s1", "Asset00001", 0.0, 2.0),
+        _dup_shot("s2", "Asset00001", 2.0, 4.0),
+        _dup_shot("s3", "Asset00002", 4.0, 6.0),
+    ]
+    track = _build_duplicate_review_track(
+        project,
+        shots,
+        consecutive_duplicate_shot_ids(shots),
+        fps=25.0,
+    )
+    assert track is not None
+    assert track.name == "Review"
+    clips = [child for child in track if isinstance(child, otio.schema.Clip)]
+    assert len(clips) == 2
+    assert all("DUPLICATE ASSET" in child.name for child in clips)
+    assert all(
+        (child.metadata.get("Resolve_OTIO") or {}).get("Clip Color") == "Orange"
+        for child in clips
+    )
+
+
 def test_production_gate_blocks_placeholder_even_with_path(tmp_path: Path) -> None:
     project = _project(tmp_path)
     slate = ensure_gap_placeholder_slate(
