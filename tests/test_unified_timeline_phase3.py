@@ -858,8 +858,8 @@ def test_usable_tolerance_last_slot_extends_previous() -> None:
     assert any("Vorgänger-Slot länger" in note for note in repairs)
 
 
-def test_over_tolerance_does_not_clamp_leaves_span_for_gap_path() -> None:
-    """Fix 1: span > usable + tolerance → Grenzen unverändert (Gap später)."""
+def test_over_tolerance_extends_neighbor_when_it_has_spare() -> None:
+    """2s zu kurz, Folgeslot hat Reserve → Nachbar länger, kein Gap auf Slot A."""
     timeline = NarrationTimelineDocument(
         script_version="v1",
         total_duration_seconds=40.0,
@@ -902,11 +902,60 @@ def test_over_tolerance_does_not_clamp_leaves_span_for_gap_path() -> None:
         options=options,
         fps=25.0,
         repairs=repairs,
-        slot_usable_max=[8.0, None],  # shortfall 2.0 > tol 1.0
+        slot_usable_max=[8.0, None],  # shortfall 2.0 > tol 1.0, B unbegrenzt
     )
-    assert timed[0].duration_seconds == pytest.approx(10.0)
+    assert timed[0].duration_seconds == pytest.approx(8.0, abs=0.04)
+    assert timed[1].duration_seconds == pytest.approx(12.0, abs=0.04)
     assert timed[0].end_seconds == timed[1].start_seconds
-    assert not any("nutzbare Dauer knapp" in note for note in repairs)
+    assert any("Folge-Slot länger" in note for note in repairs)
+
+
+def test_over_tolerance_without_neighbor_spare_leaves_gap() -> None:
+    """Über Toleranz und Nachbarn ohne Reserve → Slot bleibt lang (roter Rest)."""
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        _clamp_boundary_times,
+    )
+
+    repairs: list[str] = []
+    times = _clamp_boundary_times(
+        [0.0, 8.0, 16.4, 24.4],
+        editorial_min=0.4,
+        editorial_max=120.0,
+        repairs=repairs,
+        slot_usable_max=[8.0, 6.0, 8.0],
+        short_tolerance=1.0,
+        fps=25.0,
+    )
+    spans = [times[i + 1] - times[i] for i in range(3)]
+    # Mitte 8.4s, usable 6.0, fehlend 2.4s > 1s; Nachbarn schon am Limit.
+    assert spans[1] == pytest.approx(8.4, abs=0.04)
+    assert spans[0] == pytest.approx(8.0, abs=0.04)
+    assert spans[2] == pytest.approx(8.0, abs=0.04)
+
+
+def test_savica_style_over_tolerance_splits_to_both_neighbors() -> None:
+    """Clip 5.7s / Sprecher 8.1s: 2.4s auf Nachbarn mit Reserve, hälftig."""
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        _clamp_boundary_times,
+    )
+
+    repairs: list[str] = []
+    times = _clamp_boundary_times(
+        [0.0, 8.0, 16.12, 24.12],
+        editorial_min=0.4,
+        editorial_max=120.0,
+        repairs=repairs,
+        slot_usable_max=[12.0, 5.7, 12.0],
+        short_tolerance=1.0,
+        fps=25.0,
+    )
+    spans = [times[i + 1] - times[i] for i in range(3)]
+    assert spans[1] == pytest.approx(5.7, abs=0.08)
+    assert spans[0] == pytest.approx(9.2, abs=0.12)
+    assert spans[2] == pytest.approx(9.2, abs=0.12)
+    assert sum(spans) == pytest.approx(24.12, abs=0.04)
+    assert any("Vorgänger-Slot länger" in note for note in repairs)
+    assert any("Folge-Slot länger" in note for note in repairs)
 
 
 def test_allocate_mini_gap_splits_half_when_both_neighbors_have_spare() -> None:
@@ -980,6 +1029,33 @@ def test_mini_gap_pushes_through_tight_direct_neighbors() -> None:
     assert spans[4] > 8.0
     assert sum(spans) == pytest.approx(40.0, abs=0.04)
     assert times[-1] == pytest.approx(40.0, abs=0.04)
+    assert any("erweiterte Nachbarn" in note for note in repairs)
+
+
+def test_over_tolerance_pushes_through_tight_direct_neighbors() -> None:
+    """Kropa-Fall: 1.8s zu kurz, direkte Nachbarn voll → Clip zwei weiter."""
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        _clamp_boundary_times,
+    )
+
+    repairs: list[str] = []
+    # Slots: 8, 8, 8.8, 8, 8 — Mitte braucht 8.8s, hat 7.0s (fehlend 1.8s > 1s).
+    times = _clamp_boundary_times(
+        [0.0, 8.0, 16.0, 24.8, 32.8, 40.8],
+        editorial_min=0.4,
+        editorial_max=120.0,
+        repairs=repairs,
+        slot_usable_max=[8.0, 8.0, 7.0, 8.0, 12.0],
+        short_tolerance=1.0,
+        fps=25.0,
+    )
+    spans = [times[i + 1] - times[i] for i in range(5)]
+    assert spans[2] == pytest.approx(7.0, abs=0.08)
+    assert spans[1] == pytest.approx(8.0, abs=0.04)
+    assert spans[3] == pytest.approx(8.0, abs=0.04)
+    assert spans[4] > 8.0
+    assert sum(spans) == pytest.approx(40.8, abs=0.04)
+    assert times[-1] == pytest.approx(40.8, abs=0.04)
     assert any("erweiterte Nachbarn" in note for note in repairs)
 
 

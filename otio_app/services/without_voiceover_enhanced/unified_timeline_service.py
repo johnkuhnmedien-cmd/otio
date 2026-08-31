@@ -400,7 +400,6 @@ def _plan_has_intro_slots(
 def _mini_gap_spare_seconds(span: float, usable: float | None) -> float:
     """Wie viel Extra ein Nachbar noch tragen kann — ohne Toleranz-Puffer.
 
-    Toleranz gilt nur dafür, ob der knappe Slot überhaupt Mini-Absorb darf.
     Nachbarn, die selbst schon an der nutzbaren Dauer sind, werden
     übersprungen (sonst Pingpong / Grenzen-Klemme nicht stabil).
     """
@@ -560,8 +559,6 @@ def absorb_timed_slot_mini_shortfall(
     cut_need = need - target
     if cut_need <= 1e-9:
         return False, []
-    if cut_need > float(short_tolerance) + 1e-9:
-        return False, []
 
     def _spare(neighbor: int) -> float:
         if neighbor < 0 or neighbor >= len(timed_slots):
@@ -616,8 +613,9 @@ def absorb_timed_slot_mini_shortfall(
     ):
         extra = " inkl. erweiterte Nachbarn"
     repairs.append(
-        f"{slot.slot_id}: Mini-Lücke {cut_need:.2f}s an Nachbarn{extra} "
-        f"(Vorgänger +{to_prev:.2f}s, Folgeslot +{to_next:.2f}s)."
+        f"{slot.slot_id}: fehlende {cut_need:.2f}s an Nachbarn{extra} "
+        f"(Vorgänger +{to_prev:.2f}s, Folgeslot +{to_next:.2f}s, "
+        f"Toleranz {float(short_tolerance):.1f}s)."
     )
     return True, prev_indices
 
@@ -639,11 +637,11 @@ def _clamp_boundary_times(
 
     Fix 1b: gesamte Klemme arbeitet nur auf Framegrenzen (Input vorher snappen).
     Media-Regel (pro Slot mit usable):
-    - span > usable + tolerance → nicht klemmen (später is_short/Gap)
-    - usable < span <= usable + tolerance → knappen Shortfall an Nachbar
-      abgeben (erst direkte Nachbarn, dann deren Nachbarn), auch wenn
-      dadurch ``shot_max`` überschritten wird. Short-Slot selbst wird auf
-      ``floor(usable * fps) / fps`` geklemmt.
+    - span > usable → fehlende Zeit auf Nachbarn legen (erst direkt, dann
+      deren Nachbarn), auch über die Mini-Toleranz und über ``shot_max``.
+      Short-Slot selbst wird um den abgegebenen Betrag gekürzt, Ziel
+      ``floor(usable * fps) / fps``. Was Nachbarn nicht tragen → Rest
+      als roter Placeholder im Shot-Resolve.
     Wenn ``floor(usable) < shot_min``: kein editorial-Hochschieben
     (sonst Pingpong mit usable-Klemme) → Gap-Pfad.
     Max. ``max_media_iterations`` Links-nach-rechts-Pässe; danach noch
@@ -775,10 +773,8 @@ def _clamp_boundary_times(
             if duration <= float(usable) + 1e-9:
                 continue
             shortfall = duration - float(usable)
-            if shortfall > tol + 1e-9:
-                # Über Toleranz: Grenzen unverändert → is_short/Gap-Pfad.
-                continue
-            # Innerhalb Toleranz: Mini-Lücke auf Nachbarn verteilen (shot_max ok).
+            # Auch über Mini-Toleranz: Nachbarn mit Reserve verlängern.
+            # Rest bleibt auf dem Slot → roter Placeholder.
             clamped = _from_frames(uf)
             cut_need = duration - clamped
             if cut_need <= 1e-9:
@@ -823,9 +819,10 @@ def _clamp_boundary_times(
                 f"slot[{index}]: nutzbare Dauer knapp "
                 f"(span {duration:.2f}s → usable {float(usable):.2f}s / "
                 f"frame {clamped:.2f}s, "
-                f"shortfall {shortfall:.2f}s ≤ Toleranz {tol:.1f}s) — "
+                f"fehlend {shortfall:.2f}s) — "
                 + label
-                + " (shot_max-Überschreitung erlaubt)."
+                + " (erst direkte Nachbarn, dann weiter außen; "
+                "shot_max-Überschreitung erlaubt)."
             )
             changed = True
         if changed:
@@ -1822,8 +1819,6 @@ def resolve_unified_timeline(
                 if (
                     usable_now is not None
                     and timed.duration_seconds > float(usable_now) + 1e-6
-                    and (timed.duration_seconds - float(usable_now))
-                    <= short_tolerance + 1e-6
                 ):
                     changed, prev_indices = absorb_timed_slot_mini_shortfall(
                         timed_slots,
