@@ -218,6 +218,13 @@ def test_gap_already_export_ready_requires_merge_criteria(
         is False
     )
     assert list_open_funnel_gap_ids(project) == ["gap_Yosemite_slot_011"]
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        summarize_gap_status,
+    )
+
+    status = summarize_gap_status(project)
+    assert "gap_Yosemite_slot_011" in status.open_gap_ids
+    assert "merge-fähig" in (status.message or "")
 
 
 def test_merge_and_persist_unified_cuts_no_bridge_slot() -> None:

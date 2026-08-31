@@ -21,7 +21,7 @@ from otio_app.models import Project
 from otio_app.services.api_keys import get_api_key, is_api_key_set
 from otio_app.services.gemini_client import describe_and_validate_supplement_asset
 from otio_app.services.inventory_loader import load_folder_inventory
-from otio_app.services.media_utils import file_sha256, probe_duration_seconds
+from otio_app.services.media_utils import file_sha256, is_image_media, probe_duration_seconds
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
 )
@@ -195,6 +195,9 @@ def _candidate_meets_merge_criteria(
     path = Path(str(candidate.local_media_path or "").strip())
     if not path.is_file():
         return False
+    media = (candidate.media_type or "").strip().lower()
+    if media in {"photo", "image"} or is_image_media(path):
+        return True
     options = load_cut_plan_options(project)
     target = None
     if gap is not None and gap.target_duration_seconds is not None:
@@ -748,47 +751,16 @@ def _try_auto_accept_candidate(
 
 
 def list_open_funnel_gap_ids(project: Project) -> list[str]:
-    """Offene Coverage-Gap-IDs in Coverage-Dokument-Reihenfolge.
+    """Offene Coverage-Gap-IDs — dieselbe Definition wie die Cut-Plan-Zähler.
 
-    Stale Funnel-/Accepted-Daten (andere oder fehlende cut_plan_run_id)
-    zählen nicht als erfüllt.
+    Stale Funnel-/Accepted-Daten zählen nicht. Weak-Bestätigung, Merge und
+    merge-fähige Accepted-Dateien schließen; Funnel-„filled“ allein nicht.
     """
     from otio_app.services.without_voiceover_enhanced.gap_status_service import (
-        compute_cut_plan_run_id_from_path,
-        sync_missing_plan_gaps_into_coverage,
-    )
-    from otio_app.services.without_voiceover_enhanced.paths import (
-        unified_cut_plan_path,
+        summarize_gap_status,
     )
 
-    sync_missing_plan_gaps_into_coverage(project)
-    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
-    if coverage is None or not coverage.gaps:
-        return []
-    expected_run_id = str(getattr(coverage, "cut_plan_run_id", "") or "").strip()
-    if not expected_run_id:
-        expected_run_id = compute_cut_plan_run_id_from_path(
-            unified_cut_plan_path(project)
-        )
-    previous = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
-    funnel_ok = _funnel_report_matches_cut_plan(
-        previous, expected_run_id=expected_run_id
-    )
-    active_previous = previous if funnel_ok else None
-    supplements = list_export_ready_supplements(project)
-    open_ids: list[str] = []
-    for gap in coverage.gaps:
-        if not _gap_already_export_ready(
-            active_previous,
-            gap_id=gap.gap_id,
-            project=project,
-            trust_accepted=True,
-            gap=gap,
-            expected_run_id=expected_run_id,
-            export_ready_supplements=supplements,
-        ):
-            open_ids.append(gap.gap_id)
-    return open_ids
+    return list(summarize_gap_status(project).open_gap_ids)
 
 
 def _resolve_requested_gaps(

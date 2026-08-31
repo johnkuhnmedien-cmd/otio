@@ -3145,6 +3145,13 @@ def _render_section_funnel(project) -> None:
         f"erfüllt **{filled_gaps_count}** · "
         f"gesamt **{total_gaps}**"
     )
+    if open_gap_ids:
+        preview = ", ".join(f"`{gid}`" for gid in open_gap_ids[:8])
+        more = f" (+{len(open_gap_ids) - 8})" if len(open_gap_ids) > 8 else ""
+        st.caption(
+            "Noch offen (gleiche Liste wie Auto-Lauf): "
+            f"{preview}{more}"
+        )
     st.caption(
         "Externe App: "
         f"`{external_doc.export_path or coverage_gaps_external_path(project)}` "
