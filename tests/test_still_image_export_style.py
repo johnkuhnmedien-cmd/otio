@@ -140,6 +140,72 @@ def test_export_recovers_original_still_from_hold_mp4(tmp_path: Path) -> None:
     assert out == styled_hold.resolve()
 
 
+def test_export_recovers_original_still_from_clean_mp4(tmp_path: Path) -> None:
+    """Clean-MP4 darf Cover+Pan nicht verlieren — Original-JPEG aus original_image_path."""
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        _original_still_path_for_export,
+    )
+
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    folder = root / "Goriška Brda"
+    folder.mkdir()
+    photo = _write_photo(
+        folder / "Goriška_Brda_Asset00002.jpg",
+        size=(1600, 1000),
+        color=(40, 120, 50),
+    )
+    clean_mp4 = work / "clean" / "Goriška_Brda_Asset00002.mp4"
+    clean_mp4.parent.mkdir(parents=True)
+    clean_mp4.write_bytes(b"fake-clean-mp4")
+
+    project = Project(
+        id="still-clean-cover",
+        name="Slowenien",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="de",
+        asset_subdir_names=["Goriška Brda"],
+        selected_asset_subdirs=["Goriška Brda"],
+        width=1920,
+        height=1080,
+        fps=25.0,
+    )
+    shot = ResolvedShot(
+        shot_id="Goriška_Brda_slot_002",
+        asset_id="asset_goriska_02",
+        timeline_start_seconds=0.0,
+        timeline_end_seconds=6.0,
+        source_start_seconds=0.0,
+        source_end_seconds=5.0,
+        folder_name="Goriška Brda",
+        resolved_media_path=str(clean_mp4),
+        resolved_media_kind="video",
+        hold_mode="",
+    )
+
+    class _Cat:
+        by_id = {
+            "asset_goriska_02": {
+                "path": str(clean_mp4),
+                "original_image_path": str(photo),
+                "canonical_id": "asset_goriska_02",
+                "folder": "Goriška Brda",
+                "media_kind": "video",
+            }
+        }
+        collisions: list[str] = []
+
+    found = _original_still_path_for_export(
+        project, shot, path=clean_mp4, catalog=_Cat(), fps=25.0  # type: ignore[arg-type]
+    )
+    assert found == photo.resolve()
+
+
 def _assert_warm_paper_not_photo(rgb: tuple[int, ...]) -> None:
     r, g, b = rgb[0], rgb[1], rgb[2]
     assert r > 140 and g > 120, rgb
