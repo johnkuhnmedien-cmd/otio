@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+import threading
 
 from otio_app.defaults import ENHANCED_CHAPTER_TIMING_MAX_WORKERS
 from otio_app.models import Project
@@ -357,6 +358,7 @@ class AutoRunStageSummary:
 
 
 _AUTO_RUN_STAGE_CACHE: dict[tuple[str, str], tuple[tuple[object, ...], AutoRunStageSummary]] = {}
+_AUTO_RUN_STAGE_CACHE_LOCK = threading.Lock()
 
 
 def _path_stamp(path) -> tuple[str, int, int]:
@@ -1352,9 +1354,10 @@ def summarize_auto_run_stage(project: Project) -> AutoRunStageSummary:
     except Exception:  # noqa: BLE001 — Cache ist optional
         fingerprint = None
     if fingerprint is not None:
-        hit = _AUTO_RUN_STAGE_CACHE.get(cache_key)
-        if hit is not None and hit[0] == fingerprint:
-            return hit[1]
+        with _AUTO_RUN_STAGE_CACHE_LOCK:
+            hit = _AUTO_RUN_STAGE_CACHE.get(cache_key)
+            if hit is not None and hit[0] == fingerprint:
+                return hit[1]
     rows = list_auto_run_step_statuses(project, stop_after_first_open=True)
     last_done: AutoRunStepStatus | None = None
     next_open: AutoRunStepStatus | None = None
@@ -1384,7 +1387,8 @@ def summarize_auto_run_stage(project: Project) -> AutoRunStageSummary:
         youtube_done=_complete_through_rows(rows, AUTO_RUN_STOP_AFTER_YOUTUBE),
     )
     if fingerprint is not None:
-        _AUTO_RUN_STAGE_CACHE[cache_key] = (fingerprint, summary)
+        with _AUTO_RUN_STAGE_CACHE_LOCK:
+            _AUTO_RUN_STAGE_CACHE[cache_key] = (fingerprint, summary)
     return summary
 
 

@@ -29,12 +29,71 @@ from otio_app.services.without_voiceover_enhanced.enhanced_auto_run_service impo
 )
 from otio_app.ui.active_project_session import set_active_project_id
 from otio_app.ui.navigation import PAGE_ANALYSIS
-from otio_app.ui.polling import poll_while_running
-from otio_app.ui.routing import PENDING_SWITCH_URL_PATH_KEY
+from otio_app.ui.polling import fragment_once, poll_while_running, rerun_fragment
+from otio_app.ui.routing import (
+    PENDING_SWITCH_URL_PATH_KEY,
+    SAVED_PROJECTS_STATUS_EPOCH_KEY,
+)
+
+
+_STATUS_ROWS_PREFIX = "_lang_family_status::"
+_STATUS_TOKEN_PREFIX = "_lang_family_status_token::"
+_STATUS_NONCE_PREFIX = "_lang_family_status_nonce::"
 
 
 def _pick_checkbox_key(family_id: str, language: str) -> str:
     return f"lang_queue_pick_{family_id}_{language}"
+
+
+def _status_nonce_key(family_id: str) -> str:
+    return f"{_STATUS_NONCE_PREFIX}{family_id}"
+
+
+def bump_family_status_cache(family_id: str) -> None:
+    """Nächster voller Seitenlauf berechnet den Sprach-Stand neu."""
+    key = _status_nonce_key(family_id)
+    st.session_state[key] = int(st.session_state.get(key, 0)) + 1
+    st.session_state.pop(f"{_STATUS_ROWS_PREFIX}{family_id}", None)
+    st.session_state.pop(f"{_STATUS_TOKEN_PREFIX}{family_id}", None)
+
+
+def cached_family_status_rows(
+    session: dict,
+    *,
+    family_id: str,
+    token: object,
+    compute,
+):
+    """Session-Cache für die Status-Tabelle — ohne erneutes Datei-Stat."""
+    rows_key = f"{_STATUS_ROWS_PREFIX}{family_id}"
+    token_key = f"{_STATUS_TOKEN_PREFIX}{family_id}"
+    if session.get(token_key) == token and rows_key in session:
+        return session[rows_key]
+    rows = compute()
+    session[rows_key] = rows
+    session[token_key] = token
+    return rows
+
+
+def _family_status_token(
+    siblings: list[Project],
+    *,
+    family_id: str,
+) -> tuple:
+    queue_manager = get_language_auto_run_queue_manager()
+    state = queue_manager.get_state_for_projects(siblings)
+    queue_part = None
+    if state is not None:
+        queue_part = (
+            state.status,
+            state.current_index,
+            tuple(state.completed_languages),
+            tuple(state.failed_languages),
+        )
+    epoch = int(st.session_state.get(SAVED_PROJECTS_STATUS_EPOCH_KEY, 0))
+    nonce = int(st.session_state.get(_status_nonce_key(family_id), 0))
+    ids = tuple(item.id for item in siblings)
+    return (epoch, nonce, ids, queue_part)
 
 
 def render_enhanced_saved_family(group: SavedProjectGroup) -> None:
@@ -54,7 +113,7 @@ def render_enhanced_saved_family(group: SavedProjectGroup) -> None:
         f"Gemeinsamer Ordner: `{representative.project_root}` · "
         f"Land/Region: {representative.video_place or '—'}"
     )
-    _render_language_stage_table(siblings)
+    _render_language_stage_table(siblings, family_id=representative.id)
     st.caption(
         "„anlegen“ heißt: diese Sprache ist am Ordner noch kein Projekt. "
         "Die globalen Sprach-Standards (Brief, Stimme, Cut Plan …) unter `data/` "
@@ -109,6 +168,26 @@ def render_language_sibling_actions(
     if queue_running:
         return
 
+    _render_language_queue_picks(
+        project,
+        siblings,
+        family_id=family_id,
+        catalog=catalog,
+        jobs_busy=jobs_busy,
+        place_ok=place_ok,
+    )
+
+
+def _render_language_queue_picks_impl(
+    project: Project,
+    siblings: list[Project],
+    *,
+    family_id: str,
+    catalog: list[str],
+    jobs_busy: bool,
+    place_ok: bool,
+) -> None:
+    """Sprach-Häkchen: nur dieser Block lädt neu, nicht die Status-Tabelle."""
     st.caption(
         "Sprachen wählen, dann nacheinander (nie parallel) starten. "
         "Fehlende Projekte werden angelegt, unfertige mit skip-done fortgesetzt. "
@@ -144,7 +223,7 @@ def render_language_sibling_actions(
             use_container_width=True,
         ):
             st.session_state[pending_key] = {lang: True for lang in catalog}
-            st.rerun()
+            rerun_fragment()
     with action_cols[1]:
         if st.button(
             "Keine",
@@ -154,7 +233,7 @@ def render_language_sibling_actions(
             use_container_width=True,
         ):
             st.session_state[pending_key] = {lang: False for lang in catalog}
-            st.rerun()
+            rerun_fragment()
     start_disabled = (not place_ok) or jobs_busy or not selected
     with action_cols[2]:
         help_funnel = _start_help(
@@ -193,6 +272,9 @@ def render_language_sibling_actions(
             )
 
 
+_render_language_queue_picks = fragment_once()(_render_language_queue_picks_impl)
+
+
 def _language_pick_help(language: str, siblings: list[Project]) -> str:
     existing = {
         normalize_brief_language(item.language): item for item in siblings
@@ -222,8 +304,18 @@ def _start_help(
     )
 
 
-def _render_language_stage_table(siblings: list[Project]) -> None:
-    rows = family_language_statuses(siblings)
+def _render_language_stage_table(
+    siblings: list[Project],
+    *,
+    family_id: str,
+) -> None:
+    token = _family_status_token(siblings, family_id=family_id)
+    rows = cached_family_status_rows(
+        st.session_state,
+        family_id=family_id,
+        token=token,
+        compute=lambda: family_language_statuses(siblings),
+    )
     st.markdown("**Stand je Sprache**")
     lines = [
         "| Sprache | Angelegt | Stand | Nächster Schritt | Funnel | YouTube |",
@@ -401,6 +493,7 @@ def _render_queue_status(project_id, queue_state, queue_manager, auto_manager) -
         key=f"lang_queue_dismiss_{project_id}",
     ):
         queue_manager.dismiss(project_id)
+        bump_family_status_cache(project_id)
         st.rerun()
 
 
@@ -419,6 +512,7 @@ def _start_open_language_queue(
     except (LanguageSiblingError, LanguageAutoRunQueueBusyError, ValueError) as exc:
         st.error(str(exc))
         return
+    bump_family_status_cache(project.id)
     st.rerun()
 
 

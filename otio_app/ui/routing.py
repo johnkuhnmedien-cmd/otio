@@ -15,7 +15,14 @@ from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_banner
 from otio_app.ui.clean_media import render_clean_media_page
 from otio_app.ui.edit_plan import render_edit_plan_page
 from otio_app.ui.adobe_research_import_page import render_adobe_research_import_page
-from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_API_KEYS, PAGE_MAPPING, PAGE_SUPPLEMENT
+from otio_app.ui.navigation import (
+    ACTIVE_PROJECT_KEY,
+    PAGE_ANALYSIS,
+    PAGE_API_KEYS,
+    PAGE_LIST,
+    PAGE_MAPPING,
+    PAGE_SUPPLEMENT,
+)
 from otio_app.ui.active_project_session import restore_active_project_into_session
 from otio_app.ui.page_state import clear_page_widget_state
 from otio_app.ui.project_workbench import render_project_workbench
@@ -53,6 +60,8 @@ from otio_app.ui.without_voiceover_enhanced.maps_tab import render_enhanced_maps
 _CURRENT_PAGE_KEY = "_otio_current_page"
 # app.py „Projekt bearbeiten“ → nach st.navigation zum Page-Objekt springen
 PENDING_SWITCH_URL_PATH_KEY = "_otio_pending_switch_url_path"
+# Gespeicherte Projekte: Status-Tabelle neu berechnen, wenn man die Seite betritt.
+SAVED_PROJECTS_STATUS_EPOCH_KEY = "_saved_projects_status_epoch"
 
 
 def _active_project_mode() -> ProjectMode:
@@ -86,6 +95,11 @@ def _wrap_page(
             if purge_mapping_on_enter:
                 clear_page_widget_state(PAGE_MAPPING)
             st.session_state[_CURRENT_PAGE_KEY] = page_id
+            if page_id == PAGE_LIST:
+                st.session_state[SAVED_PROJECTS_STATUS_EPOCH_KEY] = (
+                    int(st.session_state.get(SAVED_PROJECTS_STATUS_EPOCH_KEY, 0))
+                    + 1
+                )
 
         reconcile_all_jobs()
         record_script_run(page_id)
