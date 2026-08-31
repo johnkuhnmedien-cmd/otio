@@ -257,7 +257,7 @@ def test_chapter_open_gap_ids_uses_plan_even_if_coverage_missing(tmp_path) -> No
 
 
 def test_chapter_status_shortfall_tails_are_not_export_ready() -> None:
-    """Dauer-Shortfall: Timing gilt nicht als fertig — sonst scheitert Alle-OTIO."""
+    """Dauer-Shortfall: Timing gilt nicht als fertig (Warnbanner bleibt)."""
     plan = _plan("Yo", slots=1)
     resolved = ResolvedTimelineDocument(
         script_version="v1",
@@ -435,8 +435,8 @@ def test_build_merged_skips_chapters_without_matching_timing(tmp_path) -> None:
     assert any("Caddo" in err and "Python-Timing" in err for err in merged.errors)
 
 
-def test_build_merged_rejects_chapters_with_shortfall_tails(tmp_path) -> None:
-    """Shortfall-Placeholder dürfen nicht als fertige Timeline gemerged werden."""
+def test_build_merged_includes_chapters_with_shortfall_tails(tmp_path) -> None:
+    """Shortfall-Placeholder werden mitexportiert und in Merge-Fehlern erwähnt."""
     from otio_app.services.without_voiceover_enhanced.models import (
         EnhancedScriptDocument,
     )
@@ -489,10 +489,16 @@ def test_build_merged_rejects_chapters_with_shortfall_tails(tmp_path) -> None:
             return_value=None,
         ),
     ):
-        with pytest.raises(ChapterCutError, match="Shortfall"):
-            build_merged_resolved_timeline(
-                project, include_intro=False, persist_global=False
-            )
+        merged = build_merged_resolved_timeline(
+            project, include_intro=False, persist_global=False
+        )
+
+    shot_ids = [shot.shot_id for shot in merged.shots]
+    assert "The_Wave_slot_001" in shot_ids
+    assert "The_Wave_slot_001__shortfall" in shot_ids
+    assert any(
+        "The Wave" in err and "Platzhalter" in err for err in merged.errors
+    )
 
 
 def test_reconcile_intro_envelope_snaps_video_end_to_audio_plus_postroll() -> None:
@@ -1118,7 +1124,7 @@ def test_resolve_chapter_timeline_merges_export_ready_gaps(tmp_path) -> None:
     assert chapter_resolved_timeline_path(project, "Yosemite").is_file()
 
 
-def test_resolve_chapter_timeline_fails_when_shortfall_remains(tmp_path) -> None:
+def test_resolve_chapter_timeline_keeps_shortfall_placeholders(tmp_path) -> None:
     from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
         resolve_chapter_timeline,
     )
@@ -1166,6 +1172,7 @@ def test_resolve_chapter_timeline_fails_when_shortfall_remains(tmp_path) -> None
         "otio_app.services.without_voiceover_enhanced.gap_merge_service.merge_export_ready_gaps_into_timeline",
         return_value=(timed, GapMergeReport(script_version="v1")),
     ):
-        with pytest.raises(ChapterCutError, match="Shortfall"):
-            resolve_chapter_timeline(project, "Yosemite")
+        out = resolve_chapter_timeline(project, "Yosemite")
     assert chapter_resolved_timeline_path(project, "Yosemite").is_file()
+    assert any(shot.shot_id.endswith("__shortfall") for shot in out.shots)
+    assert any("Platzhalter" in note for note in out.errors)

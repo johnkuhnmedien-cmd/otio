@@ -198,6 +198,11 @@ def _fmt_sec(value: str | float) -> str:
         number = float(value)
     except (TypeError, ValueError):
         return str(value)
+    if abs(number) < 1e-9:
+        return "0s"
+    # 0.04s wurde als „0s“ angezeigt (eine Nachkommastelle + .0-Kürzen).
+    if abs(number) < 0.1:
+        return f"{number:.2f}s"
     if abs(number - round(number)) < 1e-9:
         return f"{int(round(number))}s"
     return f"{number:.1f}s".replace(".0s", "s")
@@ -520,6 +525,7 @@ def classify_timing_errors(messages: list[str] | str | Exception) -> list[Timing
             "zu kurz" in lower
             or "placeholder/shortfall" in lower
             or "nicht exportfähig" in lower
+            or "roter platzhalter" in lower
             or _INSPECT_SHORT_RE.search(body)
         ):
             missing = _shortfall_seconds(body)

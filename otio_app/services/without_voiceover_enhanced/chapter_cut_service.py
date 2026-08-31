@@ -188,8 +188,10 @@ def chapter_resolved_matches_plan(
 ) -> bool:
     """True wenn jedes Plan-Slot einen Parent-Shot hat und nichts den Export sperrt.
 
-    ``__shortfall``-Tails zählen nicht als Extra-Slot, machen das Kapitel aber
-    nicht exportfähig — sonst wirkt Timing fertig, Alle-OTIO scheitert später.
+    ``__shortfall``-Tails zählen nicht als Extra-Slot. Das Kapitel gilt deshalb
+    nicht als Timing-fertig (Warnbanner bleibt). Cut-Plan-OTIO exportiert die
+    roten Platzhalter trotzdem — Produktions-OTIO unter Final Output bleibt
+    fail-closed.
     """
     if plan is None or resolved is None:
         return False
@@ -939,14 +941,16 @@ def resolve_chapter_timeline(
     if blockers:
         preview = ", ".join(blockers[:12])
         more = f" (+{len(blockers) - 12})" if len(blockers) > 12 else ""
-        write_json(chapter_resolved_timeline_path(project, folder_name), resolved)
-        raise ChapterCutError(
-            f"Python Timing für „{folder_name}“ nicht exportfähig: "
-            f"{len(blockers)} Placeholder/Shortfall — das Video ist kürzer "
-            f"als die Sprecherzeit. Unter „Zu kurze Clips ansehen“ liegt das "
-            f"vorgesehene Video. Im Funnel längeres Material holen, dann "
-            f"Timing erneut. Betroffen: {preview}{more}."
+        note = (
+            f"Python Timing für „{folder_name}“: {len(blockers)} "
+            f"roter Platzhalter in der Timeline (OTIO exportiert sie markiert). "
+            f"Betroffen: {preview}{more}."
         )
+        resolved = resolved.model_copy(
+            update={"errors": [*list(resolved.errors or []), note]}
+        )
+        write_json(chapter_resolved_timeline_path(project, folder_name), resolved)
+        return resolved
 
     write_json(chapter_resolved_timeline_path(project, folder_name), resolved)
     return resolved
@@ -1298,21 +1302,17 @@ def build_merged_resolved_timeline(
         if resolved is None:
             missing.append(f"{name} (kein passendes Python-Timing)")
             continue
-        blockers = production_blocking_placeholder_labels(
-            resolved, folder_name=name, project=project
-        )
-        if blockers:
-            preview = ", ".join(blockers[:3])
-            more = f" (+{len(blockers) - 3})" if len(blockers) > 3 else ""
-            missing.append(
-                f"{name} (Placeholder/Shortfall: {preview}{more})"
-            )
-            continue
-        if not chapter_resolved_matches_plan(plan, resolved):
-            missing.append(f"{name} (kein passendes Python-Timing)")
-            continue
         if resolved.shots or resolved.audio_segments:
             parts.append(resolved)
+            blockers = production_blocking_placeholder_labels(
+                resolved, folder_name=name, project=project
+            )
+            if blockers:
+                missing.append(
+                    f"{name} ({len(blockers)} rote Platzhalter, mitexportiert)"
+                )
+            elif not chapter_resolved_matches_plan(plan, resolved):
+                missing.append(f"{name} (Timing passt nicht ganz, mitexportiert)")
 
     if not parts:
         detail = "; ".join(missing) if missing else "keine Timelines"

@@ -137,3 +137,35 @@ def test_unknown_asset_id_is_own_group() -> None:
     assert len(by_cat["unknown_id"].items) == 2
     assert "Vogel" in by_cat["unknown_id"].items[0]
     assert "openverse_abc" in by_cat["unknown_id"].items[0]
+
+
+def test_fmt_sec_keeps_tiny_shortfalls_visible() -> None:
+    from otio_app.services.without_voiceover_enhanced.timing_error_summary import (
+        _fmt_sec,
+        classify_timing_errors,
+    )
+
+    assert _fmt_sec(0) == "0s"
+    assert _fmt_sec(0.03) == "0.03s"
+    assert _fmt_sec(0.3) == "0.3s"
+    assert _fmt_sec(8.0) == "8s"
+    assert _fmt_sec(8.1) == "8.1s"
+
+    groups = classify_timing_errors(
+        "Kropa: slot[7]: span 8.34s > usable 8.31s "
+        "(shortfall 0.03s innerhalb Toleranz 2.0s) "
+        "nach Grenzen-Klemme — Rest als roter Placeholder."
+    )
+    by_cat = {g.category: g for g in groups}
+    assert "clamp_unstable" in by_cat
+    assert "0.03s" in " ".join(by_cat["clamp_unstable"].items)
+
+    placeholder_note = classify_timing_errors(
+        "Python Timing für „Savica-Wasserfall“: 1 roter Platzhalter "
+        "in der Timeline (OTIO exportiert sie markiert). "
+        "Betroffen: Savica-Wasserfall_slot_012: asset_x · clip.mov "
+        "— nutzbar 5.7s, Slot braucht 8.1s."
+    )
+    by_note = {g.category: g for g in placeholder_note}
+    assert "short_asset" in by_note
+    assert "Savica-Wasserfall" in " ".join(by_note["short_asset"].items)

@@ -789,10 +789,11 @@ def test_ui_test_otio_with_gaps_markers() -> None:
     assert "allow_errors=True" in final_src
     assert "disabled=has_errors" in final_src
     all_otio = cut_src[cut_src.index("if run_all_otio:") : cut_src.index("if run_all_otio:") + 700]
-    assert "allow_errors=False" in all_otio
-    assert "allow_errors=True" not in all_otio
+    assert "allow_errors=True" in all_otio
+    assert "allow_errors=False" not in all_otio
     chapter_otio = cut_src[cut_src.index("if run_otio:") : cut_src.index("if run_otio:") + 500]
-    assert "allow_errors=False" in chapter_otio
+    assert "allow_errors=True" in chapter_otio
+    assert "allow_errors=False" not in chapter_otio
     auto_src = Path(
         "otio_app/services/without_voiceover_enhanced/enhanced_auto_run_service.py"
     ).read_text(encoding="utf-8")
