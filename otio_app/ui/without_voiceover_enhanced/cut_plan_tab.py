@@ -947,11 +947,12 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 step=0.5,
                 key=f"enh_opt_short_tol_{project.id}",
                 help=(
-                    "Fehlt dem Asset höchstens so viel nutzbare Dauer (Default 1s): "
-                    "Python kürzt den Slot und verlängert zuerst den Clip davor "
-                    "und/oder danach (möglichst hälftig). Reicht das nicht, "
-                    "wandern die Mini-Zeit auf die nächsten Clips daneben. "
-                    "Darüber: roter Shortfall/Placeholder."
+                    "Fehlt dem Clip nutzbare Dauer: Python verlängert zuerst "
+                    "den Clip davor und/oder danach (möglichst hälftig). "
+                    "Reicht das nicht, die nächsten Clips daneben. "
+                    "Was die Nachbarn nicht tragen können, bleibt als roter "
+                    "Platzhalter. Die Toleranz (Default 1s) kennzeichnet "
+                    "Mini-Reste; shot_max darf beim Verlängern überschritten werden."
                 ),
             )
         with col2:

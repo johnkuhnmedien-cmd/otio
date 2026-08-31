@@ -426,8 +426,11 @@ def _empty_groups() -> dict[str, TimingIssueGroup]:
                 "Abschnitt. Deshalb bleibt ein rotes Stück in der Timeline."
             ),
             next_step=(
-                "Unter „Zu kurze Clips ansehen“ das Video prüfen. "
-                "Im Funnel ein längeres Video holen, dann Python Timing erneut."
+                "Python Timing erneut: fehlende Zeit geht zuerst auf die "
+                "Clips davor und danach, wenn die noch Material haben. "
+                "Was übrig bleibt, siehst du als rotes Stück. "
+                "Unter „Zu kurze Clips ansehen“ das Video prüfen; "
+                "im Funnel ein längeres holen, wenn die Nachbarn auch knapp sind."
             ),
         ),
         "clamp_unstable": TimingIssueGroup(

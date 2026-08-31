@@ -221,8 +221,9 @@ class CutPlanOptions(BaseModel):
     intro_voiceover_postroll_max_sec: float = Field(
         default=DEFAULT_INTRO_VOICEOVER_POSTROLL_MAX_SEC, ge=0.0, le=60.0
     )
-    # Asset darf bis zu dieser Unterlänge trotzdem genutzt werden:
-    # Shortfall geht an Nachbar-Clips (shot_max darf dabei überschritten werden).
+    # Mini-Reste vs. große Shortfalls: Nachbarn werden in beiden Fällen
+    # verlängert, soweit sie Reserve haben. shot_max darf dabei überschritten
+    # werden. Was übrig bleibt, wird roter Placeholder.
     short_asset_tolerance_sec: float = Field(
         default=ENHANCED_DEFAULT_SHORT_ASSET_TOLERANCE_SEC, ge=0.0, le=30.0
     )

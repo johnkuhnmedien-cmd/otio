@@ -225,9 +225,9 @@ def render_cut_plan_defaults_form(
             step=0.5,
             key=_k(key_suffix, "short_tol"),
             help=(
-                "Fehlt höchstens so viel Dauer: Python verlängert zuerst den "
-                "Clip davor und/oder danach (möglichst hälftig). Reicht das "
-                "nicht, die nächsten Clips daneben. Default 1s."
+                "Fehlt nutzbare Dauer: Python verlängert zuerst den Clip "
+                "davor und/oder danach, sonst die nächsten daneben. "
+                "Rest = roter Platzhalter. Default-Toleranz 1s (Mini-Reste)."
             ),
         )
     with col2:
