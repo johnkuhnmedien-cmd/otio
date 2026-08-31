@@ -48,6 +48,9 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
     MapPlanItem,
     MapRenderSettings,
 )
+from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
+    map_overlay_place_label,
+)
 from otio_app.services.without_voiceover_enhanced.paths import (
     map_coordinates_path,
     map_output_dir,
@@ -243,7 +246,7 @@ def build_map_plan(
         chapter_id = entry.folder_name
         original = entry.folder_name
         place = _place_for(coords, chapter_id, original, country)
-        display = (place.display_label or original).strip() or original
+        display = map_overlay_place_label(original, place.display_label, language)
         if ordinal == 1:
             animation = MAP_ANIMATION_OPENING
             from_id = ""
@@ -280,7 +283,11 @@ def build_map_plan(
             from_localized_display_label=(
                 ""
                 if animation == MAP_ANIMATION_OPENING
-                else (start_place.display_label or start_place.original_label)
+                else map_overlay_place_label(
+                    start_place.original_label,
+                    start_place.display_label,
+                    language,
+                )
             ),
             start_latitude=start_place.latitude,
             start_longitude=start_place.longitude,

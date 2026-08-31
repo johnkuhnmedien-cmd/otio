@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 MAP_STYLE_VERSION = "map_style_v1"
-ENGINE_STYLE_VERSION = "otio-vintage-map-v11"
+ENGINE_STYLE_VERSION = "otio-vintage-map-v13"
 MAP_DURATION_SEC = 9.0
 MAP_FPS = 25
 MAP_DURATION_FRAMES = 225

@@ -236,6 +236,68 @@ def test_visible_heading_is_localized_filename_keeps_original_json_name(
     assert map_heading("ja") == "旅行ルート"
 
 
+def test_italian_map_localizes_german_country_and_chapter_labels(tmp_path: Path) -> None:
+    folders = ["Peričnik-Wasserfall", "Jezersko"]
+    project = _project(
+        tmp_path, folders, language="it", video_place="Slowenien"
+    )
+    _confirm(project, folders, language="IT")
+    plan = build_map_plan(
+        project,
+        coordinates=_coords(
+            project,
+            {
+                "Peričnik-Wasserfall": (46.44, 13.89, COORDINATE_STATUS_MANUAL, 1.0),
+                "Jezersko": (46.40, 14.50, COORDINATE_STATUS_MANUAL, 1.0),
+            },
+        ),
+    )
+    opening = plan.maps[0]
+    transition = plan.maps[1]
+    assert opening.heading == "Itinerario"
+    assert opening.country == "Slowenien"
+    assert opening.localized_display_label == "Cascata di Peričnik"
+    assert opening.original_chapter_label == "Peričnik-Wasserfall"
+    assert opening.output_filename == "it_Peričnik-Wasserfall_Map.mp4"
+    assert transition.from_localized_display_label == "Cascata di Peričnik"
+    assert transition.localized_display_label == "Jezersko"
+    assert transition.from_original_chapter_label == "Peričnik-Wasserfall"
+
+
+def test_italian_plan_ignores_english_osm_display_names(tmp_path: Path) -> None:
+    folders = [
+        "Škocjan-Höhlen",
+        "Höhle von Postojna",
+        "Bohinjer See",
+        "Logar-Tal",
+        "Vršič-Pass",
+        "Triglav-Nationalpark",
+        "Tolminer Klammen",
+    ]
+    project = _project(tmp_path, folders, language="it", video_place="Slowenien")
+    _confirm(project, folders, language="IT")
+    coords = _coords(
+        project,
+        {
+            folder: (46.0 + index * 0.01, 14.0 + index * 0.01, COORDINATE_STATUS_MANUAL, 1.0)
+            for index, folder in enumerate(folders)
+        },
+    )
+    coords.places["Bohinjer See"].display_label = "Lake Bohinj"
+    coords.places["Logar-Tal"].display_label = "Logarska Dolina"
+    coords.places["Tolminer Klammen"].display_label = "Tolmin Gorge"
+    coords.places["Höhle von Postojna"].display_label = "Postojna Cave"
+    plan = build_map_plan(project, coordinates=coords)
+    by_id = {item.chapter_id: item.localized_display_label for item in plan.maps}
+    assert by_id["Škocjan-Höhlen"] == "Grotte di Škocjan"
+    assert by_id["Höhle von Postojna"] == "Grotta di Postojna"
+    assert by_id["Bohinjer See"] == "Lago di Bohinj"
+    assert by_id["Logar-Tal"] == "Valle di Logar"
+    assert by_id["Vršič-Pass"] == "Passo Vršič"
+    assert by_id["Triglav-Nationalpark"] == "Parco nazionale del Triglav"
+    assert by_id["Tolminer Klammen"] == "Gole di Tolmin"
+
+
 def test_hd_and_4k_parallel_caps() -> None:
     assert clamp_max_parallel(MAP_RESOLUTION_HD, 8) == 4
     assert clamp_max_parallel(MAP_RESOLUTION_HD, 1) == 1

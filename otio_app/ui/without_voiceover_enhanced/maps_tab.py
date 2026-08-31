@@ -126,8 +126,11 @@ def render_enhanced_maps_page() -> None:
         st.metric("Kartenüberschrift", map_heading(confirmed.language))
     st.caption(f"Ausgabeordner: `{map_output_dir(project)}`")
     st.caption(
-        "Dateinamen nutzen den Originalkapitelnamen aus der Dramaturgie, "
-        "sichtbarer Text folgt der Projektsprache."
+        "Dateinamen bleiben die deutschen Ordnernamen. Auf der Karte folgen "
+        "Überschrift, Land und Ortsangaben der Projektsprache "
+        "(z. B. Slowenien → Slovenia, Peričnik-Wasserfall → Cascata di Peričnik). "
+        "Eigennamen ohne deutsches Landschaftswort bleiben unverändert. "
+        "Unter „Sichtbarer Name“ kann man einzelne Orte manuell überschreiben."
     )
 
     if saved_plan is not None and saved_plan.dramaturgy_fingerprint != live_fp:
