@@ -544,12 +544,18 @@ _LANDMARK_KIND_BY_TOKEN: dict[str, str] = {
     "valley": "valley",
     "dal": "valley",
     "dolina": "valley",
+    "höhlen": "caves",
+    "hoehlen": "caves",
+    "caves": "caves",
     "höhle": "cave",
     "hoehle": "cave",
     "cave": "cave",
     "grot": "cave",
     "castle": "castle",
     "burg": "castle",
+    "pass": "pass",
+    "nationalpark": "park",
+    "national park": "park",
 }
 
 _LANDMARK_PREFIXES: tuple[tuple[str, str], ...] = (
@@ -570,17 +576,27 @@ _LANDMARK_PREFIXES: tuple[tuple[str, str], ...] = (
     ("lake", "lac de "),
     ("lake", "jezioro "),
     ("lake", "lago "),
+    ("lake", "lake "),
     ("valley", "valle di "),
     ("valley", "vallée de "),
     ("valley", "vallee de "),
     ("valley", "valle de "),
     ("valley", "vale de "),
     ("valley", "dolina "),
+    ("caves", "grotte di "),
+    ("caves", "grottes de "),
+    ("caves", "cuevas de "),
+    ("caves", "caves of "),
+    ("caves", "höhlen von "),
+    ("caves", "hoehlen von "),
     ("cave", "grotta di "),
     ("cave", "grotte de "),
     ("cave", "cueva de "),
     ("cave", "gruta de "),
     ("cave", "jaskinia "),
+    ("cave", "cave of "),
+    ("cave", "höhle von "),
+    ("cave", "hoehle von "),
     ("castle", "castello di "),
     ("castle", "château de "),
     ("castle", "chateau de "),
@@ -589,6 +605,14 @@ _LANDMARK_PREFIXES: tuple[tuple[str, str], ...] = (
     ("castle", "kasteel "),
     ("castle", "zamek "),
     ("castle", "burg "),
+    ("pass", "passo del "),
+    ("pass", "passo di "),
+    ("pass", "passo "),
+    ("pass", "col de "),
+    ("park", "parco nazionale del "),
+    ("park", "parco nazionale di "),
+    ("park", "parc national de "),
+    ("park", "parque nacional de "),
 )
 
 _LANDMARK_SUFFIXES: tuple[tuple[str, str], ...] = (
@@ -621,6 +645,13 @@ _LANDMARK_SUFFIXES: tuple[tuple[str, str], ...] = (
     ("valley", " valley"),
     ("valley", "-dal"),
     ("valley", " dal"),
+    ("valley", " dolina"),
+    ("valley", "-dolina"),
+    ("caves", "-höhlen"),
+    ("caves", " höhlen"),
+    ("caves", "-hoehlen"),
+    ("caves", " hoehlen"),
+    ("caves", " caves"),
     ("cave", "-höhle"),
     ("cave", " höhle"),
     ("cave", "-hoehle"),
@@ -628,6 +659,11 @@ _LANDMARK_SUFFIXES: tuple[tuple[str, str], ...] = (
     ("cave", " cave"),
     ("castle", " castle"),
     ("castle", "-castle"),
+    ("park", "-nationalpark"),
+    ("park", " nationalpark"),
+    ("park", " national park"),
+    ("pass", "-pass"),
+    ("pass", " pass"),
 )
 
 _LANDMARK_TEMPLATES: dict[str, dict[str, str]] = {
@@ -637,8 +673,11 @@ _LANDMARK_TEMPLATES: dict[str, dict[str, str]] = {
         "gorges": "{stem}-Klammen",
         "lake": "{stem}-See",
         "valley": "{stem}-Tal",
+        "caves": "{stem}-Höhlen",
         "cave": "{stem}-Höhle",
         "castle": "Burg {stem}",
+        "pass": "{stem}-Pass",
+        "park": "{stem}-Nationalpark",
     },
     "EN": {
         "falls": "{stem} Falls",
@@ -646,8 +685,11 @@ _LANDMARK_TEMPLATES: dict[str, dict[str, str]] = {
         "gorges": "{stem} Gorges",
         "lake": "{stem} Lake",
         "valley": "{stem} Valley",
+        "caves": "{stem} Caves",
         "cave": "{stem} Cave",
         "castle": "{stem} Castle",
+        "pass": "{stem} Pass",
+        "park": "{stem} National Park",
     },
     "FR": {
         "falls": "Cascade de {stem}",
@@ -655,8 +697,11 @@ _LANDMARK_TEMPLATES: dict[str, dict[str, str]] = {
         "gorges": "Gorges de {stem}",
         "lake": "Lac de {stem}",
         "valley": "Vallée de {stem}",
+        "caves": "Grottes de {stem}",
         "cave": "Grotte de {stem}",
         "castle": "Château de {stem}",
+        "pass": "Col de {stem}",
+        "park": "Parc national de {stem}",
     },
     "IT": {
         "falls": "Cascata di {stem}",
@@ -664,8 +709,11 @@ _LANDMARK_TEMPLATES: dict[str, dict[str, str]] = {
         "gorges": "Gole di {stem}",
         "lake": "Lago di {stem}",
         "valley": "Valle di {stem}",
+        "caves": "Grotte di {stem}",
         "cave": "Grotta di {stem}",
         "castle": "Castello di {stem}",
+        "pass": "Passo {stem}",
+        "park": "Parco nazionale del {stem}",
     },
     "ES": {
         "falls": "Cascada de {stem}",
@@ -673,8 +721,11 @@ _LANDMARK_TEMPLATES: dict[str, dict[str, str]] = {
         "gorges": "Gargantas de {stem}",
         "lake": "Lago {stem}",
         "valley": "Valle de {stem}",
+        "caves": "Cuevas de {stem}",
         "cave": "Cueva de {stem}",
         "castle": "Castillo de {stem}",
+        "pass": "Puerto de {stem}",
+        "park": "Parque nacional de {stem}",
     },
     "PT": {
         "falls": "Cascata de {stem}",
@@ -682,8 +733,11 @@ _LANDMARK_TEMPLATES: dict[str, dict[str, str]] = {
         "gorges": "Gargantas de {stem}",
         "lake": "Lago {stem}",
         "valley": "Vale de {stem}",
+        "caves": "Grutas de {stem}",
         "cave": "Gruta de {stem}",
         "castle": "Castelo de {stem}",
+        "pass": "Passo de {stem}",
+        "park": "Parque nacional de {stem}",
     },
     "NL": {
         "falls": "{stem}-waterval",
@@ -691,8 +745,11 @@ _LANDMARK_TEMPLATES: dict[str, dict[str, str]] = {
         "gorges": "{stem}-kloof",
         "lake": "{stem}-meer",
         "valley": "{stem}-dal",
+        "caves": "{stem}-grotten",
         "cave": "{stem}-grot",
         "castle": "Kasteel {stem}",
+        "pass": "{stem}-pas",
+        "park": "{stem} Nationaal Park",
     },
     "PL": {
         "falls": "Wodospad {stem}",
@@ -700,8 +757,11 @@ _LANDMARK_TEMPLATES: dict[str, dict[str, str]] = {
         "gorges": "Wąwóz {stem}",
         "lake": "Jezioro {stem}",
         "valley": "Dolina {stem}",
+        "caves": "Jaskinie {stem}",
         "cave": "Jaskinia {stem}",
         "castle": "Zamek {stem}",
+        "pass": "Przełęcz {stem}",
+        "park": "Park Narodowy {stem}",
     },
 }
 
@@ -756,6 +816,23 @@ def localize_map_place_label(place: str, language: str | None) -> str:
     return template.format(stem=stem)
 
 
+def map_overlay_place_label(
+    original: str, display: str | None, language: str | None
+) -> str:
+    """Kartenzeile: deutschen Ordnernamen übersetzen, OSM-Namen nicht übernehmen.
+
+    Ein manueller Anzeigename gilt nur, wenn der Ordner selbst kein
+    übersetzbares Landschaftswort enthält (z. B. Monte Athos).
+    """
+    original_text = " ".join(str(original or "").replace("_", " ").split())
+    display_text = " ".join(str(display or "").replace("_", " ").split())
+    if original_text and _parse_map_landmark(original_text) is not None:
+        return localize_map_place_label(original_text, language)
+    if display_text:
+        return localize_map_place_label(display_text, language)
+    return localize_map_place_label(original_text, language)
+
+
 def view_bounds(
     numeric_id: str,
     start_longitude: float,
@@ -787,11 +864,18 @@ def remotion_payload(item: MapPlanItem) -> dict:
     is_opening = item.animation_mode == MAP_ANIMATION_OPENING
     if is_opening:
         from_raw = item.localized_display_label
+        from_original = item.original_chapter_label
     else:
         from_raw = item.from_localized_display_label or item.localized_display_label
-    from_label = _clip_label(localize_map_place_label(from_raw, item.language), 100)
+        from_original = item.from_original_chapter_label or item.original_chapter_label
+    from_label = _clip_label(
+        map_overlay_place_label(from_original, from_raw, item.language), 100
+    )
     to_label = _clip_label(
-        localize_map_place_label(item.localized_display_label, item.language), 100
+        map_overlay_place_label(
+            item.original_chapter_label, item.localized_display_label, item.language
+        ),
+        100,
     )
     numeric_id = country_numeric_id(item.country).zfill(3)[:3]
     resolution = "4k" if item.resolution == MAP_RESOLUTION_4K else "hd"

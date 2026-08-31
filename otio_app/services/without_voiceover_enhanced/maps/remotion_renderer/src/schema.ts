@@ -31,7 +31,7 @@ export const MapTransitionSchema = z.object({
   outputWidth: z.union([z.literal(1920), z.literal(3840)]),
   outputHeight: z.union([z.literal(1080), z.literal(2160)]),
   seed: z.string().min(1).max(200),
-  styleVersion: z.literal("otio-vintage-map-v12"),
+  styleVersion: z.literal("otio-vintage-map-v13"),
   viewBounds: z.tuple([
     z.tuple([z.number(), z.number()]),
     z.tuple([z.number(), z.number()]),
@@ -70,7 +70,7 @@ export const defaultMapTransition: MapTransitionProps = {
   outputWidth: 3840,
   outputHeight: 2160,
   seed: "monument-valley-grand-canyon-v1",
-  styleVersion: "otio-vintage-map-v12",
+  styleVersion: "otio-vintage-map-v13",
   viewBounds: [
     [-125, 24],
     [-66, 50],

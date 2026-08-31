@@ -40,6 +40,7 @@ from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
     country_iso2,
     country_label,
     localize_map_place_label,
+    map_overlay_place_label,
 )
 
 
@@ -527,6 +528,27 @@ def test_localize_map_place_label_translates_german_landmarks() -> None:
     assert localize_map_place_label("Monte Athos", "IT") == "Monte Athos"
     assert localize_map_place_label("Peričnik-Wasserfall", "DE") == "Peričnik-Wasserfall"
     assert localize_map_place_label("Peričnik-Wasserfall", "EN") == "Peričnik Falls"
+    assert localize_map_place_label("Škocjan-Höhlen", "IT") == "Grotte di Škocjan"
+    assert localize_map_place_label("Höhle von Postojna", "IT") == "Grotta di Postojna"
+    assert localize_map_place_label("Vršič-Pass", "IT") == "Passo Vršič"
+    assert localize_map_place_label("Triglav-Nationalpark", "IT") == "Parco nazionale del Triglav"
+    assert localize_map_place_label("Tolminer Klammen", "IT") == "Gole di Tolmin"
+    assert localize_map_place_label("Lake Bohinj", "IT") == "Lago di Bohinj"
+
+
+def test_map_overlay_prefers_german_folder_over_osm_display() -> None:
+    assert (
+        map_overlay_place_label("Bohinjer See", "Lake Bohinj", "IT") == "Lago di Bohinj"
+    )
+    assert (
+        map_overlay_place_label("Logar-Tal", "Logarska Dolina", "IT") == "Valle di Logar"
+    )
+    assert (
+        map_overlay_place_label("Tolminer Klammen", "Tolmin Gorge", "IT")
+        == "Gole di Tolmin"
+    )
+    assert map_overlay_place_label("Mount Athos", "Monte Athos", "IT") == "Monte Athos"
+    assert map_overlay_place_label("Jezersko", "Jezersko", "IT") == "Jezersko"
 
 
 def test_lookup_photon_skips_unrelated_same_country_pin(

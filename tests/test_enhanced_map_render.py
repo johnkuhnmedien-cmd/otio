@@ -167,7 +167,7 @@ def test_remotion_payload_opening_and_transition_and_filename_identity(tmp_path:
     assert opening["from"]["latitude"] == opening["to"]["latitude"]
     assert opening["exportLabel"] == "Mount Athos"
     assert opening["to"]["label"] == "Mount Athos"
-    assert opening["styleVersion"] == "otio-vintage-map-v12"
+    assert opening["styleVersion"] == "otio-vintage-map-v13"
     assert "thomas" not in str(opening).lower()
     assert transition["animationMode"] == "transition"
     assert transition["from"]["label"] == "Mount Athos"
