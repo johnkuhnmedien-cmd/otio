@@ -167,7 +167,7 @@ def test_remotion_payload_opening_and_transition_and_filename_identity(tmp_path:
     assert opening["from"]["latitude"] == opening["to"]["latitude"]
     assert opening["exportLabel"] == "Mount Athos"
     assert opening["to"]["label"] == "Mount Athos"
-    assert opening["styleVersion"] == "otio-vintage-map-v11"
+    assert opening["styleVersion"] == "otio-vintage-map-v12"
     assert "thomas" not in str(opening).lower()
     assert transition["animationMode"] == "transition"
     assert transition["from"]["label"] == "Mount Athos"
@@ -175,6 +175,22 @@ def test_remotion_payload_opening_and_transition_and_filename_identity(tmp_path:
     assert plan.maps[0].output_filename == "fr_Mount Athos_Map.mp4"
     assert plan.maps[0].animation_mode == MAP_ANIMATION_OPENING
     assert plan.maps[1].animation_mode == MAP_ANIMATION_TRANSITION
+
+
+def test_remotion_payload_uses_project_language_for_overlay_copy(tmp_path: Path) -> None:
+    folders = ["Peričnik-Wasserfall", "Jezersko"]
+    project = _project(tmp_path, folders, language="it")
+    project = project.model_copy(update={"video_place": "Slowenien"})
+    _confirm(project, folders, language="IT")
+    plan = build_map_plan(project, coordinates=_coords(project, folders))
+    opening = remotion_payload(plan.maps[0])
+    transition = remotion_payload(plan.maps[1])
+    assert opening["countryLabel"] == "Slovenia"
+    assert opening["to"]["label"] == "Cascata di Peričnik"
+    assert opening["exportLabel"] == "Peričnik-Wasserfall"
+    assert opening["language"] == "IT"
+    assert transition["from"]["label"] == "Cascata di Peričnik"
+    assert transition["to"]["label"] == "Jezersko"
 
 
 def test_selectable_maps_skip_blocked_and_missing_mode(tmp_path: Path) -> None:
