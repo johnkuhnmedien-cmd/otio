@@ -57,6 +57,35 @@ def test_fragment_rerun_every_falls_back_without_fragment_api(monkeypatch) -> No
     assert wrapped is sample or wrapped() == "ok"
 
 
+def test_fragment_once_falls_back_without_fragment_api(monkeypatch) -> None:
+    monkeypatch.setattr(polling.st, "fragment", None, raising=False)
+
+    def sample() -> str:
+        return "ok"
+
+    wrapped = polling.fragment_once()(sample)
+    assert wrapped is sample or wrapped() == "ok"
+
+
+def test_rerun_fragment_uses_fragment_scope(monkeypatch) -> None:
+    rerun = MagicMock()
+    monkeypatch.setattr(polling.st, "rerun", rerun)
+    polling.rerun_fragment()
+    rerun.assert_called_once_with(scope="fragment")
+
+
+def test_rerun_fragment_falls_back_without_scope(monkeypatch) -> None:
+    def rerun(**kwargs):
+        if "scope" in kwargs:
+            raise TypeError("unexpected keyword")
+        rerun.called = True
+
+    rerun.called = False
+    monkeypatch.setattr(polling.st, "rerun", rerun)
+    polling.rerun_fragment()
+    assert rerun.called is True
+
+
 def test_clean_media_running_ui_uses_poll_without_extra_rerun_button() -> None:
     source = Path("otio_app/ui/clean_media.py").read_text(encoding="utf-8")
     assert "poll_while_running" in source

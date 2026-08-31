@@ -34,6 +34,25 @@ def fragment_rerun_every(run_every: float = DEFAULT_POLL_SECONDS):
             return lambda fn: fn
 
 
+def fragment_once():
+    """``st.fragment()`` ohne Timer — Widget-Klicks bleiben im Block."""
+    fragment = getattr(st, "fragment", None)
+    if not callable(fragment):
+        return lambda fn: fn
+    try:
+        return fragment()
+    except TypeError:
+        return lambda fn: fn
+
+
+def rerun_fragment() -> None:
+    """Nur den aktuellen Fragment-Block neu zeichnen, sonst die ganze Seite."""
+    try:
+        st.rerun(scope="fragment")
+    except TypeError:
+        st.rerun()
+
+
 def _running_job_tick_impl(
     render_fn: Callable[[], None],
     is_running_fn: Callable[[], bool],

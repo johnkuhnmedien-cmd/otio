@@ -335,6 +335,7 @@ def test_family_language_statuses_mark_missing(
     clone_project_for_language(source, "IT", db_path=temp_db_path)
     siblings = find_projects_by_root(source.project_root, db_path=temp_db_path)
     rows = family_language_statuses(siblings)
+    assert [row.language for row in rows] == list(BRIEF_LANGUAGE_CHOICES)
     by_lang = {row.language: row for row in rows}
     assert by_lang["DE"].exists is True
     assert by_lang["IT"].exists is True
@@ -364,3 +365,37 @@ def test_saved_projects_page_wires_language_buttons() -> None:
     assert "lang_queue_start_youtube_" in ui
     assert "Gewählte Sprachen" not in ui
     assert "Alle offenen Sprachen" not in ui
+    assert "fragment_once" in ui
+    assert "rerun_fragment" in ui
+    assert "cached_family_status_rows" in ui
+    assert "_render_language_queue_picks" in ui
+    routing = (
+        Path(__file__).resolve().parents[1] / "otio_app" / "ui" / "routing.py"
+    ).read_text(encoding="utf-8")
+    assert "SAVED_PROJECTS_STATUS_EPOCH_KEY" in routing
+    assert "PAGE_LIST" in routing
+
+
+def test_cached_family_status_rows_reuses_until_token_changes() -> None:
+    from otio_app.ui.language_sibling_ui import cached_family_status_rows
+
+    session: dict = {}
+    calls = {"n": 0}
+
+    def compute():
+        calls["n"] += 1
+        return ["row"]
+
+    first = cached_family_status_rows(
+        session, family_id="fam", token=("a",), compute=compute
+    )
+    second = cached_family_status_rows(
+        session, family_id="fam", token=("a",), compute=compute
+    )
+    third = cached_family_status_rows(
+        session, family_id="fam", token=("b",), compute=compute
+    )
+    assert first == ["row"]
+    assert second == ["row"]
+    assert third == ["row"]
+    assert calls["n"] == 2

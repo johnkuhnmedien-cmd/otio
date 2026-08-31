@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -150,10 +151,26 @@ def family_language_statuses(
     by_lang: dict[str, Project] = {}
     for item in projects:
         by_lang[normalize_brief_language(item.language)] = item
-    return [
-        language_family_status(lang, by_lang.get(lang))
-        for lang in BRIEF_LANGUAGE_CHOICES
-    ]
+    langs = list(BRIEF_LANGUAGE_CHOICES)
+    rows_by_lang: dict[str, LanguageFamilyStatus] = {}
+    existing = [lang for lang in langs if lang in by_lang]
+    for lang in langs:
+        if lang not in by_lang:
+            rows_by_lang[lang] = language_family_status(lang, None)
+    if len(existing) <= 1:
+        for lang in existing:
+            rows_by_lang[lang] = language_family_status(lang, by_lang[lang])
+    elif existing:
+        workers = min(8, len(existing))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(language_family_status, lang, by_lang[lang]): lang
+                for lang in existing
+            }
+            for future in as_completed(futures):
+                lang = futures[future]
+                rows_by_lang[lang] = future.result()
+    return [rows_by_lang[lang] for lang in langs]
 
 
 def language_family_status(
