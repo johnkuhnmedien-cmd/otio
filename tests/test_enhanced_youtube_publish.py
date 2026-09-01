@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
 from otio_app.models import Project, ProjectMode
@@ -137,3 +138,54 @@ def test_build_youtube_context_from_resolved_timeline(tmp_path: Path) -> None:
     assert "Yellowstone" in context.folder_scripts[1]["voiceover_text"]
     assert "Bisti" in context.folder_scripts[2]["voiceover_text"]
     assert context.quiz_count == 1
+
+
+def test_enhanced_youtube_chapters_use_map_labels(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    save_project_brief(
+        project,
+        ProjectBrief(
+            project_id=project.id,
+            video_title="Le meraviglie della Slovenia",
+            language="IT",
+        ),
+    )
+    item = MagicMock()
+    item.chapter_id = "Vintgar-Klamm"
+    item.original_chapter_label = "Vintgar-Klamm"
+    item.localized_display_label = "Gola di Vintgar"
+    item.language = "IT"
+    plan = MagicMock(language="IT", maps=[item])
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.maps.plan_service.load_map_plan",
+        lambda _project: plan,
+    )
+    resolved = ResolvedTimelineDocument(
+        script_version="script-v1",
+        total_duration_seconds=120.0,
+        chapters=[
+            ResolvedChapterEnvelope(
+                chapter_id="ch_intro",
+                folder_name="Intro",
+                chapter_video_start=0.0,
+                chapter_audio_start=2.0,
+                chapter_audio_end=10.0,
+                chapter_video_end=12.0,
+            ),
+            ResolvedChapterEnvelope(
+                chapter_id="ch_vintgar",
+                folder_name="Vintgar-Klamm",
+                chapter_video_start=12.0,
+                chapter_audio_start=14.0,
+                chapter_audio_end=100.0,
+                chapter_video_end=120.0,
+            ),
+        ],
+    )
+    context = build_youtube_publish_context_from_resolved(project, resolved)
+    assert context.language == "IT"
+    assert context.chapters[0].display_title == "Introduzione"
+    assert context.chapters[1].display_title == "Gola di Vintgar"
+

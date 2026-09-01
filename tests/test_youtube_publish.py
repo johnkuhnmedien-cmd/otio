@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from otio_app.analysis_models import EditPlanSettings, TimelineItem, VoiceoverPlan
 from otio_app.models import Project
@@ -25,9 +25,11 @@ from otio_app.services.youtube_publish_service import (
     _parse_wonders_title,
     _prompt_from_context,
     build_youtube_publish_context,
+    format_youtube_chapter_lines,
     format_youtube_timestamp,
     generate_youtube_publish_metadata,
     generate_youtube_quizzes,
+    youtube_chapter_display_title,
     load_youtube_metadata,
     quiz_count_for_duration,
     save_youtube_metadata,
@@ -561,6 +563,7 @@ def test_save_youtube_metadata_uses_language_folder(tmp_path: Path) -> None:
     text = export_json.with_suffix(".txt").read_text(encoding="utf-8")
     assert "As maravilhas dos EUA" in text
     assert "As maravilhas de\nEUA" in text
+    assert "Sprache\nPT" in text
     de_copy = Path(project.project_root) / "Voice over" / "DE" / "youtube_metadata.json"
     assert not de_copy.exists()
 
@@ -609,3 +612,65 @@ def test_parse_quizzes_fills_missing_correct_flag() -> None:
     assert len(quizzes) == 1
     assert quizzes[0].correct_option_label == "B"
     assert quizzes[0].options[1].is_correct is True
+
+
+def test_youtube_chapter_titles_use_map_overlay_language() -> None:
+    assert youtube_chapter_display_title("Vintgar-Klamm", language="IT") == "Gola di Vintgar"
+    assert (
+        youtube_chapter_display_title("Triglav-Nationalpark", language="IT")
+        == "Parco nazionale del Triglav"
+    )
+    assert youtube_chapter_display_title("Intro", language="IT") == "Introduzione"
+    assert youtube_chapter_display_title("Smartno", language="IT") == "Smartno"
+    assert youtube_chapter_display_title("Vintgar-Klamm", language="DE") == "Vintgar-Klamm"
+
+    chapters = [
+        YouTubeChapter(folder_name="Intro", display_title="Intro", timestamp="00:00"),
+        YouTubeChapter(
+            folder_name="Vintgar-Klamm",
+            display_title="Vintgar-Klamm",
+            timestamp="13:53",
+        ),
+    ]
+    lines = format_youtube_chapter_lines(chapters, "IT")
+    assert "Introduzione - 00:00" in lines
+    assert "Gola di Vintgar - 13:53" in lines
+    assert "Vintgar-Klamm - 13:53" not in lines
+
+    description = _append_chapters_to_description("Un viaggio in Slovenia.", chapters, "IT")
+    assert "Gola di Vintgar - 13:53" in description
+    assert "Vintgar-Klamm" not in description
+
+
+def test_youtube_chapters_prefer_saved_map_labels(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project = _project(tmp_path, language="it")
+    item = MagicMock()
+    item.chapter_id = "Bleder See"
+    item.original_chapter_label = "Bleder See"
+    item.localized_display_label = "Lago di Bled"
+    item.language = "IT"
+    plan = MagicMock(language="IT", maps=[item])
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.maps.plan_service.load_map_plan",
+        lambda _project: plan,
+    )
+    chapters = [
+        YouTubeChapter(
+            folder_name="Bleder See",
+            display_title="Bleder See",
+            timestamp="00:12",
+        )
+    ]
+    lines = format_youtube_chapter_lines(chapters, "IT", project)
+    assert "Lago di Bled - 00:12" in lines
+    assert "Bleder See" not in lines
+
+
+def test_youtube_ui_copies_localized_chapter_lines() -> None:
+    src = Path("otio_app/ui/youtube_publish.py").read_text(encoding="utf-8")
+    assert "format_youtube_chapter_lines" in src
+    assert "youtube_description_for_copy" in src
+    assert "Kapitelnamen wie auf der Karte" in src
+

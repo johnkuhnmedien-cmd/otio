@@ -18,6 +18,7 @@ from otio_app.project_layout import (
     get_project_youtube_metadata_path,
     get_project_youtube_metadata_text_path,
     get_youtube_metadata_path,
+    language_folder_name,
 )
 from otio_app.services.gemini_client import _extract_json
 from otio_app.services.otio_exporter import (
@@ -60,6 +61,7 @@ from otio_app.services.youtube_publish_models import (
 __all__ = [
     "build_youtube_publish_context",
     "build_youtube_publish_context_from_resolved",
+    "format_youtube_chapter_lines",
     "format_youtube_timestamp",
     "generate_youtube_publish_metadata",
     "generate_youtube_publish_metadata_from_context",
@@ -68,9 +70,24 @@ __all__ = [
     "load_youtube_metadata",
     "quiz_count_for_duration",
     "save_youtube_metadata",
+    "youtube_chapter_display_title",
+    "youtube_description_for_copy",
     "youtube_metadata_path",
     "youtube_project_metadata_path",
 ]
+
+_YOUTUBE_INTRO_TITLES: dict[str, str] = {
+    "DE": "Intro",
+    "EN": "Intro",
+    "FR": "Intro",
+    "IT": "Introduzione",
+    "ES": "Intro",
+    "PT": "Introdução",
+    "NL": "Intro",
+    "PL": "Wstęp",
+    "JP": "イントロ",
+    "KR": "인트ロ",
+}
 
 
 def format_youtube_timestamp(seconds: float) -> str:
@@ -80,6 +97,153 @@ def format_youtube_timestamp(seconds: float) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
+
+
+def youtube_chapter_display_title(
+    folder_name: str,
+    *,
+    language: str,
+    display_title: str = "",
+    map_title: str = "",
+) -> str:
+    """Kapitelname wie auf der Karte, in der Videosprache."""
+    folder = str(folder_name or "").strip()
+    fallback = str(display_title or "").strip() or format_folder_display_name(folder)
+    if not folder and not fallback and not str(map_title or "").strip():
+        return fallback
+    lang = language_folder_name(language) if str(language or "").strip() else ""
+    if folder.casefold() == "intro":
+        if lang:
+            return _YOUTUBE_INTRO_TITLES.get(lang) or _YOUTUBE_INTRO_TITLES["EN"]
+        return fallback or "Intro"
+    overlay = str(map_title or "").strip() or fallback
+    if not lang:
+        return overlay
+    from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
+        map_overlay_place_label,
+    )
+
+    return map_overlay_place_label(folder or overlay, overlay, lang)
+
+
+def _map_titles_by_folder(project: Project | None) -> dict[str, str]:
+    """Sichtbare Kartennamen je Kapitelordner — derselbe Text wie im Overlay."""
+    if project is None:
+        return {}
+    try:
+        from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
+            load_map_plan,
+        )
+        from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
+            map_overlay_place_label,
+        )
+    except Exception:  # noqa: BLE001 — YouTube bleibt nutzbar ohne Kartenmodul
+        return {}
+    try:
+        plan = load_map_plan(project)
+    except Exception:  # noqa: BLE001
+        return {}
+    if plan is None:
+        return {}
+    titles: dict[str, str] = {}
+    plan_language = str(plan.language or "").strip()
+    for item in list(plan.maps or []):
+        original = str(getattr(item, "original_chapter_label", "") or "").strip()
+        chapter_id = str(getattr(item, "chapter_id", "") or "").strip()
+        localized = str(getattr(item, "localized_display_label", "") or "").strip()
+        item_language = str(getattr(item, "language", "") or plan_language)
+        if not (original or chapter_id):
+            continue
+        title = map_overlay_place_label(
+            original or chapter_id,
+            localized,
+            item_language,
+        )
+        if not title:
+            continue
+        for key in (chapter_id, original):
+            text = str(key or "").strip()
+            if text:
+                titles[text] = title
+                titles[text.casefold()] = title
+    return titles
+
+
+def _map_title_for_chapter(
+    chapter: YouTubeChapter,
+    map_titles: dict[str, str],
+) -> str:
+    folder = str(chapter.folder_name or "").strip()
+    if not folder:
+        return ""
+    return map_titles.get(folder) or map_titles.get(folder.casefold()) or ""
+
+
+def _format_chapter_line(
+    chapter: YouTubeChapter,
+    language: str,
+    *,
+    map_title: str = "",
+) -> str:
+    title = youtube_chapter_display_title(
+        chapter.folder_name,
+        language=language,
+        display_title=chapter.display_title,
+        map_title=map_title,
+    )
+    return f"{title} - {chapter.timestamp}"
+
+
+def format_youtube_chapter_lines(
+    chapters: list[YouTubeChapter],
+    language: str,
+    project: Project | None = None,
+) -> str:
+    map_titles = _map_titles_by_folder(project)
+    return "\n".join(
+        _format_chapter_line(
+            chapter,
+            language,
+            map_title=_map_title_for_chapter(chapter, map_titles),
+        )
+        for chapter in chapters
+    )
+
+
+def _localize_youtube_chapters(
+    chapters: list[YouTubeChapter],
+    language: str,
+    project: Project | None = None,
+) -> list[YouTubeChapter]:
+    map_titles = _map_titles_by_folder(project)
+    localized: list[YouTubeChapter] = []
+    for chapter in chapters:
+        title = youtube_chapter_display_title(
+            chapter.folder_name,
+            language=language,
+            display_title=chapter.display_title,
+            map_title=_map_title_for_chapter(chapter, map_titles),
+        )
+        if title == chapter.display_title:
+            localized.append(chapter)
+        else:
+            localized.append(chapter.model_copy(update={"display_title": title}))
+    return localized
+
+
+def _relabel_folder_scripts(
+    folder_scripts: list[dict[str, str]],
+    chapters: list[YouTubeChapter],
+) -> list[dict[str, str]]:
+    by_folder = {chapter.folder_name: chapter.display_title for chapter in chapters}
+    relabeled: list[dict[str, str]] = []
+    for entry in folder_scripts:
+        updated = dict(entry)
+        folder = str(updated.get("folder_name") or "")
+        if folder in by_folder:
+            updated["display_title"] = by_folder[folder]
+        relabeled.append(updated)
+    return relabeled
 
 
 def quiz_count_for_duration(total_duration_sec: float) -> int:
@@ -157,6 +321,8 @@ def build_youtube_publish_context(
     chapters = _chapters_from_sections(sections)
     total_duration = sum(chapter.video_duration_sec for chapter in chapters)
     title, language, intro_text, folder_scripts = _scripts_for_chapters(project, chapters)
+    chapters = _localize_youtube_chapters(chapters, language, project)
+    folder_scripts = _relabel_folder_scripts(folder_scripts, chapters)
     return YouTubePublishContext(
         title=title,
         language=language,
@@ -264,6 +430,7 @@ def build_youtube_publish_context_from_resolved(
     if total_duration <= 0:
         total_duration = sum(chapter.video_duration_sec for chapter in chapters)
     title, language = _enhanced_title_and_language(project)
+    chapters = _localize_youtube_chapters(chapters, language, project)
     intro_text, folder_scripts = _enhanced_folder_scripts(project, chapters)
     return YouTubePublishContext(
         title=title,
@@ -300,12 +467,16 @@ def _folder_scripts_prompt_block(folder_scripts: list[dict[str, str]]) -> str:
     return "\n\n".join(blocks)
 
 
-def _append_chapters_to_description(body: str, chapters: list[YouTubeChapter]) -> str:
+def _append_chapters_to_description(
+    body: str,
+    chapters: list[YouTubeChapter],
+    language: str = "",
+    project: Project | None = None,
+) -> str:
     body = (body or "").rstrip()
-    chapter_lines = [f"{chapter.display_title} - {chapter.timestamp}" for chapter in chapters]
-    if not chapter_lines:
+    block = format_youtube_chapter_lines(chapters, language, project)
+    if not block:
         return body
-    block = "\n".join(chapter_lines)
     if body:
         combined = f"{body}\n\n{block}"
     else:
@@ -413,25 +584,43 @@ def _parse_quizzes(
     return quizzes
 
 
-def _format_youtube_metadata_text(document: YouTubeMetadataDocument) -> str:
+def youtube_description_for_copy(
+    document: YouTubeMetadataDocument,
+    project: Project | None = None,
+) -> str:
+    """Beschreibung inkl. Kapitelzeilen in der Videosprache — auch bei älteren Saves."""
+    body = (document.description_body or "").strip()
+    if body:
+        return _append_chapters_to_description(
+            body, document.chapters, document.language, project
+        )
+    return document.description or ""
+
+
+def _format_youtube_metadata_text(
+    document: YouTubeMetadataDocument,
+    project: Project | None = None,
+) -> str:
     """Lesbare Kopie für den Sprachordner im Projekt (YouTube Studio)."""
     sections: list[str] = []
+    language = language_folder_name(document.language or "")
+    if language:
+        sections.append(f"Sprache\n{language}")
     title = (document.title or "").strip()
     if title:
         sections.append(f"Titel\n{title}")
     wonders = document.formatted_wonders_title()
     if wonders:
         sections.append(f"Videotitel\n{wonders}")
-    description = (document.description or "").strip()
+    description = youtube_description_for_copy(document, project).strip()
     if description:
         sections.append(f"Beschreibung\n{description}")
     hashtags = _normalize_hashtags(document.hashtags)
     if hashtags:
         sections.append(f"Hashtags\n{hashtags}")
     if document.chapters:
-        chapter_lines = "\n".join(
-            f"{chapter.display_title} - {chapter.timestamp}"
-            for chapter in document.chapters
+        chapter_lines = format_youtube_chapter_lines(
+            document.chapters, document.language, project
         )
         sections.append(f"Kapitel\n{chapter_lines}")
     return "\n\n".join(sections).rstrip() + ("\n" if sections else "")
@@ -454,7 +643,7 @@ def _export_youtube_metadata_to_project_folder(
     )
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json_payload, encoding="utf-8")
-    text_path.write_text(_format_youtube_metadata_text(document), encoding="utf-8")
+    text_path.write_text(_format_youtube_metadata_text(document, project), encoding="utf-8")
 
 
 def save_youtube_metadata(
@@ -667,7 +856,9 @@ def generate_youtube_publish_metadata_from_context(
         str(payload.get("description_body") or ""),
         YOUTUBE_DESCRIPTION_BODY_MAX_CHARS,
     )
-    description = _append_chapters_to_description(description_body, context.chapters)
+    description = _append_chapters_to_description(
+        description_body, context.chapters, context.language, project
+    )
     hashtags = _normalize_hashtags(str(payload.get("hashtags") or ""))
 
     # Metadata regenerate must not wipe separately generated quizzes.
@@ -803,7 +994,9 @@ def generate_youtube_quizzes_from_context(
             project_id=project.id,
             language=context.language,
             title=context.title,
-            description=_append_chapters_to_description("", context.chapters),
+            description=_append_chapters_to_description(
+                "", context.chapters, context.language, project
+            ),
             description_body="",
             hashtags="",
             chapters=context.chapters,

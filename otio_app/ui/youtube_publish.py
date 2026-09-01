@@ -22,11 +22,13 @@ from otio_app.services.youtube_publish_service import (
     _normalize_hashtags,
     build_youtube_publish_context,
     build_youtube_publish_context_from_resolved,
+    format_youtube_chapter_lines,
     generate_youtube_publish_metadata,
     generate_youtube_publish_metadata_from_context,
     generate_youtube_quizzes,
     generate_youtube_quizzes_from_context,
     load_youtube_metadata,
+    youtube_description_for_copy,
     youtube_metadata_path,
     youtube_project_metadata_path,
 )
@@ -75,11 +77,12 @@ def _copyable_text(
 
 def _render_copyable_results(
     document: YouTubeMetadataDocument,
+    project: Project,
     *,
-    project_id: str,
     key_prefix: str,
 ) -> None:
     run = document.llm_run_id or "saved"
+    project_id = project.id
     st.caption("Oben rechts am Code-Block: **Kopieren**-Icon (ein Klick).")
 
     _copyable_text(
@@ -98,10 +101,11 @@ def _render_copyable_results(
             "Zweizeilige Titelkarte in der Videosprache: "
             "Zeile 1 = Formel, Zeile 2 = Land/Region."
         )
+    description = youtube_description_for_copy(document, project)
     _copyable_text(
-        f"Beschreibung ({len(document.description)}/{YOUTUBE_DESCRIPTION_MAX_CHARS}, "
+        f"Beschreibung ({len(description)}/{YOUTUBE_DESCRIPTION_MAX_CHARS}, "
         f"Textkörper ≤{YOUTUBE_DESCRIPTION_BODY_MAX_CHARS})",
-        document.description,
+        description,
         key=f"{key_prefix}_yt_desc_{project_id}_{run}",
         height=280,
     )
@@ -113,8 +117,8 @@ def _render_copyable_results(
     )
 
     if document.chapters:
-        chapter_text = "\n".join(
-            f"{chapter.display_title} - {chapter.timestamp}" for chapter in document.chapters
+        chapter_text = format_youtube_chapter_lines(
+            document.chapters, document.language, project
         )
         _copyable_text(
             "Kapitel",
@@ -122,6 +126,7 @@ def _render_copyable_results(
             key=f"{key_prefix}_yt_chapters_{project_id}_{run}",
             height=min(220, 40 + 22 * len(document.chapters)),
         )
+        st.caption("Kapitelnamen wie auf der Karte, in der Videosprache.")
 
     if document.quizzes:
         st.markdown("**YouTube Quiz**")
@@ -278,7 +283,7 @@ def render_youtube_publish_block(
 
     _render_copyable_results(
         document,
-        project_id=project.id,
+        project,
         key_prefix=key_prefix,
     )
     _render_saved_paths(project)
@@ -402,7 +407,7 @@ def render_enhanced_youtube_publish_block(
 
     _render_copyable_results(
         document,
-        project_id=project.id,
+        project,
         key_prefix=key_prefix,
     )
     _render_saved_paths(project)
