@@ -343,10 +343,16 @@ def get_project_youtube_metadata_text_path(
     voice_over_subdir: str,
     language: str,
 ) -> Path:
-    """Lesbare YouTube-Metadaten (Titel/Beschreibung) im Sprachordner des Projekts."""
+    """Lesbare YouTube-Metadaten-TXT im Länderordner (Projektroot).
+
+    Beispiel: ``Slowenien/youtube_metadata_IT.txt``.
+    JSON bleibt unter ``Voice over/{LANG}/``; die TXT liegt immer im Länderordner.
+    """
+    del voice_over_subdir
     from otio_app.defaults import YOUTUBE_METADATA_TEXT_FILENAME
 
-    return get_voice_over_dir(project_root, voice_over_subdir, language) / YOUTUBE_METADATA_TEXT_FILENAME
+    stem = Path(YOUTUBE_METADATA_TEXT_FILENAME).stem
+    return Path(project_root) / f"{stem}_{language_folder_name(language)}.txt"
 
 
 def get_voiceover_generation_audio_dir(work_dir: Path) -> Path:

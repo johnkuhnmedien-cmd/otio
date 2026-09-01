@@ -71,6 +71,7 @@ __all__ = [
     "quiz_count_for_duration",
     "save_youtube_metadata",
     "youtube_chapter_display_title",
+    "youtube_country_folder_text_path",
     "youtube_description_for_copy",
     "youtube_metadata_path",
     "youtube_project_metadata_path",
@@ -499,6 +500,65 @@ def _normalize_hashtags(raw: str) -> str:
     return _clamp_text(", ".join(parts), YOUTUBE_HASHTAGS_MAX_CHARS)
 
 
+def _parse_thumbnail_prompts(payload: dict) -> list[str]:
+    raw = payload.get("thumbnail_prompts") if isinstance(payload, dict) else None
+    prompts: list[str] = []
+    if isinstance(raw, list):
+        for item in raw:
+            text = " ".join(str(item or "").split())
+            if text:
+                prompts.append(text)
+    return prompts[:3]
+
+
+def _fallback_thumbnail_prompts(
+    chapters: list[YouTubeChapter],
+    language: str,
+    project: Project | None = None,
+) -> list[str]:
+    map_titles = _map_titles_by_folder(project)
+    places: list[str] = []
+    for chapter in chapters:
+        if str(chapter.folder_name or "").casefold() == "intro":
+            continue
+        places.append(
+            youtube_chapter_display_title(
+                chapter.folder_name,
+                language=language,
+                display_title=chapter.display_title,
+                map_title=_map_title_for_chapter(chapter, map_titles),
+            )
+        )
+    if not places:
+        places = ["this travel destination"]
+    templates = (
+        "Photorealistic travel photograph of {place}, natural light, cinematic landscape, no text, no letters, no logos",
+        "Photorealistic documentary close view of {place}, realistic colors, no text overlay",
+        "Photorealistic wide establishing shot of {place}, travel film mood, no posed people, no text",
+    )
+    return [
+        template.format(place=places[index % len(places)])
+        for index, template in enumerate(templates)
+    ]
+
+
+def _complete_thumbnail_prompts(
+    prompts: list[str],
+    chapters: list[YouTubeChapter],
+    language: str,
+    project: Project | None = None,
+) -> list[str]:
+    cleaned = [" ".join(str(item).split()) for item in prompts if str(item).strip()]
+    if len(cleaned) >= 3:
+        return cleaned[:3]
+    for fallback in _fallback_thumbnail_prompts(chapters, language, project):
+        if len(cleaned) >= 3:
+            break
+        if fallback not in cleaned:
+            cleaned.append(fallback)
+    return cleaned[:3]
+
+
 def _parse_wonders_title(payload: dict) -> tuple[str, str]:
     """Zweizeiliger On-Screen-Titel: Formel + Land/Region."""
     if not isinstance(payload, dict):
@@ -601,28 +661,23 @@ def _format_youtube_metadata_text(
     document: YouTubeMetadataDocument,
     project: Project | None = None,
 ) -> str:
-    """Lesbare Kopie für den Sprachordner im Projekt (YouTube Studio)."""
+    """Lesbare Kopie für den Länderordner (YouTube Studio + Thumbnail-Prompts)."""
     sections: list[str] = []
-    language = language_folder_name(document.language or "")
-    if language:
-        sections.append(f"Sprache\n{language}")
     title = (document.title or "").strip()
     if title:
         sections.append(f"Titel\n{title}")
-    wonders = document.formatted_wonders_title()
-    if wonders:
-        sections.append(f"Videotitel\n{wonders}")
     description = youtube_description_for_copy(document, project).strip()
     if description:
         sections.append(f"Beschreibung\n{description}")
     hashtags = _normalize_hashtags(document.hashtags)
     if hashtags:
         sections.append(f"Hashtags\n{hashtags}")
-    if document.chapters:
-        chapter_lines = format_youtube_chapter_lines(
-            document.chapters, document.language, project
+    prompts = [str(item).strip() for item in document.thumbnail_prompts if str(item).strip()]
+    if prompts:
+        numbered = "\n".join(
+            f"{index}. {prompt}" for index, prompt in enumerate(prompts, start=1)
         )
-        sections.append(f"Kapitel\n{chapter_lines}")
+        sections.append(f"Thumbnail-Prompts\n{numbered}")
     return "\n\n".join(sections).rstrip() + ("\n" if sections else "")
 
 
@@ -639,7 +694,7 @@ def _export_youtube_metadata_to_project_folder(
     text_path = get_project_youtube_metadata_text_path(
         project.project_root_path,
         project.voice_over_subdir,
-        project.language,
+        document.language or project.language,
     )
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json_payload, encoding="utf-8")
@@ -653,6 +708,14 @@ def save_youtube_metadata(
     path = get_youtube_metadata_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     normalized = document.model_copy(update={"project_id": project.id})
+    prompts = _complete_thumbnail_prompts(
+        list(normalized.thumbnail_prompts),
+        normalized.chapters,
+        normalized.language,
+        project,
+    )
+    if prompts != list(normalized.thumbnail_prompts):
+        normalized = normalized.model_copy(update={"thumbnail_prompts": prompts})
     payload = normalized.model_dump_json(indent=2)
     path.write_text(payload, encoding="utf-8")
     _export_youtube_metadata_to_project_folder(project, normalized, payload)
@@ -860,6 +923,12 @@ def generate_youtube_publish_metadata_from_context(
         description_body, context.chapters, context.language, project
     )
     hashtags = _normalize_hashtags(str(payload.get("hashtags") or ""))
+    thumbnail_prompts = _complete_thumbnail_prompts(
+        _parse_thumbnail_prompts(payload),
+        context.chapters,
+        context.language,
+        project,
+    )
 
     # Metadata regenerate must not wipe separately generated quizzes.
     existing = load_youtube_metadata(project)
@@ -874,6 +943,7 @@ def generate_youtube_publish_metadata_from_context(
         description=description,
         description_body=description_body,
         hashtags=hashtags,
+        thumbnail_prompts=thumbnail_prompts,
         chapters=context.chapters,
         quizzes=quizzes,
         total_duration_sec=context.total_duration_sec,
@@ -1069,6 +1139,15 @@ def generate_youtube_quizzes(
 
 def youtube_metadata_path(project: Project) -> Path:
     return get_youtube_metadata_path(project.language_work_dir_path)
+
+
+def youtube_country_folder_text_path(project: Project) -> Path:
+    """TXT im Länderordner, z. B. ``Slowenien/youtube_metadata_IT.txt``."""
+    return get_project_youtube_metadata_text_path(
+        project.project_root_path,
+        project.voice_over_subdir,
+        project.language,
+    )
 
 
 def youtube_project_metadata_path(project: Project) -> Path:

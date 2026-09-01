@@ -1475,6 +1475,10 @@ def build_youtube_publish_prompt(
   Do NOT include chapter timestamps in description_body — chapters are appended later by the system.
 - `hashtags`: comma-separated keywords WITHOUT leading `#` (e.g. USA, Travel, Nature),
   max ~{hashtags_max_chars} characters total. No newlines. No `#` symbols.
+- `thumbnail_prompts`: EXACTLY 3 simple image-generation prompts in English.
+  Photorealistic travel photos that match THIS video's real places (chapter headings).
+  No text, letters, titles, logos, or watermarks in the image. One sentence each.
+  Different places or angles. No posed people.
 - Do NOT invent quizzes here — quizzes are generated in a separate step.
 
 ## Video
@@ -1510,7 +1514,8 @@ Use ONLY these chapter headings as content signal. There are no full voice-over 
   "wonders_title_formula": "translated 'Die Wunder von' only, in {display}",
   "wonders_title_place": "country or region name only, in {display}",
   "description_body": "description without chapter list",
-  "hashtags": "tag1, tag2, tag3"
+  "hashtags": "tag1, tag2, tag3",
+  "thumbnail_prompts": ["prompt 1", "prompt 2", "prompt 3"]
 }}
 """
 

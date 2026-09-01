@@ -28,6 +28,7 @@ from otio_app.services.youtube_publish_service import (
     generate_youtube_quizzes,
     generate_youtube_quizzes_from_context,
     load_youtube_metadata,
+    youtube_country_folder_text_path,
     youtube_description_for_copy,
     youtube_metadata_path,
     youtube_project_metadata_path,
@@ -128,6 +129,15 @@ def _render_copyable_results(
         )
         st.caption("Kapitelnamen wie auf der Karte, in der Videosprache.")
 
+    prompts = [str(item).strip() for item in document.thumbnail_prompts if str(item).strip()]
+    if prompts:
+        _copyable_text(
+            "Thumbnail-Prompts (ohne Text, realistisch)",
+            "\n".join(f"{index}. {prompt}" for index, prompt in enumerate(prompts, start=1)),
+            key=f"{key_prefix}_yt_thumbs_{project_id}_{run}",
+            height=min(160, 40 + 28 * len(prompts)),
+        )
+
     if document.quizzes:
         st.markdown("**YouTube Quiz**")
         for quiz in document.quizzes:
@@ -152,8 +162,9 @@ def _render_copyable_results(
 
 def _render_saved_paths(project: Project) -> None:
     st.caption(
+        f"TXT im Länderordner: `{youtube_country_folder_text_path(project)}`  \n"
         f"Intern: `{youtube_metadata_path(project)}`  \n"
-        f"Projektordner (Sprache): `{youtube_project_metadata_path(project)}`"
+        f"JSON (Sprache): `{youtube_project_metadata_path(project)}`"
     )
 
 
