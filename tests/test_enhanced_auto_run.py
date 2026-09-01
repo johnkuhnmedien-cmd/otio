@@ -1302,6 +1302,35 @@ def test_auto_run_status_overview_covers_every_step(tmp_path: Path) -> None:
     assert by_id["maps"].short_label == "Karten"
     assert by_id["youtube"].done is False
     assert by_id["otio"].done is False
+    assert by_id["otio"].label == "⑪ Alle OTIO"
+
+
+def test_auto_run_otio_matches_alle_otio_button(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Auto-Lauf OTIO uses Cut Plan „Alle OTIO“, not Final Output production export."""
+    project = _project(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_export(_project, **kwargs):
+        captured.update(kwargs)
+        return Path("/tmp/out.otio")
+
+    monkeypatch.setattr(auto_run, "export_all_chapters_otio", fake_export)
+    monkeypatch.setattr(auto_run, "otio_export_complete", lambda _p: False)
+
+    emitted: list[str] = []
+    auto_run._run_otio(
+        project,
+        skip_done=False,
+        emit=lambda step, message, **_k: emitted.append(str(message)),
+        finish=lambda *_a, **_k: None,
+    )
+    assert captured["allow_errors"] is True
+    assert captured["include_intro"] is True
+    assert captured["basename"] == f"{project.name}_enhanced"
+    assert any("Alle OTIO" in line for line in emitted)
+    assert not any("Produktions" in line for line in emitted)
 
 
 def test_summarize_auto_run_stage_does_not_scan_later_checkers(
@@ -1550,6 +1579,8 @@ def test_auto_run_ui_exports_page_and_banner() -> None:
     assert "Auto-Lauf fehlgeschlagen —" in source
     assert "Quiz bleibt manuell" in source
     assert "Karten (Plan, Koordinaten, Rendern)" in source
+    assert "Alle OTIO (wie auf Cut Plan" in source
+    assert "Der Produktions-Export bleibt manuell unter Final Output" in source
     assert "Metadaten + Quiz" not in source
     assert "any_job_running(project.id, reconcile=False)" in source
     routing = Path("otio_app/ui/routing.py").read_text(encoding="utf-8")

@@ -798,5 +798,5 @@ def test_ui_test_otio_with_gaps_markers() -> None:
         "otio_app/services/without_voiceover_enhanced/enhanced_auto_run_service.py"
     ).read_text(encoding="utf-8")
     run_otio = auto_src[auto_src.index("def _run_otio") : auto_src.index("def _run_otio") + 900]
-    assert "allow_errors=False" in run_otio
-    assert "allow_errors=True" not in run_otio
+    assert "allow_errors=True" in run_otio
+    assert "allow_errors=False" not in run_otio
