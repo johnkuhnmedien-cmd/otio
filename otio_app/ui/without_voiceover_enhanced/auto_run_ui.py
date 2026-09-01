@@ -66,7 +66,9 @@ def render_enhanced_auto_run_page() -> None:
         "Freitext-Nachbearbeitung, erst dann Script Lock. **⓪ Clean Media**, "
         "**① Analysen** und **SFX** bleiben manuell. Danach: Stocksuche (Wikimedia, Openverse, "
         "Archive.org) → alle offenen Gaps → (optional) Python Timing (Kapitel parallel) → "
-        "ElevenLabs Music → OTIO → YouTube-Metadaten. Quiz bleibt manuell unter Final Output."
+        "ElevenLabs Music → Alle OTIO (wie auf Cut Plan; Lücken als rote Platzhalter) → "
+        "YouTube-Metadaten. Der Produktions-Export bleibt manuell unter Final Output. "
+        "Quiz bleibt manuell unter Final Output."
     )
     from otio_app.ui.project_context import render_project_selector
 
@@ -187,7 +189,9 @@ def _render_auto_run_controls(project: Project, *, key_scope: str) -> None:
         "weiter mit Karten (Plan, Koordinaten, Rendern) → Python Timing "
         "(Kapitel parallel, max. 8, setzt gerenderte Karten in die Timeline) → "
         "ElevenLabs Music → "
-        "OTIO-Export → YouTube-Metadaten. Quiz bleibt manuell unter Final Output. "
+        "Alle OTIO (wie auf Cut Plan; Lücken als rote Platzhalter) → YouTube-Metadaten. "
+        "Der Produktions-Export bleibt manuell unter Final Output. "
+        "Quiz bleibt manuell unter Final Output. "
         "LLM-/TTS-Calls bleiben einzeln. Offene Gaps nach dem Funnel gelten als Fehler. "
         "Fertige Schritte werden übersprungen."
     )

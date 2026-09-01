@@ -221,7 +221,7 @@ AUTO_RUN_STEPS: tuple[tuple[str, str], ...] = (
     ("maps", "Karten"),
     ("timing", "⑨ Python Timing"),
     ("music", "⑩ ElevenLabs Music"),
-    ("otio", "⑪ OTIO-Export"),
+    ("otio", "⑪ Alle OTIO"),
     ("youtube", "⑫ YouTube Publish"),
 )
 
@@ -1789,22 +1789,23 @@ def _run_otio(
     finish: Callable[..., None],
 ) -> None:
     if skip_done and otio_export_complete(project):
-        emit("otio", "OTIO-Export vorhanden — übersprungen.", skipped=True)
+        emit("otio", "Alle OTIO vorhanden — übersprungen.", skipped=True)
         finish("otio", skipped=True)
         return
-    emit("otio", "OTIO-Export (Intro + alle Kapitel)…")
+    emit("otio", "Alle OTIO (Intro + Kapitel, Lücken als rote Platzhalter)…")
     try:
-        # Produktions-Export: fehlende Medien/Lücken sind Fehler, keine stillen Gaps.
+        # Same as Cut Plan „Alle OTIO“: gaps stay red placeholders.
+        # Production OTIO stays on Final Output and stays fail-closed.
         path = export_all_chapters_otio(
             project,
             basename=f"{project.name}_enhanced",
-            allow_errors=False,
+            allow_errors=True,
             include_intro=True,
         )
     except (ChapterCutError, EnhancedOtioExportError) as exc:
         raise EnhancedAutoRunError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        raise EnhancedAutoRunError(f"OTIO-Export fehlgeschlagen: {exc}") from exc
+        raise EnhancedAutoRunError(f"Alle OTIO fehlgeschlagen: {exc}") from exc
     emit("otio", f"OTIO geschrieben: {path}")
     finish("otio", skipped=False)
 
@@ -1831,7 +1832,7 @@ def _run_youtube(
     resolved = load_resolved_timeline_for_auto_run(project)
     if resolved is None:
         raise EnhancedAutoRunError(
-            "Keine aufgelöste Timeline für YouTube — OTIO-Export zuerst."
+            "Keine aufgelöste Timeline für YouTube — Alle OTIO zuerst."
         )
     context = build_youtube_publish_context_from_resolved(project, resolved)
     if not context.chapters:
