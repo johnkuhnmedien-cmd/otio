@@ -73,7 +73,7 @@ def test_project_youtube_metadata_path_uses_language_folder(
     ) == project_root / "Voice over" / "PT" / "youtube_metadata.json"
     assert get_project_youtube_metadata_text_path(
         project_root, "Voice over", "ja"
-    ) == project_root / "Voice over" / "JP" / "youtube_metadata.txt"
+    ) == project_root / "youtube_metadata_JP.txt"
 
 
 def test_output_paths(temp_project_layout: dict[str, Path]) -> None:

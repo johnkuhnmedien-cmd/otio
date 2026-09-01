@@ -47,6 +47,7 @@ class YouTubeMetadataDocument(BaseModel):
     description: str = ""
     description_body: str = ""
     hashtags: str = ""
+    thumbnail_prompts: list[str] = Field(default_factory=list)
     chapters: list[YouTubeChapter] = Field(default_factory=list)
     quizzes: list[YouTubeQuizItem] = Field(default_factory=list)
     total_duration_sec: float = 0.0

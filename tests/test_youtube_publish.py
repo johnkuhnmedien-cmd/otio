@@ -33,6 +33,8 @@ from otio_app.services.youtube_publish_service import (
     load_youtube_metadata,
     quiz_count_for_duration,
     save_youtube_metadata,
+    youtube_chapter_display_title,
+    youtube_country_folder_text_path,
     youtube_project_metadata_path,
 )
 from otio_app.services.youtube_publish_models import (
@@ -251,6 +253,11 @@ def test_generate_metadata_preserves_existing_quizzes(tmp_path: Path) -> None:
           "wonders_title_place": "den USA",
           "description_body": "Ein Film über enge Schluchten und Licht.",
           "hashtags": "#AntelopeCanyon, #USA, #Travel",
+          "thumbnail_prompts": [
+            "Photorealistic slot canyon walls in warm light, no text",
+            "Photorealistic desert landscape at dusk, no text",
+            "Photorealistic wide canyon floor, no logos"
+          ],
           "quizzes": [{"question": "soll ignoriert werden"}]
         }"""
         provider = "gemini"
@@ -278,6 +285,14 @@ def test_generate_metadata_preserves_existing_quizzes(tmp_path: Path) -> None:
     assert "Antelope Canyon - 00:00" in result.document.description
     assert "AntelopeCanyon" in result.document.hashtags
     assert "#" not in result.document.hashtags
+    assert len(result.document.thumbnail_prompts) == 3
+    assert "no text" in result.document.thumbnail_prompts[0]
+    txt = youtube_country_folder_text_path(project).read_text(encoding="utf-8")
+    assert txt.startswith("Titel\n")
+    assert "Thumbnail-Prompts\n1. " in txt
+    assert "Sprache\n" not in txt
+    assert "Videotitel\n" not in txt
+    assert "Kapitel\n" not in txt
     assert len(result.document.quizzes) == 1
     assert result.document.quizzes[0].question == "Alte Frage?"
     loaded = load_youtube_metadata(project)
@@ -487,6 +502,8 @@ def test_youtube_publish_prompt_chapters_only_no_scripts() -> None:
     assert "Do NOT invent quizzes" in prompt
     assert "wonders_title_formula" in prompt
     assert "Die Wunder von" in prompt
+    assert "thumbnail_prompts" in prompt
+    assert "Photorealistic" in prompt
     assert "never as raw line breaks" in prompt
     assert "EXACTLY 2 quiz" not in prompt
 
@@ -534,13 +551,19 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
         export_json.read_text(encoding="utf-8")
     )
     assert exported.title == "T"
-    export_txt = export_json.with_suffix(".txt")
+    export_txt = youtube_country_folder_text_path(project)
+    assert export_txt == Path(project.project_root) / "youtube_metadata_DE.txt"
     assert export_txt.is_file()
     text = export_txt.read_text(encoding="utf-8")
     assert "Titel\nT" in text
     assert "Beschreibung\nD\n\nIntro - 00:00" in text
     assert "Hashtags\na, b" in text
     assert "Intro - 00:00" in text
+    assert "Thumbnail-Prompts\n1. " in text
+    assert "Sprache\n" not in text
+    assert "Videotitel\n" not in text
+    assert loaded is not None
+    assert len(loaded.thumbnail_prompts) == 3
 
 
 def test_save_youtube_metadata_uses_language_folder(tmp_path: Path) -> None:
@@ -560,10 +583,13 @@ def test_save_youtube_metadata_uses_language_folder(tmp_path: Path) -> None:
     export_json = youtube_project_metadata_path(project)
     assert export_json == Path(project.project_root) / "Voice over" / "PT" / "youtube_metadata.json"
     assert export_json.is_file()
-    text = export_json.with_suffix(".txt").read_text(encoding="utf-8")
+    text = youtube_country_folder_text_path(project).read_text(encoding="utf-8")
+    assert youtube_country_folder_text_path(project) == Path(project.project_root) / "youtube_metadata_PT.txt"
     assert "As maravilhas dos EUA" in text
-    assert "As maravilhas de\nEUA" in text
-    assert "Sprache\nPT" in text
+    assert "Titel\nAs maravilhas dos EUA" in text
+    assert "Hashtags\nEUA, Natureza" in text
+    assert "Sprache\nPT" not in text
+    assert "As maravilhas de\nEUA" not in text
     de_copy = Path(project.project_root) / "Voice over" / "DE" / "youtube_metadata.json"
     assert not de_copy.exists()
 
@@ -673,4 +699,7 @@ def test_youtube_ui_copies_localized_chapter_lines() -> None:
     assert "format_youtube_chapter_lines" in src
     assert "youtube_description_for_copy" in src
     assert "Kapitelnamen wie auf der Karte" in src
+    assert "youtube_country_folder_text_path" in src
+    assert "Thumbnail-Prompts (ohne Text, realistisch)" in src
+    assert "TXT im Länderordner" in src
 
