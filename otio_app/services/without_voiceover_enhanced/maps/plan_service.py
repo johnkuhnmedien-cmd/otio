@@ -50,6 +50,7 @@ from otio_app.services.without_voiceover_enhanced.maps.models import (
 )
 from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
     map_overlay_place_label,
+    overlay_label_is_plausible,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
     map_coordinates_path,
@@ -246,7 +247,15 @@ def build_map_plan(
         chapter_id = entry.folder_name
         original = entry.folder_name
         place = _place_for(coords, chapter_id, original, country)
-        display = map_overlay_place_label(original, place.display_label, language)
+        display = map_overlay_place_label(original, original, language)
+        prior = previous_by_id.get(chapter_id)
+        if (
+            prior is not None
+            and str(prior.language or "") == language
+            and str(prior.original_chapter_label or "") == original
+            and overlay_label_is_plausible(original, prior.localized_display_label)
+        ):
+            display = prior.localized_display_label
         if ordinal == 1:
             animation = MAP_ANIMATION_OPENING
             from_id = ""
@@ -260,6 +269,26 @@ def build_map_plan(
             end_place = place
         same = animation == MAP_ANIMATION_OPENING
         blocked = _blocked_reason(start=start_place, end=end_place, same=same)
+        from_original = (
+            "" if animation == MAP_ANIMATION_OPENING else start_place.original_label
+        )
+        from_display = ""
+        if animation != MAP_ANIMATION_OPENING:
+            from_display = map_overlay_place_label(
+                start_place.original_label,
+                start_place.original_label,
+                language,
+            )
+            prev_item = previous_by_id.get(from_id)
+            if (
+                prev_item is not None
+                and str(prev_item.language or "") == language
+                and overlay_label_is_plausible(
+                    from_original or start_place.original_label,
+                    prev_item.localized_display_label,
+                )
+            ):
+                from_display = prev_item.localized_display_label
         item = MapPlanItem(
             map_sequence_id=str(
                 uuid.uuid5(
@@ -277,18 +306,8 @@ def build_map_plan(
             language=language,
             country=country,
             from_chapter_id=from_id,
-            from_original_chapter_label=(
-                "" if animation == MAP_ANIMATION_OPENING else start_place.original_label
-            ),
-            from_localized_display_label=(
-                ""
-                if animation == MAP_ANIMATION_OPENING
-                else map_overlay_place_label(
-                    start_place.original_label,
-                    start_place.display_label,
-                    language,
-                )
-            ),
+            from_original_chapter_label=from_original,
+            from_localized_display_label=from_display,
             start_latitude=start_place.latitude,
             start_longitude=start_place.longitude,
             end_latitude=end_place.latitude,

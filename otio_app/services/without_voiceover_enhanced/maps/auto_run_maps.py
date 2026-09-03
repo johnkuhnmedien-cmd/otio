@@ -15,6 +15,9 @@ from otio_app.services.without_voiceover_enhanced.maps.geocode_service import (
     lookup_missing_coordinates,
     GeocodeCancelled,
 )
+from otio_app.services.without_voiceover_enhanced.maps.label_translate_service import (
+    localize_map_plan_with_llm,
+)
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     RENDER_STATUS_BLOCKED,
     RENDER_STATUS_DONE,
@@ -376,6 +379,13 @@ def run_maps_for_auto_run(
         settings=settings,
         previous=plan,
     )
+
+    if cancelled():
+        raise MapRenderCancelled("Auto-Lauf gestoppt.")
+
+    emit("Kartennamen in die Videosprache…")
+    plan = localize_map_plan_with_llm(project, plan)
+    save_map_plan(project, plan)
 
     targets, already_done, blocked = maps_render_queue(plan)
     rendered: list[str] = []
