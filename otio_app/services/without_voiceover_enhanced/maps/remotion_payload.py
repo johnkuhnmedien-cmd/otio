@@ -771,6 +771,70 @@ def _clip_label(value: str, limit: int) -> str:
     return text[:limit]
 
 
+_OVERLAY_TOKEN_RE = re.compile(
+    r"[0-9A-Za-zÀ-ÖØ-öø-ÿĀ-žΑ-ωА-я一-龯가-힣]+",
+    re.UNICODE,
+)
+_OVERLAY_STOPWORDS = {
+    "and",
+    "und",
+    "et",
+    "e",
+    "y",
+    "di",
+    "de",
+    "del",
+    "der",
+    "die",
+    "das",
+    "the",
+    "of",
+    "von",
+    "van",
+    "la",
+    "le",
+    "il",
+    "el",
+    "a",
+    "al",
+}
+
+
+def overlay_place_tokens(text: str) -> set[str]:
+    return {
+        match.group(0).casefold()
+        for match in _OVERLAY_TOKEN_RE.finditer(text or "")
+    } - _OVERLAY_STOPWORDS
+
+
+def overlay_label_is_plausible(original: str, localized: str) -> bool:
+    """True wenn der Kartentext noch wie ein Ortsname zum Ordner wirkt.
+
+    Sätze, OSM-Müll und LLM-Halluzinationen (Zahlung, Socket, …) fallen raus.
+    """
+    source = " ".join(str(original or "").replace("_", " ").split())
+    label = " ".join(str(localized or "").replace("_", " ").split())
+    if not label or not source:
+        return False
+    if len(label) > 80 or len(label.split()) > 10:
+        return False
+    if "." in label:
+        return False
+    source_tokens = overlay_place_tokens(source)
+    label_tokens = overlay_place_tokens(label)
+    if not source_tokens or not label_tokens:
+        return source.casefold() == label.casefold()
+    if source_tokens & label_tokens:
+        return True
+    for left in source_tokens:
+        for right in label_tokens:
+            if len(left) >= 4 and len(right) >= 4 and (
+                left.startswith(right[:4]) or right.startswith(left[:4])
+            ):
+                return True
+    return source.casefold() == label.casefold()
+
+
 def _parse_map_landmark(place: str) -> tuple[str, str] | None:
     """``(kind, stem)`` for German/English/localized geographic labels."""
     text = " ".join(str(place or "").replace("_", " ").split())
@@ -822,7 +886,8 @@ def map_overlay_place_label(
     """Kartenzeile: deutschen Ordnernamen übersetzen, OSM-Namen nicht übernehmen.
 
     Ein manueller Anzeigename gilt nur, wenn der Ordner selbst kein
-    übersetzbares Landschaftswort enthält (z. B. Monte Athos).
+    übersetzbares Landschaftswort enthält (z. B. Monte Athos). LLM-Namen
+    liegen schon in ``localized_display_label`` und werden dort bevorzugt.
     """
     original_text = " ".join(str(original or "").replace("_", " ").split())
     display_text = " ".join(str(display or "").replace("_", " ").split())
@@ -868,11 +933,16 @@ def remotion_payload(item: MapPlanItem) -> dict:
     else:
         from_raw = item.from_localized_display_label or item.localized_display_label
         from_original = item.from_original_chapter_label or item.original_chapter_label
+    stored_from = " ".join(str(from_raw or "").split())
+    stored_to = " ".join(str(item.localized_display_label or "").split())
     from_label = _clip_label(
-        map_overlay_place_label(from_original, from_raw, item.language), 100
+        stored_from
+        or map_overlay_place_label(from_original, from_raw, item.language),
+        100,
     )
     to_label = _clip_label(
-        map_overlay_place_label(
+        stored_to
+        or map_overlay_place_label(
             item.original_chapter_label, item.localized_display_label, item.language
         ),
         100,

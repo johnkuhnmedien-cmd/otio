@@ -126,11 +126,10 @@ def render_enhanced_maps_page() -> None:
         st.metric("Kartenüberschrift", map_heading(confirmed.language))
     st.caption(f"Ausgabeordner: `{map_output_dir(project)}`")
     st.caption(
-        "Dateinamen bleiben die deutschen Ordnernamen. Auf der Karte folgen "
-        "Überschrift, Land und Ortsangaben der Projektsprache "
-        "(z. B. Slowenien → Slovenia, Peričnik-Wasserfall → Cascata di Peričnik). "
-        "Eigennamen ohne deutsches Landschaftswort bleiben unverändert. "
-        "Unter „Sichtbarer Name“ kann man einzelne Orte manuell überschreiben."
+        "Dateinamen bleiben die deutschen Ordnernamen. Die sichtbaren Ortsnamen "
+        "auf der Karte übersetzt das Brief-LLM in die Videosprache — mit Land, "
+        "Kapitelreihenfolge und Nachbarorten als Kontext. OpenStreetMap-Titel "
+        "kommen nicht auf die Karte."
     )
 
     if saved_plan is not None and saved_plan.dramaturgy_fingerprint != live_fp:
@@ -179,6 +178,12 @@ def render_enhanced_maps_page() -> None:
                 coordinates=coordinates,
                 previous=saved_plan,
             )
+            with st.spinner("Kartennamen in die Videosprache übersetzen…"):
+                from otio_app.services.without_voiceover_enhanced.maps.label_translate_service import (
+                    localize_map_plan_with_llm,
+                )
+
+                plan = localize_map_plan_with_llm(project, plan)
             save_map_plan(project, plan)
             saved_plan = plan
             st.success(f"{len(plan.maps)} Karten geplant. Nichts gerendert.")

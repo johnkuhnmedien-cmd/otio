@@ -6,6 +6,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
 from otio_app.models import Project, ProjectMode
 from otio_app.services.voiceover_generation.dramaturgy_service import (
@@ -35,6 +37,15 @@ from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
     save_map_plan,
 )
 from otio_app.services.without_voiceover_enhanced.paths import map_output_dir
+
+
+@pytest.fixture(autouse=True)
+def _skip_overlay_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.maps.auto_run_maps."
+        "localize_map_plan_with_llm",
+        lambda project, plan, **kwargs: plan,
+    )
 
 
 def _project(tmp_path: Path, folders: list[str]) -> Project:

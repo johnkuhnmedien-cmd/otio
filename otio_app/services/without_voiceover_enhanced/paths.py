@@ -63,6 +63,7 @@ SFX_RESULT_FILENAME = "sfx_result.json"
 MAPS_SUBDIR = "maps"
 MAP_PLAN_FILENAME = "map_plan.json"
 MAP_COORDINATES_FILENAME = "map_coordinates.json"
+MAP_OVERLAY_LABELS_FILENAME = "map_overlay_labels.json"
 MAP_SETTINGS_FILENAME = "map_settings.json"
 MAP_OUTPUT_SUBDIR = "output"
 MAP_RENDER_JOB_FILENAME = "map_render_job.json"
@@ -178,6 +179,10 @@ def map_plan_path(project: Project) -> Path:
 
 def map_coordinates_path(project: Project) -> Path:
     return maps_dir(project) / MAP_COORDINATES_FILENAME
+
+
+def map_overlay_labels_path(project: Project) -> Path:
+    return maps_dir(project) / MAP_OVERLAY_LABELS_FILENAME
 
 
 def map_settings_path(project: Project) -> Path:

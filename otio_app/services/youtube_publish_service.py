@@ -117,14 +117,16 @@ def youtube_chapter_display_title(
         if lang:
             return _YOUTUBE_INTRO_TITLES.get(lang) or _YOUTUBE_INTRO_TITLES["EN"]
         return fallback or "Intro"
-    overlay = str(map_title or "").strip() or fallback
-    if not lang:
+    overlay = str(map_title or "").strip()
+    if overlay:
         return overlay
+    if not lang:
+        return fallback
     from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
         map_overlay_place_label,
     )
 
-    return map_overlay_place_label(folder or overlay, overlay, lang)
+    return map_overlay_place_label(folder or fallback, fallback, lang)
 
 
 def _map_titles_by_folder(project: Project | None) -> dict[str, str]:
@@ -155,7 +157,7 @@ def _map_titles_by_folder(project: Project | None) -> dict[str, str]:
         item_language = str(getattr(item, "language", "") or plan_language)
         if not (original or chapter_id):
             continue
-        title = map_overlay_place_label(
+        title = localized or map_overlay_place_label(
             original or chapter_id,
             localized,
             item_language,

@@ -221,7 +221,7 @@ def test_visible_heading_is_localized_filename_keeps_original_json_name(
     plan = build_map_plan(project)
     opening = plan.maps[0]
     assert opening.heading == "Itinerario"
-    assert opening.localized_display_label == "Monte Athos"
+    assert opening.localized_display_label == "Mount Athos"
     assert opening.original_chapter_label == "Mount Athos"
     assert opening.output_filename == "it_Mount Athos_Map.mp4"
     assert opening.language == "IT"
@@ -536,7 +536,7 @@ def test_lookup_missing_coordinates_uses_injected_geocoder(tmp_path: Path) -> No
     assert coords.places["Meteora"].status == COORDINATE_STATUS_RESOLVED
     assert rebuilt.maps[0].render_status == RENDER_STATUS_IDLE
     assert rebuilt.maps[1].render_status == RENDER_STATUS_IDLE
-    assert rebuilt.maps[0].localized_display_label == "Mont Athos"
+    assert rebuilt.maps[0].localized_display_label == "Mount Athos"
 
 
 def test_nominatim_geocode_parses_payload(monkeypatch: pytest.MonkeyPatch) -> None:
