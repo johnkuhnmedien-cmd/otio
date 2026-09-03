@@ -165,3 +165,92 @@ def test_folder_tts_uses_single_elevenlabs_call(
     # Bereits vertont → Alle offenen macht keinen weiteren Call.
     synthesize_open_chapters_audio(project)
     assert len(calls) == 1
+
+
+def test_folder_tts_turkish_dotted_i_does_not_raise_index_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Kapitel mit İ am Satzende — früher Auto-Lauf: list index out of range."""
+    folder = "Mount Ararat & İshak Pasha Palace"
+    root = tmp_path / "Turkey"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    (root / folder).mkdir()
+    project = Project(
+        id="enh-tr-tts",
+        name="Turkey",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="en",
+        asset_subdir_names=[folder],
+        selected_asset_subdirs=[folder],
+    )
+    save_confirmed_dramaturgy(
+        project,
+        DramaturgyPlan(
+            project_id=project.id,
+            recommended_folder_order=[
+                DramaturgyFolderEntry(
+                    folder_name=folder, order_index=1, enabled=True
+                )
+            ],
+        ),
+    )
+    text = "Climb toward İshak."
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            narration_full=text,
+            segments=[
+                ScriptSegment(
+                    segment_id="Ararat_segment_001",
+                    text=text,
+                    sequence_index=1,
+                    folder_name=folder,
+                    folder_order_index=1,
+                )
+            ],
+        ),
+    )
+    lock_script(project)
+    save_elevenlabs_settings(
+        project,
+        ElevenLabsSettings(
+            project_id=project.id,
+            voice_id="voice-abc",
+            model_id="eleven_v3",
+            output_format="wav_48000",
+        ),
+    )
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_test")
+
+    def _fake_tts(tts_text: str, settings):  # noqa: ANN001
+        starts = [i * 0.04 for i in range(len(tts_text))]
+        ends = [start + 0.04 for start in starts]
+        return ElevenLabsTtsResult(
+            audio_bytes=b"FAKEWAV",
+            alignment={
+                "characters": list(tts_text),
+                "character_start_times_seconds": starts,
+                "character_end_times_seconds": ends,
+            },
+            normalized_alignment={},
+            response_metadata={"status_code": 200},
+        )
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.audio_timing_service."
+        "synthesize_speech_with_timestamps",
+        _fake_tts,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.audio_timing_service."
+        "measure_audio_duration_seconds",
+        lambda path: 0.04 * max(1, len(text)),
+    )
+
+    doc = synthesize_folder_script_audio(project, folder)
+    assert len(doc.segments) == 1
+    assert doc.segments[0].audio_status == "valid"
+    assert doc.segments[0].duration_seconds > 0

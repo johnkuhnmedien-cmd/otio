@@ -60,3 +60,30 @@ def test_find_segment_span_respects_search_from() -> None:
     )
     assert second_span is not None
     assert second_span[0] > first_span[0]
+
+
+def test_build_normalized_index_map_turkish_dotted_i_stays_one_to_one() -> None:
+    """Türkisches İ: str.lower() wird zu zwei Codepoints — Map muss 1:1 bleiben."""
+    text = "Climb toward İshak."
+    normalized, index_map = build_normalized_index_map(text)
+    assert len(normalized) == len(index_map)
+    assert "ishak" in normalized
+    assert "i\u0307" not in normalized
+
+
+def test_find_segment_span_with_trailing_turkish_dotted_i() -> None:
+    """Letzter Satz mit İ — früher IndexError list index out of range."""
+    full_text = "Climb toward İshak."
+    normalized_full, index_map = build_normalized_index_map(full_text)
+    normalized_segment, _ = build_normalized_index_map(full_text)
+    span = find_segment_span(
+        normalized_full, index_map, normalized_segment, search_from=0
+    )
+    assert span is not None
+    start, end, _ = span
+    assert "İshak" in full_text[start:end]
+
+
+def test_find_segment_span_returns_none_when_index_map_too_short() -> None:
+    span = find_segment_span("hello world", [0, 1, 2], "hello world", search_from=0)
+    assert span is None
