@@ -110,6 +110,22 @@ def test_align_segments_missing_timestamps_returns_empty_with_warning() -> None:
     assert any("MISSING_CHARACTER_TIMESTAMPS" in w for w in warnings)
 
 
+def test_align_segments_turkish_dotted_i_does_not_crash() -> None:
+    full_text = (
+        "Mount Ararat and İshak Pasha Palace stand above the plateau."
+    )
+    segments = [("s1", full_text)]
+    alignment = {
+        "characters": list(full_text),
+        "character_start_times_seconds": [i * 0.1 for i in range(len(full_text))],
+        "character_end_times_seconds": [(i + 1) * 0.1 for i in range(len(full_text))],
+    }
+    results, warnings = _align_segments(full_text, segments, alignment)
+    assert "s1" in results
+    assert results["s1"][1] > results["s1"][0]
+    assert not any(w.startswith(ALIGNMENT_WARNING_TEXT_SEGMENT_NOT_FOUND) for w in warnings)
+
+
 def test_align_segments_empty_segment_text_is_warned() -> None:
     full_text = "Hello"
     alignment = {
