@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import streamlit as st
 
+from otio_app.youtube_layout_compat import install_youtube_metadata_paths
+
+install_youtube_metadata_paths()
+
 from otio_app.defaults import BRIEF_LANGUAGE_CHOICES, PROJECT_MODE_LABELS
 from otio_app.models import Project
 from otio_app.project_repository import update_project_video_place

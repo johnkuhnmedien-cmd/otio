@@ -6,6 +6,10 @@ from otio_app.shutdown import register_shutdown_handlers
 
 register_shutdown_handlers()
 
+from otio_app.youtube_layout_compat import install_youtube_metadata_paths
+
+install_youtube_metadata_paths()
+
 import streamlit as st
 from pydantic import ValidationError
 
