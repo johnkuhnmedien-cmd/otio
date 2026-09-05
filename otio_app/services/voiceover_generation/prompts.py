@@ -1457,6 +1457,7 @@ def build_youtube_publish_prompt(
     intro_text: str = "",
     folder_scripts_block: str = "",
     option_count: int = 3,
+    place_count: int = 0,
 ) -> str:
     """Prompt für YouTube-Titel/Beschreibung/Hashtags — nur Kapitelüberschriften.
 
@@ -1466,6 +1467,15 @@ def build_youtube_publish_prompt(
     """
     del quiz_count, intro_text, folder_scripts_block, option_count
     display = _language_display_name(language)
+    count = max(0, int(place_count or 0))
+    count_rule = ""
+    if count > 0:
+        count_rule = f"""
+- Location count (authoritative, excluding Intro): {count}
+- If the YouTube title or description mentions how many places / locations /
+  lieux / Orte / luoghi the video visits, that number MUST be {count}.
+  Never invent a different count (no "25 lieux" when there are {count}).
+"""
     return f"""You prepare YouTube publish metadata for a travel/documentary video.
 
 {native_speaker_language_block(language)}
@@ -1481,7 +1491,7 @@ def build_youtube_publish_prompt(
 - Working title: {title or "(untitled)"}
 - Total duration seconds: {total_duration_sec:.1f}
 - Target language: {language} ({display})
-
+{count_rule}
 ## Chapters (titles + timestamps only — authoritative; do not invent different ones)
 Use ONLY these chapter headings as content signal. There are no full voice-over scripts.
 {chapters_block}
