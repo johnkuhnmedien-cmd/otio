@@ -20,6 +20,8 @@ from otio_app.services.voiceover_generation.prompts import (
 from otio_app.services.youtube_publish_models import YouTubeChapter
 from otio_app.services.youtube_publish_service import (
     _append_chapters_to_description,
+    _fallback_project_youtube_metadata_path,
+    _fallback_project_youtube_metadata_text_path,
     _normalize_hashtags,
     _parse_quizzes,
     _parse_wonders_title,
@@ -800,3 +802,25 @@ def test_generate_metadata_corrects_wrong_place_count_in_title(
     assert "25 lieux" not in result.document.description_body
     prompt = _prompt_from_context(context)
     assert "Location count (authoritative, excluding Intro): 33" in prompt
+
+
+def test_youtube_publish_service_survives_older_project_layout(tmp_path: Path) -> None:
+    src = Path("otio_app/services/youtube_publish_service.py").read_text(encoding="utf-8")
+    assert "from otio_app.project_layout import (" not in src
+    assert "from otio_app.project_layout import get_project_youtube_metadata_path" not in src
+
+    project = _project(tmp_path, language="it")
+    json_path = _fallback_project_youtube_metadata_path(
+        project.project_root_path,
+        project.voice_over_subdir,
+        project.language,
+    )
+    txt_path = _fallback_project_youtube_metadata_text_path(
+        project.project_root_path,
+        project.voice_over_subdir,
+        project.language,
+    )
+    assert json_path == (
+        Path(project.project_root) / "Voice over" / "IT" / "youtube_metadata.json"
+    )
+    assert txt_path == Path(project.project_root) / "youtube_metadata_IT.txt"

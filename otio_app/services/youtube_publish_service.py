@@ -14,13 +14,9 @@ from otio_app.defaults import (
     YOUTUBE_QUIZ_INTERVAL_SEC,
     YOUTUBE_QUIZ_OPTION_COUNT,
 )
+from otio_app import project_layout as _project_layout
 from otio_app.models import Project
-from otio_app.project_layout import (
-    get_project_youtube_metadata_path,
-    get_project_youtube_metadata_text_path,
-    get_youtube_metadata_path,
-    language_folder_name,
-)
+from otio_app.project_layout import get_youtube_metadata_path, language_folder_name
 from otio_app.services.gemini_client import _extract_json
 from otio_app.services.otio_exporter import (
     MergedEditPlanResult,
@@ -79,6 +75,42 @@ __all__ = [
     "youtube_metadata_path",
     "youtube_project_metadata_path",
 ]
+
+
+def _fallback_project_youtube_metadata_path(
+    project_root: Path,
+    voice_over_subdir: str,
+    language: str,
+) -> Path:
+    from otio_app.defaults import YOUTUBE_METADATA_FILENAME
+
+    return (
+        _project_layout.get_voice_over_dir(project_root, voice_over_subdir, language)
+        / YOUTUBE_METADATA_FILENAME
+    )
+
+
+def _fallback_project_youtube_metadata_text_path(
+    project_root: Path,
+    voice_over_subdir: str,
+    language: str,
+) -> Path:
+    del voice_over_subdir
+    return Path(project_root) / f"youtube_metadata_{language_folder_name(language)}.txt"
+
+
+# Older local trees may still lack these helpers in project_layout.py.
+# Importing them by name crashes Streamlit before any page can load.
+get_project_youtube_metadata_path = getattr(
+    _project_layout,
+    "get_project_youtube_metadata_path",
+    _fallback_project_youtube_metadata_path,
+)
+get_project_youtube_metadata_text_path = getattr(
+    _project_layout,
+    "get_project_youtube_metadata_text_path",
+    _fallback_project_youtube_metadata_text_path,
+)
 
 _YOUTUBE_INTRO_TITLES: dict[str, str] = {
     "DE": "Intro",
