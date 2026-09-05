@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,6 +74,8 @@ __all__ = [
     "youtube_chapter_display_title",
     "youtube_country_folder_text_path",
     "youtube_description_for_copy",
+    "youtube_location_count",
+    "correct_place_count_in_text",
     "youtube_metadata_path",
     "youtube_project_metadata_path",
 ]
@@ -254,6 +257,71 @@ def quiz_count_for_duration(total_duration_sec: float) -> int:
     if total_duration_sec <= 0:
         return 1
     return max(1, int(math.ceil(float(total_duration_sec) / YOUTUBE_QUIZ_INTERVAL_SEC)))
+
+
+def _is_intro_folder(name: str) -> bool:
+    slug = (name or "").strip().casefold()
+    return slug in {"intro", "introduction"} or slug.startswith("intro_")
+
+
+def youtube_location_count(chapters: list[YouTubeChapter]) -> int:
+    """Orte im Video — Intro zählt nicht als Ort."""
+    return sum(
+        1
+        for chapter in chapters
+        if not _is_intro_folder(chapter.folder_name)
+        and not _is_intro_folder(chapter.display_title)
+    )
+
+
+_PLACE_COUNT_NOUNS = (
+    "lieux",
+    "endroits",
+    "places",
+    "place",
+    "orte",
+    "ort",
+    "destinations",
+    "destination",
+    "locations",
+    "location",
+    "luoghi",
+    "luogo",
+    "siti",
+    "sito",
+    "lugares",
+    "lugar",
+    "locais",
+    "local",
+    "plekken",
+    "spots",
+    "spot",
+    "steder",
+    "platser",
+)
+_PLACE_COUNT_RE = re.compile(
+    r"(?<!\d)(\d{1,3})(\s+(?:[\w'`’-]+\s+){0,2})("
+    + "|".join(sorted(_PLACE_COUNT_NOUNS, key=len, reverse=True))
+    + r")\b",
+    re.IGNORECASE,
+)
+
+
+def correct_place_count_in_text(text: str, place_count: int) -> str:
+    """Ersetzt erfundene Ortszahlen (25 lieux) durch die echte Kapitelzahl."""
+    if place_count <= 0 or not (text or "").strip():
+        return text
+
+    def _replace(match: re.Match[str]) -> str:
+        try:
+            found = int(match.group(1))
+        except (TypeError, ValueError):
+            return match.group(0)
+        if found == place_count:
+            return match.group(0)
+        return f"{place_count}{match.group(2)}{match.group(3)}"
+
+    return _PLACE_COUNT_RE.sub(_replace, text)
 
 
 def _clamp_text(text: str, max_chars: int) -> str:
@@ -749,6 +817,7 @@ def _prompt_from_context(context: YouTubePublishContext) -> str:
         chapters_block=_chapters_prompt_block(context.chapters),
         description_max_chars=YOUTUBE_DESCRIPTION_BODY_MAX_CHARS,
         hashtags_max_chars=YOUTUBE_HASHTAGS_MAX_CHARS,
+        place_count=youtube_location_count(context.chapters),
     )
 
 
@@ -915,10 +984,15 @@ def generate_youtube_publish_metadata_from_context(
         )
 
     payload = ok.payload
+    place_count = youtube_location_count(context.chapters)
     title = str(payload.get("title") or context.title).strip() or context.title
+    title = correct_place_count_in_text(title, place_count)
     wonders_formula, wonders_place = _parse_wonders_title(payload)
     description_body = _clamp_text(
-        str(payload.get("description_body") or ""),
+        correct_place_count_in_text(
+            str(payload.get("description_body") or ""),
+            place_count,
+        ),
         YOUTUBE_DESCRIPTION_BODY_MAX_CHARS,
     )
     description = _append_chapters_to_description(

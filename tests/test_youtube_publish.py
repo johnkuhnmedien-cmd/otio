@@ -25,20 +25,23 @@ from otio_app.services.youtube_publish_service import (
     _parse_wonders_title,
     _prompt_from_context,
     build_youtube_publish_context,
+    correct_place_count_in_text,
     format_youtube_chapter_lines,
     format_youtube_timestamp,
     generate_youtube_publish_metadata,
+    generate_youtube_publish_metadata_from_context,
     generate_youtube_quizzes,
     youtube_chapter_display_title,
     load_youtube_metadata,
     quiz_count_for_duration,
     save_youtube_metadata,
-    youtube_chapter_display_title,
     youtube_country_folder_text_path,
+    youtube_location_count,
     youtube_project_metadata_path,
 )
 from otio_app.services.youtube_publish_models import (
     YouTubeMetadataDocument,
+    YouTubePublishContext,
     YouTubeQuizItem,
     YouTubeQuizOption,
 )
@@ -494,6 +497,7 @@ def test_youtube_publish_prompt_chapters_only_no_scripts() -> None:
         folder_scripts_block="Full script that must be ignored",
         description_max_chars=3500,
         hashtags_max_chars=500,
+        place_count=33,
     )
     assert "Target language code: DE" in prompt
     assert "Antelope Canyon" in prompt
@@ -506,6 +510,8 @@ def test_youtube_publish_prompt_chapters_only_no_scripts() -> None:
     assert "Photorealistic" in prompt
     assert "never as raw line breaks" in prompt
     assert "EXACTLY 2 quiz" not in prompt
+    assert "Location count (authoritative, excluding Intro): 33" in prompt
+    assert "25 lieux" in prompt
 
 
 def test_youtube_quiz_prompt_chapters_only() -> None:
@@ -703,3 +709,94 @@ def test_youtube_ui_copies_localized_chapter_lines() -> None:
     assert "Thumbnail-Prompts (ohne Text, realistisch)" in src
     assert "TXT im Länderordner" in src
 
+
+def test_youtube_location_count_skips_intro() -> None:
+    chapters = [
+        YouTubeChapter(folder_name="Intro", display_title="Introduzione"),
+        YouTubeChapter(folder_name="Istanbul", display_title="Istanbul"),
+        YouTubeChapter(folder_name="Kaş & Kekova", display_title="Kaş e Kekova"),
+    ]
+    assert youtube_location_count(chapters) == 2
+    assert youtube_location_count([]) == 0
+
+
+def test_correct_place_count_replaces_invented_lieux() -> None:
+    title = "Turquie : 25 lieux d'exception à découvrir au moins une fois dans sa vie"
+    fixed = correct_place_count_in_text(title, 33)
+    assert fixed == (
+        "Turquie : 33 lieux d'exception à découvrir au moins une fois dans sa vie"
+    )
+    assert correct_place_count_in_text("The Wonders of Turkey", 33) == (
+        "The Wonders of Turkey"
+    )
+    assert "25 Orte" not in correct_place_count_in_text(
+        "Türkei: 25 magische Orte", 33
+    )
+    assert "33 magische Orte" in correct_place_count_in_text(
+        "Türkei: 25 magische Orte", 33
+    )
+
+
+def test_generate_metadata_corrects_wrong_place_count_in_title(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    folders = ["Istanbul"] + [f"Place {index}" for index in range(2, 34)]
+    chapters = [
+        YouTubeChapter(
+            folder_name="Intro",
+            display_title="Intro",
+            timestamp="00:00",
+        )
+    ]
+    chapters.extend(
+        YouTubeChapter(
+            folder_name=name,
+            display_title=name,
+            timestamp="01:00",
+        )
+        for name in folders
+    )
+    assert youtube_location_count(chapters) == 33
+    context = YouTubePublishContext(
+        title="Les merveilles de la Turquie",
+        language="FR",
+        total_duration_sec=4000,
+        chapters=chapters,
+        folder_names=[chapter.folder_name for chapter in chapters],
+    )
+
+    class _Resp:
+        raw_text = """{
+          "title": "Turquie : 25 lieux d'exception à découvrir au moins une fois dans sa vie",
+          "wonders_title_formula": "Les merveilles de",
+          "wonders_title_place": "la Turquie",
+          "description_body": "Un voyage à travers 25 lieux inoubliables.",
+          "hashtags": "Turquie, Voyage"
+        }"""
+        provider = "gemini"
+        model = "gemini-test"
+        latency_ms = 12
+        token_usage = {"input": 1, "output": 2}
+
+    with patch(
+        "otio_app.services.youtube_publish_service.generate_plan_text_with_metadata",
+        return_value=_Resp(),
+    ):
+        result = generate_youtube_publish_metadata_from_context(
+            project,
+            context,
+            provider="gemini",
+            model="gemini-test",
+        )
+
+    assert result.status == "PASS"
+    assert result.document is not None
+    assert result.document.title == (
+        "Turquie : 33 lieux d'exception à découvrir au moins une fois dans sa vie"
+    )
+    assert "33 lieux" in result.document.description_body
+    assert "25 lieux" not in result.document.title
+    assert "25 lieux" not in result.document.description_body
+    prompt = _prompt_from_context(context)
+    assert "Location count (authoritative, excluding Intro): 33" in prompt
