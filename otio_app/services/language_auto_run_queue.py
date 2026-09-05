@@ -9,6 +9,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from otio_app.youtube_layout_compat import install_youtube_metadata_paths
+
+install_youtube_metadata_paths()
+
 from otio_app.models import Project
 from otio_app.project_repository import get_project_by_id
 from otio_app.services.language_sibling_project import (

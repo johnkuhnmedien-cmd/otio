@@ -1369,3 +1369,33 @@ def discover_asset_subdirs(
             language,
         )
     ]
+
+
+def _compat_get_project_youtube_metadata_path(
+    project_root: Path,
+    voice_over_subdir: str,
+    language: str,
+) -> Path:
+    from otio_app.defaults import YOUTUBE_METADATA_FILENAME
+
+    return get_voice_over_dir(project_root, voice_over_subdir, language) / YOUTUBE_METADATA_FILENAME
+
+
+def _compat_get_project_youtube_metadata_text_path(
+    project_root: Path,
+    voice_over_subdir: str,
+    language: str,
+) -> Path:
+    del voice_over_subdir
+    return Path(project_root) / f"youtube_metadata_{language_folder_name(language)}.txt"
+
+
+# Ältere lokale Dateien ohne die beiden Helfer: Namen trotzdem exportieren.
+get_project_youtube_metadata_path = globals().get(
+    "get_project_youtube_metadata_path",
+    _compat_get_project_youtube_metadata_path,
+)
+get_project_youtube_metadata_text_path = globals().get(
+    "get_project_youtube_metadata_text_path",
+    _compat_get_project_youtube_metadata_text_path,
+)

@@ -20,6 +20,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 import threading
 
+from otio_app.youtube_layout_compat import install_youtube_metadata_paths
+
+install_youtube_metadata_paths()
+
 from otio_app.defaults import ENHANCED_CHAPTER_TIMING_MAX_WORKERS
 from otio_app.models import Project
 from otio_app.project_layout import (
