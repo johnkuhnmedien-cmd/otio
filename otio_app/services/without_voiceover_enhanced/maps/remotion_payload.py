@@ -922,19 +922,43 @@ def view_bounds(
     ]
 
 
+def _geography_label_dict(
+    *,
+    kind: str,
+    geo_id: str,
+    label: str,
+    longitude: float,
+    latitude: float,
+    numeric_id: str = "",
+    atlas_name: str = "",
+) -> dict:
+    return {
+        "kind": kind,
+        "id": _clip_label(geo_id, 80),
+        "label": _clip_label(label, 40),
+        "longitude": float(longitude),
+        "latitude": float(latitude),
+        "numericId": str(numeric_id or ""),
+        "atlasName": _clip_label(atlas_name, 80) if atlas_name else "",
+    }
+
+
 def _geography_labels_payload(item: MapPlanItem) -> list[dict]:
     if item.geography_labels:
         return [
-            {
-                "kind": label.kind,
-                "id": _clip_label(label.id, 80),
-                "label": _clip_label(label.label, 40),
-                "longitude": float(label.longitude),
-                "latitude": float(label.latitude),
-            }
+            _geography_label_dict(
+                kind=label.kind,
+                geo_id=label.id,
+                label=label.label,
+                longitude=label.longitude,
+                latitude=label.latitude,
+                numeric_id=label.numeric_id,
+                atlas_name=label.atlas_name,
+            )
             for label in item.geography_labels
         ]
     from otio_app.services.without_voiceover_enhanced.maps.geography_catalog import (
+        country_fallback_label,
         geography_label_is_plausible,
         sea_fallback_label,
         visible_geography,
@@ -956,21 +980,24 @@ def _geography_labels_payload(item: MapPlanItem) -> list[dict]:
     )
     payload: list[dict] = []
     for entry in entries:
-        text = (
-            sea_fallback_label(entry.english, item.language)
-            if entry.kind == "sea"
-            else country_label(entry.english, item.language)
-        )
+        if entry.kind == "sea":
+            text = sea_fallback_label(entry.english, item.language)
+        else:
+            text = country_fallback_label(entry.english, item.language) or country_label(
+                entry.english, item.language
+            )
         if not geography_label_is_plausible(text):
             continue
         payload.append(
-            {
-                "kind": entry.kind,
-                "id": _clip_label(entry.id, 80),
-                "label": _clip_label(text, 40),
-                "longitude": entry.longitude,
-                "latitude": entry.latitude,
-            }
+            _geography_label_dict(
+                kind=entry.kind,
+                geo_id=entry.id,
+                label=text,
+                longitude=entry.longitude,
+                latitude=entry.latitude,
+                numeric_id=entry.numeric_id,
+                atlas_name=entry.atlas_name or entry.english,
+            )
         )
     return payload
 

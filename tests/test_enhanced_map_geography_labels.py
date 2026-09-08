@@ -14,6 +14,7 @@ from otio_app.services.voiceover_generation.models import (
     DramaturgyPlan,
 )
 from otio_app.services.without_voiceover_enhanced.maps.geography_catalog import (
+    country_fallback_label,
     geography_label_is_plausible,
     visible_geography,
 )
@@ -101,10 +102,25 @@ def test_montenegro_view_includes_croatia_albania_and_adriatic() -> None:
     kinds = {entry.id: entry.kind for entry in entries}
     assert "country:croatia" in ids
     assert "country:albania" in ids
+    assert "country:kosovo" in ids
     assert "sea:adriatic" in ids
     assert "country:montenegro" not in ids
     assert kinds["sea:adriatic"] == "sea"
     assert kinds["country:croatia"] == "country"
+
+
+def test_kosovo_is_named_but_never_used_as_fill() -> None:
+    bounds = view_bounds("499", 18.85, 42.39, 18.85, 42.39)
+    kosovo = next(
+        entry
+        for entry in visible_geography(bounds, exclude_numeric="499")
+        if entry.id == "country:kosovo"
+    )
+    assert kosovo.numeric_id == ""
+    assert kosovo.atlas_name == "Kosovo"
+    assert country_fallback_label("Kosovo", "de") == "Kosovo"
+    assert country_fallback_label("Kosovo", "pl") == "Kosowo"
+    assert country_fallback_label("North Macedonia", "de") == "Nordmazedonien"
 
 
 def test_geography_label_rejects_sentences() -> None:
@@ -124,11 +140,16 @@ def test_payload_labels_neighbors_without_destination(tmp_path: Path) -> None:
     assert payload["countryNumericId"] == "499"
     assert "country:croatia" in ids
     assert "country:albania" in ids
+    assert "country:kosovo" in ids
     assert "sea:adriatic" in ids
     assert "country:montenegro" not in ids
     assert labels["country:croatia"] == "Kroatien"
     assert labels["country:albania"] == "Albanien"
+    assert labels["country:kosovo"] == "Kosovo"
     assert labels["sea:adriatic"] == "Adriatisches Meer"
+    kosovo = next(item for item in payload["geographyLabels"] if item["id"] == "country:kosovo")
+    assert kosovo["atlasName"] == "Kosovo"
+    assert kosovo["numericId"] == ""
 
 
 def test_llm_geography_prompt_asks_for_short_map_names() -> None:
@@ -171,7 +192,7 @@ def test_llm_fills_neighbor_labels_and_invalidates_render(tmp_path: Path) -> Non
     assert ids.get("sea:adriatic") == "Adriatisches Meer"
     assert localized.maps[0].render_status != RENDER_STATUS_DONE
     payload = remotion_payload(localized.maps[0])
-    assert payload["styleVersion"] == "otio-vintage-map-v14"
+    assert payload["styleVersion"] == "otio-vintage-map-v15"
     assert any(item["label"] == "Kroatien" for item in payload["geographyLabels"])
 
 
@@ -195,3 +216,10 @@ def test_renderer_draws_geography_labels() -> None:
     ).read_text(encoding="utf-8")
     assert "geographyOnScreen" in src
     assert "geographyLabels" in src
+    assert "interiorLonLat" in src
+    assert "visibleCountryFit" in src
+    assert "atlasFeatureForLabel" in src
+    assert "geoBounds" in src
+    assert "whiteSpace: \"normal\"" in src
+    assert "borderRadius: 3" in src
+    assert "translate(-50%, -50%)" in src
