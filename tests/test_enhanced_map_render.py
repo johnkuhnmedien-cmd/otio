@@ -223,12 +223,32 @@ def test_view_bounds_usa_ireland_and_unknown() -> None:
     assert country_numeric_id("Ireland") == "372"
     assert country_numeric_id("Slowenien") == "705"
     assert country_numeric_id("Ungarn") == "348"
+    assert country_numeric_id("Montenegro") == "499"
     assert country_numeric_id("Atlantis") == "000"
     assert view_bounds("840", 0.0, 0.0, 1.0, 1.0) == [[-125.0, 24.0], [-66.0, 50.0]]
     assert view_bounds("372", 0.0, 0.0, 1.0, 1.0) == [[-11.2, 51.15], [-5.05, 55.85]]
     padded = view_bounds("000", 22.0, 40.0, 23.0, 41.0)
     assert padded[0][0] < 22.0
     assert padded[1][0] > 23.0
+
+
+def test_montenegro_payload_uses_world_atlas_numeric_id(tmp_path: Path) -> None:
+    folders = ["Plava Špilja"]
+    project = _project(tmp_path, folders, language="de")
+    project = project.model_copy(update={"video_place": "Montenegro"})
+    _confirm(project, folders, language="DE")
+    plan = build_map_plan(project, coordinates=_coords(project, folders))
+    payload = remotion_payload(plan.maps[0])
+    assert payload["countryNumericId"] == "499"
+    assert payload["countryNumericId"] != "000"
+    assert payload["countryLabel"] == "Montenegro"
+
+
+def test_map_renderer_skips_fill_when_country_id_unknown() -> None:
+    src = Path(
+        "otio_app/services/without_voiceover_enhanced/maps/remotion_renderer/src/VintageMapTransition.tsx"
+    ).read_text(encoding="utf-8")
+    assert 'if (wanted === "000") return [];' in src
 
 
 def test_render_reuses_identical_plan_hash(tmp_path: Path) -> None:

@@ -53,6 +53,7 @@ _COUNTRY_NUMERIC: dict[str, str] = {
     "slowenien": "705",
     "hungary": "348",
     "ungarn": "348",
+    "montenegro": "499",
 }
 
 # English label + ISO2 for Nominatim/Photon. Keys are lowercase aliases.

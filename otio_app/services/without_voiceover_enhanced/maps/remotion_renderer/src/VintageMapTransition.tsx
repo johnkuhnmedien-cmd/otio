@@ -76,6 +76,9 @@ const northernIreland = northernIrelandFeature();
 
 function selectedFeatures(countryNumericId: string) {
   const wanted = countryNumericId.padStart(3, "0");
+  // world-atlas leaves Kosovo / Somaliland / N. Cyprus without an id → "000".
+  // Never treat that as a country fill (Montenegro would otherwise light up Kosovo).
+  if (wanted === "000") return [];
   const selected = countryCollection.features.filter(
     (country) => numericCountryId(country) === wanted,
   );
