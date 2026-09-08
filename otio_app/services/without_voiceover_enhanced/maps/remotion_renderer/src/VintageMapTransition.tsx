@@ -9,6 +9,9 @@ import {
   useVideoConfig,
 } from "remotion";
 import {
+  geoArea,
+  geoBounds,
+  geoCentroid,
   geoContains,
   geoGraticule10,
   geoMercator,
@@ -86,6 +89,163 @@ function selectedFeatures(countryNumericId: string) {
   return selected;
 }
 
+function atlasFeatureForLabel(item: {
+  numericId?: string;
+  atlasName?: string;
+}): CountryFeature | null {
+  const numeric = String(item.numericId || "").padStart(3, "0");
+  if (numeric && numeric !== "000") {
+    const found = countryCollection.features.find(
+      (country) => numericCountryId(country) === numeric,
+    );
+    if (found) return found;
+  }
+  const atlas = String(item.atlasName || "").trim().toLowerCase();
+  if (!atlas) return null;
+  return (
+    countryCollection.features.find(
+      (country) =>
+        String(country.properties?.name || "").trim().toLowerCase() === atlas,
+    ) || null
+  );
+}
+
+function pointInView(
+  longitude: number,
+  latitude: number,
+  viewBounds: [[number, number], [number, number]],
+) {
+  const west = viewBounds[0][0];
+  const south = viewBounds[0][1];
+  const east = viewBounds[1][0];
+  const north = viewBounds[1][1];
+  return longitude >= west && longitude <= east && latitude >= south && latitude <= north;
+}
+
+function interiorLonLat(
+  feature: CountryFeature | null,
+  fallback: { longitude: number; latitude: number },
+  viewBounds: [[number, number], [number, number]],
+): { longitude: number; latitude: number } {
+  const insideCountry = (longitude: number, latitude: number) =>
+    !feature || geoContains(feature as never, [longitude, latitude]);
+  const usable = (longitude: number, latitude: number) =>
+    Number.isFinite(longitude) &&
+    Number.isFinite(latitude) &&
+    pointInView(longitude, latitude, viewBounds) &&
+    insideCountry(longitude, latitude);
+
+  if (feature) {
+    const centroid = geoCentroid(feature as never);
+    if (usable(centroid[0], centroid[1])) {
+      return { longitude: centroid[0], latitude: centroid[1] };
+    }
+    if (feature.geometry.type === "MultiPolygon") {
+      let bestPiece: { longitude: number; latitude: number } | null = null;
+      let bestArea = -1;
+      for (const coordinates of feature.geometry.coordinates as number[][][][]) {
+        const polygon = {
+          type: "Feature" as const,
+          properties: {},
+          geometry: { type: "Polygon" as const, coordinates },
+        };
+        const area = Math.abs(geoArea(polygon as never));
+        const point = geoCentroid(polygon as never);
+        if (area > bestArea && usable(point[0], point[1])) {
+          bestArea = area;
+          bestPiece = { longitude: point[0], latitude: point[1] };
+        }
+      }
+      if (bestPiece) return bestPiece;
+    }
+
+    const bounds = geoBounds(feature as never);
+    const minLon = Math.max(viewBounds[0][0], bounds[0][0]);
+    const minLat = Math.max(viewBounds[0][1], bounds[0][1]);
+    const maxLon = Math.min(viewBounds[1][0], bounds[1][0]);
+    const maxLat = Math.min(viewBounds[1][1], bounds[1][1]);
+    if (maxLon > minLon && maxLat > minLat) {
+      let best: { longitude: number; latitude: number } | null = null;
+      let bestScore = -1;
+      const steps = 16;
+      const neighborLon = ((maxLon - minLon) / steps) * 1.15;
+      const neighborLat = ((maxLat - minLat) / steps) * 1.15;
+      for (let i = 1; i < steps; i += 1) {
+        for (let j = 1; j < steps; j += 1) {
+          const longitude = minLon + (i / steps) * (maxLon - minLon);
+          const latitude = minLat + (j / steps) * (maxLat - minLat);
+          if (!usable(longitude, latitude)) continue;
+          let score = 0;
+          const dirs: Array<[number, number]> = [
+            [neighborLon, 0],
+            [-neighborLon, 0],
+            [0, neighborLat],
+            [0, -neighborLat],
+            [neighborLon, neighborLat],
+            [-neighborLon, neighborLat],
+            [neighborLon, -neighborLat],
+            [-neighborLon, -neighborLat],
+          ];
+          for (const [deltaLon, deltaLat] of dirs) {
+            if (insideCountry(longitude + deltaLon, latitude + deltaLat)) score += 1;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            best = { longitude, latitude };
+          }
+        }
+      }
+      if (best) return best;
+    }
+  }
+
+  if (usable(fallback.longitude, fallback.latitude)) return fallback;
+  return fallback;
+}
+
+function visibleCountryFit(
+  feature: CountryFeature | null,
+  viewBounds: [[number, number], [number, number]],
+  projection: (point: [number, number]) => [number, number] | null,
+  label: string,
+): { maxWidth: number; fontSize: number } {
+  const text = String(label || "").trim();
+  let countryWidth = 160;
+  let countryHeight = 110;
+  if (feature) {
+    const bounds = geoBounds(feature as never);
+    const minLon = Math.max(viewBounds[0][0], bounds[0][0]);
+    const minLat = Math.max(viewBounds[0][1], bounds[0][1]);
+    const maxLon = Math.min(viewBounds[1][0], bounds[1][0]);
+    const maxLat = Math.min(viewBounds[1][1], bounds[1][1]);
+    const west = projection([minLon, (minLat + maxLat) / 2]);
+    const east = projection([maxLon, (minLat + maxLat) / 2]);
+    const south = projection([(minLon + maxLon) / 2, minLat]);
+    const north = projection([(minLon + maxLon) / 2, maxLat]);
+    if (west && east) {
+      countryWidth = Math.hypot(east[0] - west[0], east[1] - west[1]);
+    }
+    if (south && north) {
+      countryHeight = Math.hypot(north[0] - south[0], north[1] - south[1]);
+    }
+  }
+  const budget = Math.max(
+    72,
+    Math.min(countryWidth * 0.82, countryHeight * 1.8, 240),
+  );
+  const padX = 18;
+  const widthFor = (size: number) =>
+    Math.max(1, text.length) * size * 0.64 * 1.045 + padX;
+  let fontSize = 15;
+  while (fontSize > 11 && widthFor(fontSize) > budget) {
+    fontSize -= 0.5;
+  }
+  return {
+    maxWidth: Math.min(240, Math.max(widthFor(fontSize) + 4, 68)),
+    fontSize,
+  };
+}
+
 function transportIcon(mode: MapTransitionProps["transportMode"]) {
   if (mode === "plane") return Plane;
   if (mode === "train") return TrainFront;
@@ -138,10 +298,29 @@ export const VintageMapTransition: React.FC<MapTransitionProps> = (props) => {
     }
     const from = { x: fromProjected[0], y: fromProjected[1] };
     const to = { x: toProjected[0], y: toProjected[1] };
+    const viewBounds = props.viewBounds as [[number, number], [number, number]];
     const geography = (props.geographyLabels ?? []).flatMap((item) => {
-      const projected = projection([item.longitude, item.latitude]);
+      const feature =
+        item.kind === "country" ? atlasFeatureForLabel(item) : null;
+      const anchored =
+        item.kind === "country"
+          ? interiorLonLat(feature, item, viewBounds)
+          : item;
+      const projected = projection([anchored.longitude, anchored.latitude]);
       if (!projected) return [];
-      return [{ ...item, x: projected[0], y: projected[1] }];
+      const fit =
+        item.kind === "country"
+          ? visibleCountryFit(
+              feature,
+              viewBounds,
+              (point) => projection(point),
+              item.label,
+            )
+          : {
+              maxWidth: Math.min(220, Math.max(36, item.label.length * 11)),
+              fontSize: 16,
+            };
+      return [{ ...item, x: projected[0], y: projected[1], ...fit }];
     });
     return {
       path,
@@ -376,21 +555,34 @@ export const VintageMapTransition: React.FC<MapTransitionProps> = (props) => {
         <div
           key={item.id}
           style={{
-            color: item.kind === "sea" ? "#3d4c5c" : "#3a3228",
-            fontFamily:
+            background:
               item.kind === "sea"
-                ? "Georgia, 'Times New Roman', serif"
-                : "Arial, sans-serif",
-            fontSize: item.kind === "sea" ? 22 : 20,
+                ? "linear-gradient(180deg, rgba(238,243,241,0.95), rgba(222,230,228,0.93))"
+                : "linear-gradient(180deg, rgba(255,250,234,0.98), rgba(244,227,186,0.96))",
+            border:
+              item.kind === "sea"
+                ? "1.5px solid rgba(58, 74, 88, 0.5)"
+                : "1.5px solid rgba(62, 46, 30, 0.62)",
+            borderRadius: 3,
+            boxShadow:
+              item.kind === "sea"
+                ? "inset 0 0 0 1px rgba(255,255,255,0.32), 0 2px 7px rgba(35, 48, 58, 0.16)"
+                : "inset 0 0 0 1px rgba(255,252,240,0.7), 0 2px 8px rgba(45, 34, 20, 0.2)",
+            boxSizing: "border-box",
+            color: item.kind === "sea" ? "#334452" : "#32281f",
+            fontFamily: "Georgia, 'Times New Roman', serif",
+            fontSize: item.fontSize,
             fontStyle: item.kind === "sea" ? "italic" : "normal",
-            fontWeight: item.kind === "sea" ? 600 : 750,
+            fontWeight: item.kind === "sea" ? 600 : 700,
             left: item.point.x,
-            letterSpacing: item.kind === "sea" ? "0.06em" : "0.14em",
-            opacity: 0.84,
+            letterSpacing: item.kind === "sea" ? "0.03em" : "0.04em",
+            lineHeight: 1,
+            maxWidth: item.maxWidth,
+            opacity: 0.98,
+            padding: item.kind === "sea" ? "5px 10px" : "5px 9px",
             pointerEvents: "none",
             position: "absolute",
-            textShadow:
-              "0 1px 0 rgba(247,237,207,.9), 0 0 12px rgba(216,199,164,.7)",
+            textAlign: "center",
             textTransform: item.kind === "sea" ? "none" : "uppercase",
             top: item.point.y,
             transform: "translate(-50%, -50%)",

@@ -310,6 +310,13 @@ def _fallback_geography_label(english: str, language: str, *, kind: str) -> str:
 
     if kind == "sea":
         return sea_fallback_label(english, language)
+    from otio_app.services.without_voiceover_enhanced.maps.geography_catalog import (
+        country_fallback_label,
+    )
+
+    mapped = country_fallback_label(english, language)
+    if mapped:
+        return mapped
     return country_label(english, language)
 
 
@@ -481,6 +488,8 @@ def apply_geography_labels(
                 or _fallback_geography_label(entry.english, language, kind=entry.kind),
                 longitude=entry.longitude,
                 latitude=entry.latitude,
+                numeric_id=entry.numeric_id,
+                atlas_name=entry.atlas_name or entry.english,
             )
             for entry in entries
         ]

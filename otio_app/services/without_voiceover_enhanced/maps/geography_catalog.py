@@ -1,16 +1,16 @@
 """Feste Nachbarländer- und Meer-Punkte für Vintage-Kartenbeschriftung.
 
-Keine OSM-Namen. Koordinaten sind Kartenmittelpunkte zum Beschriften,
-nicht politische Grenzen. Kosovo bleibt absichtlich draußen.
+Keine OSM-Namen. Koordinaten sind Innenpunkte zum Beschriften.
+Kosovo wird beschriftet, aber nie als hervorgehobene Fläche benutzt.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-_MAX_COUNTRIES = 7
+_MAX_COUNTRIES = 8
 _MAX_SEAS = 2
-_MIN_SEP_DEG = 0.85
+_MIN_SEP_DEG = 0.8
 _PIN_CLEAR_DEG = 0.55
 
 
@@ -22,46 +22,49 @@ class GeographyEntry:
     longitude: float
     latitude: float
     numeric_id: str = ""
+    atlas_name: str = ""
 
 
 # UN M49 / world-atlas numeric ids where the fill exists.
+# atlas_name matches world-atlas properties.name. Kosovo has no numeric id.
 _COUNTRIES: tuple[GeographyEntry, ...] = (
-    GeographyEntry("country:albania", "country", "Albania", 20.05, 41.15, "008"),
-    GeographyEntry("country:austria", "country", "Austria", 14.55, 47.52, "040"),
-    GeographyEntry("country:belgium", "country", "Belgium", 4.47, 50.50, "056"),
-    GeographyEntry("country:bosnia", "country", "Bosnia and Herzegovina", 17.68, 44.17, "070"),
-    GeographyEntry("country:bulgaria", "country", "Bulgaria", 25.23, 42.73, "100"),
-    GeographyEntry("country:croatia", "country", "Croatia", 16.45, 45.10, "191"),
-    GeographyEntry("country:czechia", "country", "Czechia", 15.47, 49.82, "203"),
-    GeographyEntry("country:denmark", "country", "Denmark", 9.50, 56.00, "208"),
-    GeographyEntry("country:egypt", "country", "Egypt", 30.80, 26.80, "818"),
-    GeographyEntry("country:finland", "country", "Finland", 26.00, 64.00, "246"),
-    GeographyEntry("country:france", "country", "France", 2.50, 46.50, "250"),
-    GeographyEntry("country:germany", "country", "Germany", 10.45, 51.16, "276"),
-    GeographyEntry("country:greece", "country", "Greece", 21.80, 39.10, "300"),
-    GeographyEntry("country:hungary", "country", "Hungary", 19.50, 47.00, "348"),
-    GeographyEntry("country:iceland", "country", "Iceland", -19.00, 65.00, "352"),
-    GeographyEntry("country:ireland", "country", "Ireland", -8.00, 53.40, "372"),
-    GeographyEntry("country:italy", "country", "Italy", 14.80, 41.20, "380"),
-    GeographyEntry("country:malta", "country", "Malta", 14.40, 35.90, "470"),
-    GeographyEntry("country:montenegro", "country", "Montenegro", 19.25, 42.70, "499"),
-    GeographyEntry("country:morocco", "country", "Morocco", -7.09, 31.79, "504"),
-    GeographyEntry("country:netherlands", "country", "Netherlands", 5.29, 52.13, "528"),
-    GeographyEntry("country:north-macedonia", "country", "North Macedonia", 21.75, 41.61, "807"),
-    GeographyEntry("country:norway", "country", "Norway", 8.50, 60.50, "578"),
-    GeographyEntry("country:poland", "country", "Poland", 19.40, 52.10, "616"),
-    GeographyEntry("country:portugal", "country", "Portugal", -8.22, 39.40, "620"),
-    GeographyEntry("country:romania", "country", "Romania", 24.97, 45.94, "642"),
-    GeographyEntry("country:serbia", "country", "Serbia", 20.80, 44.02, "688"),
-    GeographyEntry("country:slovenia", "country", "Slovenia", 14.82, 46.15, "705"),
-    GeographyEntry("country:spain", "country", "Spain", -3.70, 40.40, "724"),
-    GeographyEntry("country:sweden", "country", "Sweden", 15.00, 62.00, "752"),
-    GeographyEntry("country:switzerland", "country", "Switzerland", 8.23, 46.82, "756"),
-    GeographyEntry("country:turkey", "country", "Turkey", 32.86, 39.06, "792"),
-    GeographyEntry("country:united-kingdom", "country", "United Kingdom", -1.50, 52.50, "826"),
-    GeographyEntry("country:united-states", "country", "United States", -98.35, 39.50, "840"),
-    GeographyEntry("country:canada", "country", "Canada", -96.00, 51.00, "124"),
-    GeographyEntry("country:mexico", "country", "Mexico", -102.55, 23.63, "484"),
+    GeographyEntry("country:albania", "country", "Albania", 20.07, 41.14, "008", "Albania"),
+    GeographyEntry("country:austria", "country", "Austria", 14.55, 47.52, "040", "Austria"),
+    GeographyEntry("country:belgium", "country", "Belgium", 4.47, 50.50, "056", "Belgium"),
+    GeographyEntry("country:bosnia", "country", "Bosnia and Herzegovina", 17.78, 44.17, "070", "Bosnia and Herz."),
+    GeographyEntry("country:bulgaria", "country", "Bulgaria", 25.23, 42.73, "100", "Bulgaria"),
+    GeographyEntry("country:croatia", "country", "Croatia", 16.55, 45.55, "191", "Croatia"),
+    GeographyEntry("country:czechia", "country", "Czechia", 15.47, 49.82, "203", "Czechia"),
+    GeographyEntry("country:denmark", "country", "Denmark", 9.50, 56.00, "208", "Denmark"),
+    GeographyEntry("country:egypt", "country", "Egypt", 30.80, 26.80, "818", "Egypt"),
+    GeographyEntry("country:finland", "country", "Finland", 26.00, 64.00, "246", "Finland"),
+    GeographyEntry("country:france", "country", "France", 2.50, 46.50, "250", "France"),
+    GeographyEntry("country:germany", "country", "Germany", 10.45, 51.16, "276", "Germany"),
+    GeographyEntry("country:greece", "country", "Greece", 21.80, 39.10, "300", "Greece"),
+    GeographyEntry("country:hungary", "country", "Hungary", 19.50, 47.00, "348", "Hungary"),
+    GeographyEntry("country:iceland", "country", "Iceland", -19.00, 65.00, "352", "Iceland"),
+    GeographyEntry("country:ireland", "country", "Ireland", -8.00, 53.40, "372", "Ireland"),
+    GeographyEntry("country:italy", "country", "Italy", 14.90, 41.30, "380", "Italy"),
+    GeographyEntry("country:kosovo", "country", "Kosovo", 20.90, 42.56, "", "Kosovo"),
+    GeographyEntry("country:malta", "country", "Malta", 14.40, 35.90, "470", "Malta"),
+    GeographyEntry("country:montenegro", "country", "Montenegro", 19.30, 42.75, "499", "Montenegro"),
+    GeographyEntry("country:morocco", "country", "Morocco", -7.09, 31.79, "504", "Morocco"),
+    GeographyEntry("country:netherlands", "country", "Netherlands", 5.29, 52.13, "528", "Netherlands"),
+    GeographyEntry("country:north-macedonia", "country", "North Macedonia", 21.70, 41.60, "807", "Macedonia"),
+    GeographyEntry("country:norway", "country", "Norway", 8.50, 60.50, "578", "Norway"),
+    GeographyEntry("country:poland", "country", "Poland", 19.40, 52.10, "616", "Poland"),
+    GeographyEntry("country:portugal", "country", "Portugal", -8.22, 39.40, "620", "Portugal"),
+    GeographyEntry("country:romania", "country", "Romania", 24.97, 45.94, "642", "Romania"),
+    GeographyEntry("country:serbia", "country", "Serbia", 20.80, 44.15, "688", "Serbia"),
+    GeographyEntry("country:slovenia", "country", "Slovenia", 14.82, 46.12, "705", "Slovenia"),
+    GeographyEntry("country:spain", "country", "Spain", -3.70, 40.40, "724", "Spain"),
+    GeographyEntry("country:sweden", "country", "Sweden", 15.00, 62.00, "752", "Sweden"),
+    GeographyEntry("country:switzerland", "country", "Switzerland", 8.23, 46.82, "756", "Switzerland"),
+    GeographyEntry("country:turkey", "country", "Turkey", 32.86, 39.06, "792", "Turkey"),
+    GeographyEntry("country:united-kingdom", "country", "United Kingdom", -1.50, 52.50, "826", "United Kingdom"),
+    GeographyEntry("country:united-states", "country", "United States", -98.35, 39.50, "840", "United States of America"),
+    GeographyEntry("country:canada", "country", "Canada", -96.00, 51.00, "124", "Canada"),
+    GeographyEntry("country:mexico", "country", "Mexico", -102.55, 23.63, "484", "Mexico"),
 )
 
 _SEAS: tuple[GeographyEntry, ...] = (
@@ -209,6 +212,81 @@ _SEA_FALLBACKS: dict[str, dict[str, str]] = {
     },
 }
 
+_COUNTRY_FALLBACKS: dict[str, dict[str, str]] = {
+    "DE": {
+        "Kosovo": "Kosovo",
+        "North Macedonia": "Nordmazedonien",
+        "Bosnia and Herzegovina": "Bosnien-Herzegowina",
+        "Canada": "Kanada",
+        "Mexico": "Mexiko",
+        "Serbia": "Serbien",
+    },
+    "FR": {
+        "Kosovo": "Kosovo",
+        "North Macedonia": "Macédoine du Nord",
+        "Bosnia and Herzegovina": "Bosnie-Herzégovine",
+        "Canada": "Canada",
+        "Mexico": "Mexique",
+        "Serbia": "Serbie",
+    },
+    "IT": {
+        "Kosovo": "Kosovo",
+        "North Macedonia": "Macedonia del Nord",
+        "Bosnia and Herzegovina": "Bosnia ed Erzegovina",
+        "Canada": "Canada",
+        "Mexico": "Messico",
+        "Serbia": "Serbia",
+    },
+    "ES": {
+        "Kosovo": "Kosovo",
+        "North Macedonia": "Macedonia del Norte",
+        "Bosnia and Herzegovina": "Bosnia y Herzegovina",
+        "Canada": "Canadá",
+        "Mexico": "México",
+        "Serbia": "Serbia",
+    },
+    "PT": {
+        "Kosovo": "Kosovo",
+        "North Macedonia": "Macedónia do Norte",
+        "Bosnia and Herzegovina": "Bósnia e Herzegovina",
+        "Canada": "Canadá",
+        "Mexico": "México",
+        "Serbia": "Sérvia",
+    },
+    "NL": {
+        "Kosovo": "Kosovo",
+        "North Macedonia": "Noord-Macedonië",
+        "Bosnia and Herzegovina": "Bosnië en Herzegovina",
+        "Canada": "Canada",
+        "Mexico": "Mexico",
+        "Serbia": "Servië",
+    },
+    "PL": {
+        "Kosovo": "Kosowo",
+        "North Macedonia": "Macedonia Północna",
+        "Bosnia and Herzegovina": "Bośnia i Hercegowina",
+        "Canada": "Kanada",
+        "Mexico": "Meksyk",
+        "Serbia": "Serbia",
+    },
+    "JP": {
+        "Kosovo": "コソボ",
+        "North Macedonia": "北マケドニア",
+        "Bosnia and Herzegovina": "ボスニア・ヘルツェゴビナ",
+        "Canada": "カナダ",
+        "Mexico": "メキシコ",
+        "Serbia": "セルビア",
+    },
+    "KR": {
+        "Kosovo": "코소보",
+        "North Macedonia": "북마케도니아",
+        "Bosnia and Herzegovina": "보스니아 헤르체고비나",
+        "Canada": "캐나다",
+        "Mexico": "멕시코",
+        "Serbia": "세르비아",
+    },
+}
+
 
 def point_in_view_bounds(
     longitude: float,
@@ -303,6 +381,19 @@ def sea_fallback_label(english: str, language: str) -> str:
     if lang == "EN":
         return name
     return _SEA_FALLBACKS.get("DE", {}).get(name) or name
+
+
+def country_fallback_label(english: str, language: str) -> str:
+    from otio_app.project_layout import language_folder_name
+
+    lang = language_folder_name(language)
+    name = str(english or "").strip()
+    mapped = _COUNTRY_FALLBACKS.get(lang, {}).get(name)
+    if mapped:
+        return mapped
+    if lang == "EN":
+        return name
+    return _COUNTRY_FALLBACKS.get("DE", {}).get(name) or ""
 
 
 def geography_label_is_plausible(localized: str) -> bool:
