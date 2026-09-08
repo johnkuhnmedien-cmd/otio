@@ -207,26 +207,43 @@ function visibleCountryFit(
   feature: CountryFeature | null,
   viewBounds: [[number, number], [number, number]],
   projection: (point: [number, number]) => [number, number] | null,
+  label: string,
 ): { maxWidth: number; fontSize: number } {
-  if (!feature) {
-    return { maxWidth: 168, fontSize: 15 };
+  const text = String(label || "").trim();
+  let countryWidth = 160;
+  let countryHeight = 110;
+  if (feature) {
+    const bounds = geoBounds(feature as never);
+    const minLon = Math.max(viewBounds[0][0], bounds[0][0]);
+    const minLat = Math.max(viewBounds[0][1], bounds[0][1]);
+    const maxLon = Math.min(viewBounds[1][0], bounds[1][0]);
+    const maxLat = Math.min(viewBounds[1][1], bounds[1][1]);
+    const west = projection([minLon, (minLat + maxLat) / 2]);
+    const east = projection([maxLon, (minLat + maxLat) / 2]);
+    const south = projection([(minLon + maxLon) / 2, minLat]);
+    const north = projection([(minLon + maxLon) / 2, maxLat]);
+    if (west && east) {
+      countryWidth = Math.hypot(east[0] - west[0], east[1] - west[1]);
+    }
+    if (south && north) {
+      countryHeight = Math.hypot(north[0] - south[0], north[1] - south[1]);
+    }
   }
-  const bounds = geoBounds(feature as never);
-  const minLon = Math.max(viewBounds[0][0], bounds[0][0]);
-  const minLat = Math.max(viewBounds[0][1], bounds[0][1]);
-  const maxLon = Math.min(viewBounds[1][0], bounds[1][0]);
-  const maxLat = Math.min(viewBounds[1][1], bounds[1][1]);
-  const west = projection([minLon, (minLat + maxLat) / 2]);
-  const east = projection([maxLon, (minLat + maxLat) / 2]);
-  const south = projection([(minLon + maxLon) / 2, minLat]);
-  const north = projection([(minLon + maxLon) / 2, maxLat]);
-  const width =
-    west && east ? Math.hypot(east[0] - west[0], east[1] - west[1]) : 140;
-  const height =
-    south && north ? Math.hypot(north[0] - south[0], north[1] - south[1]) : 90;
-  const maxWidth = Math.max(72, Math.min(176, width * 0.56));
-  const fontSize = Math.max(11, Math.min(16, Math.min(width, height) * 0.08));
-  return { maxWidth, fontSize };
+  const budget = Math.max(
+    72,
+    Math.min(countryWidth * 0.82, countryHeight * 1.8, 240),
+  );
+  const padX = 18;
+  const widthFor = (size: number) =>
+    Math.max(1, text.length) * size * 0.64 * 1.045 + padX;
+  let fontSize = 15;
+  while (fontSize > 11 && widthFor(fontSize) > budget) {
+    fontSize -= 0.5;
+  }
+  return {
+    maxWidth: Math.min(240, Math.max(widthFor(fontSize) + 4, 68)),
+    fontSize,
+  };
 }
 
 function transportIcon(mode: MapTransitionProps["transportMode"]) {
@@ -293,8 +310,16 @@ export const VintageMapTransition: React.FC<MapTransitionProps> = (props) => {
       if (!projected) return [];
       const fit =
         item.kind === "country"
-          ? visibleCountryFit(feature, viewBounds, projection)
-          : { maxWidth: 200, fontSize: 17 };
+          ? visibleCountryFit(
+              feature,
+              viewBounds,
+              (point) => projection(point),
+              item.label,
+            )
+          : {
+              maxWidth: Math.min(220, Math.max(36, item.label.length * 11)),
+              fontSize: 16,
+            };
       return [{ ...item, x: projected[0], y: projected[1], ...fit }];
     });
     return {
@@ -532,37 +557,36 @@ export const VintageMapTransition: React.FC<MapTransitionProps> = (props) => {
           style={{
             background:
               item.kind === "sea"
-                ? "linear-gradient(180deg, rgba(236,241,238,0.93), rgba(220,228,226,0.9))"
-                : "linear-gradient(180deg, rgba(255,249,232,0.97), rgba(243,227,188,0.95))",
+                ? "linear-gradient(180deg, rgba(238,243,241,0.95), rgba(222,230,228,0.93))"
+                : "linear-gradient(180deg, rgba(255,250,234,0.98), rgba(244,227,186,0.96))",
             border:
               item.kind === "sea"
-                ? "1px solid rgba(70, 88, 102, 0.42)"
-                : "1px solid rgba(74, 56, 38, 0.58)",
+                ? "1.5px solid rgba(58, 74, 88, 0.5)"
+                : "1.5px solid rgba(62, 46, 30, 0.62)",
             borderRadius: 3,
             boxShadow:
               item.kind === "sea"
-                ? "inset 0 0 0 1px rgba(255,255,255,0.28), 0 2px 8px rgba(35, 48, 58, 0.14)"
-                : "inset 0 0 0 1px rgba(255,252,240,0.62), 0 2px 8px rgba(45, 34, 20, 0.18)",
+                ? "inset 0 0 0 1px rgba(255,255,255,0.32), 0 2px 7px rgba(35, 48, 58, 0.16)"
+                : "inset 0 0 0 1px rgba(255,252,240,0.7), 0 2px 8px rgba(45, 34, 20, 0.2)",
             boxSizing: "border-box",
-            color: item.kind === "sea" ? "#3a4a58" : "#3a3228",
+            color: item.kind === "sea" ? "#334452" : "#32281f",
             fontFamily: "Georgia, 'Times New Roman', serif",
             fontSize: item.fontSize,
             fontStyle: item.kind === "sea" ? "italic" : "normal",
             fontWeight: item.kind === "sea" ? 600 : 700,
             left: item.point.x,
-            letterSpacing: item.kind === "sea" ? "0.03em" : "0.045em",
-            lineHeight: 1.15,
+            letterSpacing: item.kind === "sea" ? "0.03em" : "0.04em",
+            lineHeight: 1,
             maxWidth: item.maxWidth,
-            opacity: 0.97,
-            overflowWrap: "break-word",
-            padding: item.kind === "sea" ? "5px 10px" : "4px 8px",
+            opacity: 0.98,
+            padding: item.kind === "sea" ? "5px 10px" : "5px 9px",
             pointerEvents: "none",
             position: "absolute",
             textAlign: "center",
             textTransform: item.kind === "sea" ? "none" : "uppercase",
             top: item.point.y,
             transform: "translate(-50%, -50%)",
-            whiteSpace: "normal",
+            whiteSpace: "nowrap",
           }}
         >
           {item.label}

@@ -121,6 +121,7 @@ def test_kosovo_is_named_but_never_used_as_fill() -> None:
     assert country_fallback_label("Kosovo", "de") == "Kosovo"
     assert country_fallback_label("Kosovo", "pl") == "Kosowo"
     assert country_fallback_label("North Macedonia", "de") == "Nordmazedonien"
+    assert country_fallback_label("Serbia", "de") == "Serbien"
 
 
 def test_geography_label_rejects_sentences() -> None:
@@ -150,6 +151,8 @@ def test_payload_labels_neighbors_without_destination(tmp_path: Path) -> None:
     kosovo = next(item for item in payload["geographyLabels"] if item["id"] == "country:kosovo")
     assert kosovo["atlasName"] == "Kosovo"
     assert kosovo["numericId"] == ""
+    serbia = next(item for item in payload["geographyLabels"] if item["id"] == "country:serbia")
+    assert serbia["label"] == "Serbien"
 
 
 def test_llm_geography_prompt_asks_for_short_map_names() -> None:
@@ -220,6 +223,6 @@ def test_renderer_draws_geography_labels() -> None:
     assert "visibleCountryFit" in src
     assert "atlasFeatureForLabel" in src
     assert "geoBounds" in src
-    assert "whiteSpace: \"normal\"" in src
+    assert "whiteSpace: \"nowrap\"" in src
     assert "borderRadius: 3" in src
     assert "translate(-50%, -50%)" in src

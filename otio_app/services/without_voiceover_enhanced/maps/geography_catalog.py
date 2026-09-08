@@ -219,6 +219,7 @@ _COUNTRY_FALLBACKS: dict[str, dict[str, str]] = {
         "Bosnia and Herzegovina": "Bosnien-Herzegowina",
         "Canada": "Kanada",
         "Mexico": "Mexiko",
+        "Serbia": "Serbien",
     },
     "FR": {
         "Kosovo": "Kosovo",
@@ -226,6 +227,7 @@ _COUNTRY_FALLBACKS: dict[str, dict[str, str]] = {
         "Bosnia and Herzegovina": "Bosnie-Herzégovine",
         "Canada": "Canada",
         "Mexico": "Mexique",
+        "Serbia": "Serbie",
     },
     "IT": {
         "Kosovo": "Kosovo",
@@ -233,6 +235,7 @@ _COUNTRY_FALLBACKS: dict[str, dict[str, str]] = {
         "Bosnia and Herzegovina": "Bosnia ed Erzegovina",
         "Canada": "Canada",
         "Mexico": "Messico",
+        "Serbia": "Serbia",
     },
     "ES": {
         "Kosovo": "Kosovo",
@@ -240,6 +243,7 @@ _COUNTRY_FALLBACKS: dict[str, dict[str, str]] = {
         "Bosnia and Herzegovina": "Bosnia y Herzegovina",
         "Canada": "Canadá",
         "Mexico": "México",
+        "Serbia": "Serbia",
     },
     "PT": {
         "Kosovo": "Kosovo",
@@ -247,6 +251,7 @@ _COUNTRY_FALLBACKS: dict[str, dict[str, str]] = {
         "Bosnia and Herzegovina": "Bósnia e Herzegovina",
         "Canada": "Canadá",
         "Mexico": "México",
+        "Serbia": "Sérvia",
     },
     "NL": {
         "Kosovo": "Kosovo",
@@ -254,6 +259,7 @@ _COUNTRY_FALLBACKS: dict[str, dict[str, str]] = {
         "Bosnia and Herzegovina": "Bosnië en Herzegovina",
         "Canada": "Canada",
         "Mexico": "Mexico",
+        "Serbia": "Servië",
     },
     "PL": {
         "Kosovo": "Kosowo",
@@ -261,6 +267,7 @@ _COUNTRY_FALLBACKS: dict[str, dict[str, str]] = {
         "Bosnia and Herzegovina": "Bośnia i Hercegowina",
         "Canada": "Kanada",
         "Mexico": "Meksyk",
+        "Serbia": "Serbia",
     },
     "JP": {
         "Kosovo": "コソボ",
@@ -268,6 +275,7 @@ _COUNTRY_FALLBACKS: dict[str, dict[str, str]] = {
         "Bosnia and Herzegovina": "ボスニア・ヘルツェゴビナ",
         "Canada": "カナダ",
         "Mexico": "メキシコ",
+        "Serbia": "セルビア",
     },
     "KR": {
         "Kosovo": "코소보",
@@ -275,6 +283,7 @@ _COUNTRY_FALLBACKS: dict[str, dict[str, str]] = {
         "Bosnia and Herzegovina": "보스니아 헤르체고비나",
         "Canada": "캐나다",
         "Mexico": "멕시코",
+        "Serbia": "세르비아",
     },
 }
 
