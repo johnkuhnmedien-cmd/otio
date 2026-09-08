@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 MAP_STYLE_VERSION = "map_style_v1"
-ENGINE_STYLE_VERSION = "otio-vintage-map-v13"
+ENGINE_STYLE_VERSION = "otio-vintage-map-v14"
 MAP_DURATION_SEC = 9.0
 MAP_FPS = 25
 MAP_DURATION_FRAMES = 225
@@ -105,6 +105,14 @@ class MapCoordinatesDocument(BaseModel):
     places: dict[str, MapCoordinateRecord] = Field(default_factory=dict)
 
 
+class MapGeographyLabel(BaseModel):
+    kind: Literal["country", "sea"]
+    id: str
+    label: str
+    longitude: float
+    latitude: float
+
+
 class MapPlanItem(BaseModel):
     map_sequence_id: str
     project_id: str
@@ -141,6 +149,7 @@ class MapPlanItem(BaseModel):
     progress: float = 0.0
     error_detail: str = ""
     media_hash: str = ""
+    geography_labels: list[MapGeographyLabel] = Field(default_factory=list)
 
     @property
     def content_hash(self) -> str:

@@ -922,6 +922,59 @@ def view_bounds(
     ]
 
 
+def _geography_labels_payload(item: MapPlanItem) -> list[dict]:
+    if item.geography_labels:
+        return [
+            {
+                "kind": label.kind,
+                "id": _clip_label(label.id, 80),
+                "label": _clip_label(label.label, 40),
+                "longitude": float(label.longitude),
+                "latitude": float(label.latitude),
+            }
+            for label in item.geography_labels
+        ]
+    from otio_app.services.without_voiceover_enhanced.maps.geography_catalog import (
+        geography_label_is_plausible,
+        sea_fallback_label,
+        visible_geography,
+    )
+
+    numeric_id = country_numeric_id(item.country).zfill(3)[:3]
+    bounds = view_bounds(
+        numeric_id,
+        float(item.start_longitude or 0.0),
+        float(item.start_latitude or 0.0),
+        float(item.end_longitude or 0.0),
+        float(item.end_latitude or 0.0),
+    )
+    entries = visible_geography(
+        bounds,
+        exclude_numeric=numeric_id,
+        pin_longitude=float(item.end_longitude or 0.0),
+        pin_latitude=float(item.end_latitude or 0.0),
+    )
+    payload: list[dict] = []
+    for entry in entries:
+        text = (
+            sea_fallback_label(entry.english, item.language)
+            if entry.kind == "sea"
+            else country_label(entry.english, item.language)
+        )
+        if not geography_label_is_plausible(text):
+            continue
+        payload.append(
+            {
+                "kind": entry.kind,
+                "id": _clip_label(entry.id, 80),
+                "label": _clip_label(text, 40),
+                "longitude": entry.longitude,
+                "latitude": entry.latitude,
+            }
+        )
+    return payload
+
+
 def remotion_payload(item: MapPlanItem) -> dict:
     if item.start_latitude is None or item.start_longitude is None:
         raise ValueError(f"Startkoordinaten fehlen für {item.chapter_id}")
@@ -990,4 +1043,5 @@ def remotion_payload(item: MapPlanItem) -> dict:
             float(item.end_longitude),
             float(item.end_latitude),
         ),
+        "geographyLabels": _geography_labels_payload(item),
     }

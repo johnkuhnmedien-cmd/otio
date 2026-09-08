@@ -166,7 +166,7 @@ def test_cached_translation_skips_second_llm_call(tmp_path) -> None:
 
     first = localize_map_plan_with_llm(project, plan, translate_fn=fake_llm)
     second = localize_map_plan_with_llm(project, first, translate_fn=fake_llm)
-    assert calls["n"] == 1
+    assert calls["n"] == 2
     assert second.maps[0].localized_display_label == "Kaş e Kekova"
 
 

@@ -178,7 +178,7 @@ def render_enhanced_maps_page() -> None:
                 coordinates=coordinates,
                 previous=saved_plan,
             )
-            with st.spinner("Kartennamen in die Videosprache übersetzen…"):
+            with st.spinner("Kartennamen und Nachbarländer in die Videosprache übersetzen…"):
                 from otio_app.services.without_voiceover_enhanced.maps.label_translate_service import (
                     localize_map_plan_with_llm,
                 )
