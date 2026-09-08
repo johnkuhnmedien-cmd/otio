@@ -154,6 +154,9 @@ def compute_plan_hash(item: MapPlanItem) -> str:
         "style_version": item.style_version,
         "engine_style_version": ENGINE_STYLE_VERSION,
         "output_filename": item.output_filename,
+        "geography_labels": [
+            label.model_dump() for label in list(item.geography_labels or [])
+        ],
     }
     blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()

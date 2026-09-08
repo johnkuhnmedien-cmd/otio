@@ -31,11 +31,23 @@ export const MapTransitionSchema = z.object({
   outputWidth: z.union([z.literal(1920), z.literal(3840)]),
   outputHeight: z.union([z.literal(1080), z.literal(2160)]),
   seed: z.string().min(1).max(200),
-  styleVersion: z.literal("otio-vintage-map-v13"),
+  styleVersion: z.literal("otio-vintage-map-v14"),
   viewBounds: z.tuple([
     z.tuple([z.number(), z.number()]),
     z.tuple([z.number(), z.number()]),
   ]),
+  geographyLabels: z
+    .array(
+      z.object({
+        kind: z.enum(["country", "sea"]),
+        id: z.string().min(1).max(80),
+        label: z.string().min(1).max(40),
+        longitude: z.number().min(-180).max(180),
+        latitude: z.number().min(-85).max(85),
+      }),
+    )
+    .max(12)
+    .default([]),
 });
 
 export type MapTransitionProps = z.infer<typeof MapTransitionSchema>;
@@ -70,9 +82,10 @@ export const defaultMapTransition: MapTransitionProps = {
   outputWidth: 3840,
   outputHeight: 2160,
   seed: "monument-valley-grand-canyon-v1",
-  styleVersion: "otio-vintage-map-v13",
+  styleVersion: "otio-vintage-map-v14",
   viewBounds: [
     [-125, 24],
     [-66, 50],
   ],
+  geographyLabels: [],
 };

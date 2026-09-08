@@ -17,12 +17,15 @@ from otio_app.services.without_voiceover_enhanced.io_utils import write_json
 from otio_app.services.without_voiceover_enhanced.maps.models import (
     RENDER_STATUS_DONE,
     RENDER_STATUS_IDLE,
+    MapGeographyLabel,
     MapPlanDocument,
 )
 from otio_app.services.without_voiceover_enhanced.maps.remotion_payload import (
     country_label,
+    country_numeric_id,
     localize_map_place_label,
     overlay_label_is_plausible,
+    view_bounds,
 )
 from otio_app.services.without_voiceover_enhanced.paths import map_overlay_labels_path
 
@@ -256,10 +259,10 @@ def localize_map_plan_with_llm(
 ) -> MapPlanDocument:
     """Übersetzt sichtbare Kartennamen; Cache + Fallback ohne Netz."""
     rows = _chapter_rows(plan)
-    if not rows:
-        return plan
     language = plan.language or normalize_brief_language(project.language)
     country = plan.country or (project.video_place or "")
+    if not rows:
+        return apply_geography_labels(project, plan, translate_fn=translate_fn)
     cache = load_overlay_label_cache(project)
     labels: dict[str, str] = {}
     missing_rows: list[dict[str, str]] = []
@@ -292,4 +295,204 @@ def localize_map_plan_with_llm(
                 labels[chapter_id] = fallback_overlay_label(original, language)
         save_overlay_label_cache(project, cache)
 
-    return apply_overlay_labels(plan, labels)
+    plan = apply_overlay_labels(plan, labels)
+    return apply_geography_labels(project, plan, translate_fn=translate_fn)
+
+
+def _geo_cache_key(language: str, english: str) -> str:
+    return f"{normalize_brief_language(language)}|geo:{english.strip()}"
+
+
+def _fallback_geography_label(english: str, language: str, *, kind: str) -> str:
+    from otio_app.services.without_voiceover_enhanced.maps.geography_catalog import (
+        sea_fallback_label,
+    )
+
+    if kind == "sea":
+        return sea_fallback_label(english, language)
+    return country_label(english, language)
+
+
+def build_map_geography_translate_prompt(
+    *,
+    language: str,
+    country: str,
+    rows: list[dict[str, str]],
+) -> str:
+    lang_name = _language_display_name(language)
+    country_en = country_label(country, "EN") if country else ""
+    region = country_en or country or "unknown"
+    listed = [
+        f"{index}. [{row.get('kind') or 'country'}] {row['name']}"
+        for index, row in enumerate(rows, start=1)
+        if row.get("name")
+    ]
+    return (
+        "Translate geography labels for a vintage travel map.\n"
+        f"Target language: {lang_name} ({normalize_brief_language(language)})\n"
+        f"The video is about: {region}\n"
+        "Do NOT output a label for that destination country — it is already in the heading.\n"
+        "These names sit in the middle of neighboring countries or on water.\n"
+        + ("\n".join(listed) if listed else "(none)")
+        + "\n"
+        "Rules:\n"
+        "- Official short map name in the target language (Croatia → Kroatien in German).\n"
+        "- Seas/oceans: the natural water name (Adriatic Sea → Adriatisches Meer).\n"
+        "- Never OSM/Wikipedia titles, never sentences, never extra slogans.\n"
+        "- Few words, no quotes, no trailing period.\n"
+        "Return JSON only: "
+        '{"places":[{"id":"id from input","label":"translated name"}]}.\n'
+        f"{json.dumps({'places': rows}, ensure_ascii=False)}\n"
+    )
+
+
+def translate_map_geography_labels_with_llm(
+    project: Project,
+    rows: list[dict[str, str]],
+    *,
+    language: str,
+    country: str,
+    translate_fn: TranslateFn | None = None,
+) -> dict[str, str]:
+    if not rows:
+        return {}
+    prompt = build_map_geography_translate_prompt(
+        language=language, country=country, rows=rows
+    )
+    try:
+        if translate_fn is not None:
+            raw = translate_fn(prompt)
+        else:
+            from otio_app.services.gemini_client import _extract_json
+            from otio_app.services.plan_llm_client import generate_plan_text
+            from otio_app.services.voiceover_generation.model_settings_service import (
+                load_model_settings,
+                resolve_llm_model_id,
+            )
+
+            settings = load_model_settings(project)
+            role = settings.project_brief
+            model = resolve_llm_model_id(role.provider, role.model)
+            raw = generate_plan_text(
+                prompt=prompt,
+                model=model,
+                max_output_tokens=1200,
+                disable_thinking=True,
+            )
+            payload = _extract_json(raw)
+            return _parse_translated_places(payload)
+        from otio_app.services.gemini_client import _extract_json
+
+        payload = _extract_json(raw) if isinstance(raw, str) else raw
+        if isinstance(payload, str):
+            payload = _extract_json(payload)
+        return _parse_translated_places(payload)
+    except Exception:
+        return {}
+
+
+def _geography_entries_for_item(item) -> list:
+    from otio_app.services.without_voiceover_enhanced.maps.geography_catalog import (
+        visible_geography,
+    )
+
+    if item.start_latitude is None or item.start_longitude is None:
+        return []
+    if item.end_latitude is None or item.end_longitude is None:
+        return []
+    numeric = country_numeric_id(item.country).zfill(3)[:3]
+    bounds = view_bounds(
+        numeric,
+        float(item.start_longitude),
+        float(item.start_latitude),
+        float(item.end_longitude),
+        float(item.end_latitude),
+    )
+    return visible_geography(
+        bounds,
+        exclude_numeric=numeric,
+        pin_longitude=float(item.end_longitude),
+        pin_latitude=float(item.end_latitude),
+    )
+
+
+def apply_geography_labels(
+    project: Project,
+    plan: MapPlanDocument,
+    *,
+    translate_fn: TranslateFn | None = None,
+) -> MapPlanDocument:
+    """Nachbarländer und Meere per LLM beschriften; Cache + Tabellen-Fallback."""
+    from otio_app.services.without_voiceover_enhanced.maps.geography_catalog import (
+        geography_label_is_plausible,
+    )
+    from otio_app.services.without_voiceover_enhanced.maps.plan_service import (
+        compute_plan_hash,
+    )
+
+    language = plan.language or normalize_brief_language(project.language)
+    country = plan.country or (project.video_place or "")
+    cache = load_overlay_label_cache(project)
+    needed: dict[str, dict[str, str]] = {}
+    per_item: list[list] = []
+    for item in plan.maps:
+        entries = _geography_entries_for_item(item)
+        per_item.append(entries)
+        for entry in entries:
+            needed[entry.id] = {"id": entry.id, "name": entry.english, "kind": entry.kind}
+
+    missing_rows = []
+    labels: dict[str, str] = {}
+    for geo_id, row in needed.items():
+        cached = cache.get(_geo_cache_key(language, row["name"]), "")
+        if cached and geography_label_is_plausible(cached):
+            labels[geo_id] = cached
+        else:
+            missing_rows.append(row)
+
+    if missing_rows:
+        translated = translate_map_geography_labels_with_llm(
+            project,
+            missing_rows,
+            language=language,
+            country=country,
+            translate_fn=translate_fn,
+        )
+        for row in missing_rows:
+            geo_id = row["id"]
+            english = row["name"]
+            candidate = translated.get(geo_id) or translated.get(english) or ""
+            if candidate and geography_label_is_plausible(candidate):
+                labels[geo_id] = candidate
+                cache[_geo_cache_key(language, english)] = candidate
+            else:
+                labels[geo_id] = _fallback_geography_label(
+                    english, language, kind=row["kind"]
+                )
+                cache[_geo_cache_key(language, english)] = labels[geo_id]
+        save_overlay_label_cache(project, cache)
+
+    for item, entries in zip(plan.maps, per_item):
+        new_labels = [
+            MapGeographyLabel(
+                kind="sea" if entry.kind == "sea" else "country",
+                id=entry.id,
+                label=labels.get(entry.id)
+                or _fallback_geography_label(entry.english, language, kind=entry.kind),
+                longitude=entry.longitude,
+                latitude=entry.latitude,
+            )
+            for entry in entries
+        ]
+        changed = [label.model_dump() for label in new_labels] != [
+            label.model_dump() for label in list(item.geography_labels or [])
+        ]
+        item.geography_labels = new_labels
+        item.plan_hash = compute_plan_hash(item)
+        if changed and item.render_status == RENDER_STATUS_DONE:
+            item.render_status = RENDER_STATUS_IDLE
+            item.output_path = ""
+            item.media_hash = ""
+            item.progress = 0.0
+            item.error_detail = ""
+    return plan

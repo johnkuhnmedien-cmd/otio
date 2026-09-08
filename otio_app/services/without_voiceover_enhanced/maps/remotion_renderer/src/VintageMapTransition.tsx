@@ -138,14 +138,20 @@ export const VintageMapTransition: React.FC<MapTransitionProps> = (props) => {
     }
     const from = { x: fromProjected[0], y: fromProjected[1] };
     const to = { x: toProjected[0], y: toProjected[1] };
+    const geography = (props.geographyLabels ?? []).flatMap((item) => {
+      const projected = projection([item.longitude, item.latitude]);
+      if (!projected) return [];
+      return [{ ...item, x: projected[0], y: projected[1] }];
+    });
     return {
       path,
       from,
       to,
       control: controlPoint(from, to, 0.22),
       selected: selectedFeatures(props.countryNumericId),
+      geography,
     };
-  }, [props.countryNumericId, props.from, props.to, props.viewBounds]);
+  }, [props.countryNumericId, props.from, props.geographyLabels, props.to, props.viewBounds]);
 
   const camera = cameraState({
     animationMode: props.animationMode,
@@ -189,6 +195,23 @@ export const VintageMapTransition: React.FC<MapTransitionProps> = (props) => {
 
   const cameraTransform = `translate(${CENTER.x} ${CENTER.y}) scale(${camera.scale}) translate(${-camera.focus.x} ${-camera.focus.y})`;
   const labels = [{ location: props.to, point: toScreen }];
+  const geographyOnScreen = geometry.geography
+    .map((item) => ({
+      ...item,
+      point: cameraPoint({ x: item.x, y: item.y }, camera, CENTER),
+    }))
+    .filter(
+      (item) =>
+        item.point.x > 90 &&
+        item.point.x < WIDTH - 90 &&
+        item.point.y > 120 &&
+        item.point.y < HEIGHT - 130,
+    )
+    .filter((item) => {
+      const deltaX = item.point.x - toScreen.x;
+      const deltaY = item.point.y - toScreen.y;
+      return deltaX * deltaX + deltaY * deltaY > 120 * 120;
+    });
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000", overflow: "hidden" }}>
@@ -346,6 +369,35 @@ export const VintageMapTransition: React.FC<MapTransitionProps> = (props) => {
           }}
         >
           {location.label}
+        </div>
+      ))}
+
+      {geographyOnScreen.map((item) => (
+        <div
+          key={item.id}
+          style={{
+            color: item.kind === "sea" ? "#3d4c5c" : "#3a3228",
+            fontFamily:
+              item.kind === "sea"
+                ? "Georgia, 'Times New Roman', serif"
+                : "Arial, sans-serif",
+            fontSize: item.kind === "sea" ? 22 : 20,
+            fontStyle: item.kind === "sea" ? "italic" : "normal",
+            fontWeight: item.kind === "sea" ? 600 : 750,
+            left: item.point.x,
+            letterSpacing: item.kind === "sea" ? "0.06em" : "0.14em",
+            opacity: 0.84,
+            pointerEvents: "none",
+            position: "absolute",
+            textShadow:
+              "0 1px 0 rgba(247,237,207,.9), 0 0 12px rgba(216,199,164,.7)",
+            textTransform: item.kind === "sea" ? "none" : "uppercase",
+            top: item.point.y,
+            transform: "translate(-50%, -50%)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {item.label}
         </div>
       ))}
 
