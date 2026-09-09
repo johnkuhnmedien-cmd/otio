@@ -91,6 +91,10 @@ def test_overlay_label_rejects_payment_socket_garbage() -> None:
     assert remotion_plausible(original, garbage) is False
     assert overlay_label_is_plausible("Bohinjer See", "Lago di Bohinj") is True
     assert overlay_label_is_plausible("Vintgar-Klamm", "Gola di Vintgar") is True
+    assert overlay_label_is_plausible("Plava Špilja", "Plava Špilja") is True
+    assert overlay_label_is_plausible("Plava Špilja", "Plava Špilja → Bobotov Kuk") is False
+    assert overlay_label_is_plausible("Crno Jezero", "Crno Jezero → Durmitor-Nationalpark") is False
+    assert overlay_label_is_plausible("Plava Špilja", "Plava Špilja -> Bobotov Kuk") is False
 
 
 def test_plan_ignores_osm_display_for_non_landmark_names(tmp_path) -> None:
@@ -135,6 +139,50 @@ def test_llm_translates_folder_names_with_neighbor_context(tmp_path) -> None:
     payload = remotion_payload(localized.maps[1])
     assert payload["from"]["label"] == "Cappadocia e Göreme"
     assert payload["to"]["label"] == "Kaş e Kekova"
+
+
+def test_llm_route_label_falls_back_to_single_place(tmp_path) -> None:
+    folders = ["Plava Špilja", "Bobotov Kuk"]
+    project = _project(tmp_path, folders, language="de")
+    _confirm(project, folders, language="DE")
+    plan = build_map_plan(project, coordinates=_coords(project, folders))
+    plan.maps[0].localized_display_label = "Plava Špilja → Bobotov Kuk"
+    plan.maps[1].from_localized_display_label = "Plava Špilja → Bobotov Kuk"
+
+    def fake_llm(_prompt: str) -> str:
+        return (
+            '{"places":['
+            '{"id":"Plava Špilja","label":"Plava Špilja → Bobotov Kuk"},'
+            '{"id":"Bobotov Kuk","label":"Bobotov Kuk"}'
+            "]}"
+        )
+
+    localized = localize_map_plan_with_llm(project, plan, translate_fn=fake_llm)
+    assert localized.maps[0].localized_display_label == "Plava Špilja"
+    assert localized.maps[1].localized_display_label == "Bobotov Kuk"
+    assert localized.maps[1].from_localized_display_label == "Plava Špilja"
+    opening = remotion_payload(localized.maps[0])
+    transition = remotion_payload(localized.maps[1])
+    assert opening["animationMode"] == "intro"
+    assert opening["to"]["label"] == "Plava Špilja"
+    assert "→" not in opening["to"]["label"]
+    assert transition["from"]["label"] == "Plava Špilja"
+    assert transition["to"]["label"] == "Bobotov Kuk"
+
+
+def test_payload_strips_stored_route_even_without_llm(tmp_path) -> None:
+    folders = ["Plava Špilja", "Bobotov Kuk"]
+    project = _project(tmp_path, folders, language="de")
+    _confirm(project, folders, language="DE")
+    plan = build_map_plan(project, coordinates=_coords(project, folders))
+    plan.maps[0].localized_display_label = "Plava Špilja → Bobotov Kuk"
+    plan.maps[1].from_localized_display_label = "Plava Špilja → Bobotov Kuk"
+    plan.maps[1].localized_display_label = "Bobotov Kuk"
+    opening = remotion_payload(plan.maps[0])
+    transition = remotion_payload(plan.maps[1])
+    assert opening["to"]["label"] == "Plava Špilja"
+    assert transition["from"]["label"] == "Plava Špilja"
+    assert transition["to"]["label"] == "Bobotov Kuk"
 
 
 def test_llm_garbage_falls_back_to_folder_name(tmp_path) -> None:
@@ -198,3 +246,5 @@ def test_translate_prompt_lists_chapter_order() -> None:
     assert "1. Kaş & Kekova" in prompt
     assert "previous" in prompt
     assert "Never a sentence" in prompt
+    assert "Never join two chapters" in prompt
+    assert "ONE place" in prompt

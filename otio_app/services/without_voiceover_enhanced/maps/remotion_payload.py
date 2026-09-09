@@ -772,6 +772,15 @@ def _clip_label(value: str, limit: int) -> str:
     return text[:limit]
 
 
+def _safe_overlay_label(original: str, stored: str, language: str | None) -> str:
+    """Einzelner Ortsname; fertige Routen-Texte nicht auf die Karte übernehmen."""
+    text = " ".join(str(stored or "").split())
+    source = " ".join(str(original or "").replace("_", " ").split())
+    if text and overlay_label_is_plausible(source, text):
+        return _clip_label(text, 100)
+    return _clip_label(map_overlay_place_label(source, source, language), 100)
+
+
 _OVERLAY_TOKEN_RE = re.compile(
     r"[0-9A-Za-zÀ-ÖØ-öø-ÿĀ-žΑ-ωА-я一-龯가-힣]+",
     re.UNICODE,
@@ -808,14 +817,25 @@ def overlay_place_tokens(text: str) -> set[str]:
     } - _OVERLAY_STOPWORDS
 
 
+def overlay_label_looks_like_route(label: str) -> bool:
+    """True wenn der Text schon eine FROM→TO-Route ist, kein einzelner Ort."""
+    text = str(label or "")
+    if "→" in text or "←" in text or "⇒" in text:
+        return True
+    return "->" in text or "<-" in text
+
+
 def overlay_label_is_plausible(original: str, localized: str) -> bool:
     """True wenn der Kartentext noch wie ein Ortsname zum Ordner wirkt.
 
     Sätze, OSM-Müll und LLM-Halluzinationen (Zahlung, Socket, …) fallen raus.
+    Eine fertige Route (Ort → Ort) auch: die zeichnet der Renderer selbst.
     """
     source = " ".join(str(original or "").replace("_", " ").split())
     label = " ".join(str(localized or "").replace("_", " ").split())
     if not label or not source:
+        return False
+    if overlay_label_looks_like_route(label):
         return False
     if len(label) > 80 or len(label.split()) > 10:
         return False
@@ -1016,17 +1036,15 @@ def remotion_payload(item: MapPlanItem) -> dict:
         from_original = item.from_original_chapter_label or item.original_chapter_label
     stored_from = " ".join(str(from_raw or "").split())
     stored_to = " ".join(str(item.localized_display_label or "").split())
-    from_label = _clip_label(
-        stored_from
-        or map_overlay_place_label(from_original, from_raw, item.language),
-        100,
+    from_label = _safe_overlay_label(
+        from_original or item.original_chapter_label,
+        stored_from,
+        item.language,
     )
-    to_label = _clip_label(
-        stored_to
-        or map_overlay_place_label(
-            item.original_chapter_label, item.localized_display_label, item.language
-        ),
-        100,
+    to_label = _safe_overlay_label(
+        item.original_chapter_label,
+        stored_to,
+        item.language,
     )
     numeric_id = country_numeric_id(item.country).zfill(3)[:3]
     resolution = "4k" if item.resolution == MAP_RESOLUTION_4K else "hd"
