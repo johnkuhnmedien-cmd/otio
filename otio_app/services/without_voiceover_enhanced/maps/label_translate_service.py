@@ -96,7 +96,8 @@ def build_map_label_translate_prompt(
         "Translate travel-video map labels into the target language.\n"
         f"Target language: {lang_name} ({normalize_brief_language(language)})\n"
         f"Country/region: {region}\n"
-        "These names appear as short FROM → TO labels on a vintage route map.\n"
+        "These names appear as short place labels on a vintage map.\n"
+        "The renderer already draws FROM → TO for transitions; each label is ONE place.\n"
         "Context — chapter order:\n"
         + ("\n".join(order) if order else "(none)")
         + "\n"
@@ -107,6 +108,7 @@ def build_map_label_translate_prompt(
         "- Two places joined by & stay two places, joined as a native speaker would "
         "(e, et, y, und, and, e).\n"
         "- Use previous/next only to disambiguate the same name, never copy them.\n"
+        "- Never join two chapters with an arrow or route (no FROM → TO, no 'A → B').\n"
         "- Output MUST be a place name derived from the folder name. "
         "Never a sentence, never payment/help/socket/card text, never OSM/Wikipedia titles.\n"
         "- Keep it short (few words). No quotes, no trailing period.\n"
