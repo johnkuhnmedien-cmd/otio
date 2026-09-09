@@ -222,8 +222,10 @@ def test_renderer_draws_geography_labels() -> None:
     assert "interiorLonLat" in src
     assert "atlasFeatureForLabel" in src
     assert "geoBounds" in src
+    assert "inlandPoints" in src
+    assert "paddingLeft: 16" in src
     assert "whiteSpace: \"nowrap\"" in src
-    assert "width: \"max-content\"" in src
+    assert "letterSpacing: 0" in src
     assert "borderRadius: 3" in src
     assert "translate(-50%, -50%)" in src
     assert "visibleCountryFit" not in src

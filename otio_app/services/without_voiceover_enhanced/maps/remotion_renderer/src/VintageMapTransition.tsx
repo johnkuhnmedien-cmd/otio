@@ -130,8 +130,6 @@ function interiorLonLat(
   const south = viewBounds[0][1];
   const east = viewBounds[1][0];
   const north = viewBounds[1][1];
-  const viewCenterLon = (west + east) / 2;
-  const viewCenterLat = (south + north) / 2;
   const insideCountry = (longitude: number, latitude: number) =>
     !feature || geoContains(feature as never, [longitude, latitude]);
   const usable = (longitude: number, latitude: number) =>
@@ -155,54 +153,54 @@ function interiorLonLat(
     const maxLon = Math.min(east, bounds[1][0]);
     const maxLat = Math.min(north, bounds[1][1]);
     if (maxLon > minLon && maxLat > minLat) {
-      let best: { longitude: number; latitude: number } | null = null;
-      let bestScore = Number.NEGATIVE_INFINITY;
-      const steps = 28;
-      const stepLon = (maxLon - minLon) / steps;
-      const stepLat = (maxLat - minLat) / steps;
-      const dirs: Array<[number, number]> = [
-        [1, 0],
-        [-1, 0],
-        [0, 1],
-        [0, -1],
-        [1, 1],
-        [-1, 1],
-        [1, -1],
-        [-1, -1],
-        [2, 0],
-        [-2, 0],
-        [0, 2],
-        [0, -2],
-      ];
+      const steps = 30;
+      const inlandPoints: Array<[number, number]> = [];
+      const landPoints: Array<[number, number]> = [];
+      const ringInside = (longitude: number, latitude: number, radius: number) => {
+        for (let dir = 0; dir < 8; dir += 1) {
+          const angle = (dir * Math.PI) / 4;
+          if (
+            !insideCountry(
+              longitude + radius * Math.cos(angle),
+              latitude + radius * Math.sin(angle) * 0.8,
+            )
+          ) {
+            return false;
+          }
+        }
+        return true;
+      };
       for (let i = 1; i < steps; i += 1) {
         for (let j = 1; j < steps; j += 1) {
           const longitude = minLon + (i / steps) * (maxLon - minLon);
           const latitude = minLat + (j / steps) * (maxLat - minLat);
           if (!usable(longitude, latitude)) continue;
-          let inland = 0;
-          for (const [stepX, stepY] of dirs) {
-            if (insideCountry(longitude + stepX * stepLon, latitude + stepY * stepLat)) {
-              inland += 1;
-            }
-          }
-          const toCenter = Math.hypot(
-            longitude - viewCenterLon,
-            latitude - viewCenterLat,
-          );
-          const fromEdge = Math.min(
-            longitude - west,
-            east - longitude,
-            latitude - south,
-            north - latitude,
-          );
-          const score = inland * 12 + fromEdge * 2 - toCenter * 2.2;
-          if (score > bestScore) {
-            bestScore = score;
-            best = { longitude, latitude };
+          landPoints.push([longitude, latitude]);
+          if (ringInside(longitude, latitude, 0.16)) {
+            inlandPoints.push([longitude, latitude]);
           }
         }
       }
-      if (best) return best;
+      const pool = inlandPoints.length > 8 ? inlandPoints : landPoints;
+      if (pool.length) {
+        const meanLon = pool.reduce((sum, point) => sum + point[0], 0) / pool.length;
+        const meanLat = pool.reduce((sum, point) => sum + point[1], 0) / pool.length;
+        if (usable(meanLon, meanLat)) {
+          return { longitude: meanLon, latitude: meanLat };
+        }
+        let nearest = pool[0];
+        let nearestDist = Number.POSITIVE_INFINITY;
+        for (const point of pool) {
+          const dist =
+            (point[0] - meanLon) * (point[0] - meanLon) +
+            (point[1] - meanLat) * (point[1] - meanLat);
+          if (dist < nearestDist) {
+            nearestDist = dist;
+            nearest = point;
+          }
+        }
+        return { longitude: nearest[0], latitude: nearest[1] };
+      }
     }
   }
 
@@ -530,17 +528,21 @@ export const VintageMapTransition: React.FC<MapTransitionProps> = (props) => {
                 : "inset 0 0 0 1px rgba(255,252,240,0.7), 0 2px 8px rgba(45, 34, 20, 0.2)",
             boxSizing: "border-box",
             color: item.kind === "sea" ? "#334452" : "#32281f",
-            display: "inline-flex",
+            display: "flex",
             fontFamily: "Georgia, 'Times New Roman', serif",
             fontSize: item.fontSize,
             fontStyle: item.kind === "sea" ? "italic" : "normal",
             fontWeight: item.kind === "sea" ? 600 : 700,
             justifyContent: "center",
             left: item.point.x,
-            letterSpacing: item.kind === "sea" ? "0.02em" : "0.02em",
+            letterSpacing: 0,
             lineHeight: 1,
             opacity: 0.98,
-            padding: item.kind === "sea" ? "6px 12px" : "6px 12px",
+            overflow: "visible",
+            paddingBottom: 8,
+            paddingLeft: 16,
+            paddingRight: 16,
+            paddingTop: 8,
             pointerEvents: "none",
             position: "absolute",
             textAlign: "center",
@@ -548,7 +550,6 @@ export const VintageMapTransition: React.FC<MapTransitionProps> = (props) => {
             top: item.point.y,
             transform: "translate(-50%, -50%)",
             whiteSpace: "nowrap",
-            width: "max-content",
           }}
         >
           {item.label}
