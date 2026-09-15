@@ -966,12 +966,26 @@ def build_asset_catalog(
         )
         # Mehrdeutige ID aus Katalog entfernen — kein stilles first/last.
         result.by_id.pop(asset_id, None)
+        _drop_catalog_id_aliases(result, asset_id)
     return result
 
 
 def _asset_catalog(project: Project) -> dict[str, dict]:
     """Kompatibilitäts-Wrapper (eindeutige IDs)."""
     return build_asset_catalog(project).by_id
+
+
+def _drop_catalog_id_aliases(catalog: AssetCatalog, asset_id: str) -> None:
+    """Entfernt Aliase, die auf eine aus ``by_id`` gestrichene ID zeigen."""
+    key = (asset_id or "").strip()
+    if not key:
+        return
+    for legacy, aliases in list(catalog.legacy_to_ids.items()):
+        kept = [aid for aid in aliases if aid != key]
+        if kept:
+            catalog.legacy_to_ids[legacy] = kept
+        else:
+            catalog.legacy_to_ids.pop(legacy, None)
 
 
 def lookup_catalog_entry(
@@ -984,17 +998,24 @@ def lookup_catalog_entry(
         return None, "Leere Asset-ID."
     if key in catalog.by_id:
         return catalog.by_id[key], None
-    aliases = catalog.legacy_to_ids.get(key) or []
+    aliases = [
+        aid
+        for aid in (catalog.legacy_to_ids.get(key) or [])
+        if aid in catalog.by_id
+    ]
     if len(aliases) == 1:
         return catalog.by_id[aliases[0]], None
     if len(aliases) > 1:
-        paths = [catalog.by_id[a]["path"] for a in aliases if a in catalog.by_id]
+        paths = [catalog.by_id[a]["path"] for a in aliases]
         return None, (
             f"Mehrdeutige Legacy-Asset-ID '{key}' trifft "
             f"{len(paths)} Dateien: {'; '.join(paths)}. "
             "Inventar sowie Lauf 2 und Lauf 3 neu erzeugen "
             "(eindeutige Ordner-Scoped-IDs erforderlich)."
         )
+    collision = next((note for note in catalog.collisions if key in note), None)
+    if collision:
+        return None, collision
     return None, f"Unbekannte Asset-ID: {key}"
 
 

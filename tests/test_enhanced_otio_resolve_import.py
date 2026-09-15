@@ -253,6 +253,170 @@ def test_explicit_id_collision_blocks_resolve(tmp_path: Path) -> None:
         resolve_final_timeline(project)
 
 
+def test_lookup_stale_legacy_alias_does_not_keyerror() -> None:
+    """Kollision poppt by_id, Alias bleibt — Lookup darf nicht mit KeyError sterben."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        AssetCatalog,
+        lookup_catalog_entry,
+    )
+
+    catalog = AssetCatalog()
+    stem = "asset_kal_slotsruin_asset00001"
+    catalog.legacy_to_ids[stem] = [stem]
+    catalog.collisions.append(
+        f"Asset-ID '{stem}' zeigt auf mehrere lokale Pfade: a.jpg; b.jpg. "
+        "Inventar sowie Lauf 2 und Lauf 3 neu erzeugen."
+    )
+    entry, err = lookup_catalog_entry(catalog, stem)
+    assert entry is None
+    assert err is not None
+    assert stem in err
+
+
+def test_catalog_stem_collision_lookup_does_not_keyerror(tmp_path: Path) -> None:
+    """Zwei Fotos mit derselben Slim-ID: Lookup liefert Fehler, keinen KeyError."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Kalø Slotsruin"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    first = Path(project.project_root) / folder / "Kalø Slotsruin_asset00001.jpg"
+    second = Path(project.project_root) / folder / "Kalø Slotsruin_asset00001b.jpg"
+    Image.new("RGB", (16, 16), color=(10, 20, 30)).save(first, format="JPEG")
+    Image.new("RGB", (16, 16), color=(40, 50, 60)).save(second, format="JPEG")
+    stem_id = "asset_kal_slotsruin_asset00001"
+    inv = AssetFolderAnalysis(
+        folder=folder,
+        assets=[
+            AssetMediaAnalysis(
+                path=str(first),
+                description="ruin",
+                asset_id=stem_id,
+                media_type="photo",
+            ),
+            AssetMediaAnalysis(
+                path=str(second),
+                description="ruin2",
+                asset_id=stem_id,
+                media_type="photo",
+            ),
+        ],
+        media_files=[first.name, second.name],
+    )
+    save_folder_inventory(get_folder_inventory_path(project.work_dir_path, folder), inv)
+    catalog = build_asset_catalog(project, fps=25.0)
+    assert catalog.collisions
+    entry, err = lookup_catalog_entry(catalog, stem_id)
+    assert entry is None
+    assert err
+
+    hold = Path(project.project_root) / folder / "hold.mp4"
+    _ffmpeg_color_video(hold, duration=2.0, color="red")
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(still_image_style_enabled=False),
+    )
+    write_json(
+        resolved_timeline_path(project),
+        ResolvedTimelineDocument(
+            script_version="script-v1",
+            fps=25.0,
+            total_duration_seconds=2.0,
+            audio_segments=[],
+            shots=[
+                {
+                    "shot_id": "shot_kal",
+                    "asset_id": stem_id,
+                    "folder_name": folder,
+                    "timeline_start_seconds": 0.0,
+                    "timeline_end_seconds": 2.0,
+                    "source_start_seconds": 0.0,
+                    "source_end_seconds": 2.0,
+                    "resolved_media_path": str(hold),
+                    "resolved_media_kind": "video",
+                    "hold_mode": "still_hold",
+                }
+            ],
+            repairs=[],
+            errors=[],
+        ),
+    )
+    out = export_otio_from_resolved_timeline(
+        project, basename="preview_kal_collision", allow_errors=True
+    )
+    assert out.is_file()
+    payload = out.read_text(encoding="utf-8")
+    assert "shot_kal" in payload or "placeholder" in payload.lower()
+
+
+def test_otio_allow_errors_exports_when_catalog_lookup_keyerrors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cover+Pan-Katalogsuche darf Alle OTIO nicht mit KeyError abbrechen."""
+    project = _project(tmp_path)
+    video = Path(project.project_root) / "Castle Combe" / "hold.mp4"
+    _ffmpeg_color_video(video, duration=2.0, color="red")
+    _save_inventory(project, "Castle Combe", video)
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(still_image_style_enabled=False),
+    )
+    write_json(
+        resolved_timeline_path(project),
+        ResolvedTimelineDocument(
+            script_version="script-v1",
+            fps=25.0,
+            total_duration_seconds=2.0,
+            audio_segments=[],
+            shots=[
+                {
+                    "shot_id": "shot_kal",
+                    "asset_id": "asset_kal_slotsruin_asset00001",
+                    "folder_name": "Castle Combe",
+                    "timeline_start_seconds": 0.0,
+                    "timeline_end_seconds": 2.0,
+                    "source_start_seconds": 0.0,
+                    "source_end_seconds": 2.0,
+                    "resolved_media_path": str(video),
+                    "resolved_media_kind": "video",
+                    "hold_mode": "still_hold",
+                }
+            ],
+            repairs=[],
+            errors=[],
+        ),
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise KeyError("asset_kal_slotsruin_asset00001")
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.otio_export_service.lookup_catalog_entry",
+        _boom,
+    )
+    out = export_otio_from_resolved_timeline(
+        project, basename="preview_kal", allow_errors=True
+    )
+    assert out.is_file()
+    payload = out.read_text(encoding="utf-8")
+    assert "shot_kal" in payload or "placeholder" in payload.lower()
+
+
+def test_format_otio_export_error_explains_keyerror() -> None:
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        format_otio_export_error,
+    )
+
+    text = format_otio_export_error(KeyError("asset_kal_slotsruin_asset00001"))
+    assert "asset_kal_slotsruin_asset00001" in text
+    assert "OTIO-Fehler:" in text
+    assert text != "OTIO-Fehler: 'asset_kal_slotsruin_asset00001'"
+
+
 def test_video_source_range_and_available_range(tmp_path: Path) -> None:
     project = _project(tmp_path)
     video = Path(project.project_root) / "Castle Combe" / "clip.mp4"
