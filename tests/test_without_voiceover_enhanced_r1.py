@@ -791,6 +791,7 @@ def test_ui_test_otio_with_gaps_markers() -> None:
     all_otio = cut_src[cut_src.index("if run_all_otio:") : cut_src.index("if run_all_otio:") + 700]
     assert "allow_errors=True" in all_otio
     assert "allow_errors=False" not in all_otio
+    assert "format_otio_export_error" in cut_src
     chapter_otio = cut_src[cut_src.index("if run_otio:") : cut_src.index("if run_otio:") + 500]
     assert "allow_errors=True" in chapter_otio
     assert "allow_errors=False" not in chapter_otio

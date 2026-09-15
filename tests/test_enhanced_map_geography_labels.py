@@ -195,7 +195,7 @@ def test_llm_fills_neighbor_labels_and_invalidates_render(tmp_path: Path) -> Non
     assert ids.get("sea:adriatic") == "Adriatisches Meer"
     assert localized.maps[0].render_status != RENDER_STATUS_DONE
     payload = remotion_payload(localized.maps[0])
-    assert payload["styleVersion"] == "otio-vintage-map-v15"
+    assert payload["styleVersion"] == "otio-vintage-map-v16"
     assert any(item["label"] == "Kroatien" for item in payload["geographyLabels"])
 
 
@@ -220,9 +220,13 @@ def test_renderer_draws_geography_labels() -> None:
     assert "geographyOnScreen" in src
     assert "geographyLabels" in src
     assert "interiorLonLat" in src
-    assert "visibleCountryFit" in src
     assert "atlasFeatureForLabel" in src
     assert "geoBounds" in src
+    assert "inlandPoints" in src
+    assert "paddingLeft: 16" in src
     assert "whiteSpace: \"nowrap\"" in src
+    assert "letterSpacing: 0" in src
     assert "borderRadius: 3" in src
     assert "translate(-50%, -50%)" in src
+    assert "visibleCountryFit" not in src
+    assert "fontSize: item.kind === \"sea\" ? 14.5 : 13" in src

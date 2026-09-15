@@ -161,6 +161,7 @@ from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     EnhancedOtioExportError,
     export_otio_from_resolved_timeline,
     export_portable_otio_package,
+    format_otio_export_error,
     validate_resolved_timeline_for_production,
 )
 from otio_app.services.without_voiceover_enhanced.elevenlabs_music_service import (
@@ -1855,7 +1856,7 @@ def _render_intro_cut_section(
         except EnhancedOtioExportError as exc:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
-            st.error(f"Intro-OTIO-Fehler: {exc}")
+            st.error(format_otio_export_error(exc, prefix="Intro-OTIO-Fehler"))
 
     intro_plan = load_model(intro_unified_cut_plan_path(project), UnifiedCutPlanDocument)
     intro_resolved = load_model(
@@ -2198,7 +2199,7 @@ def _render_chapter_cut_rows(
             except ChapterCutError as exc:
                 st.error(str(exc))
             except Exception as exc:  # noqa: BLE001
-                st.error(f"OTIO-Fehler ({folder}): {exc}")
+                st.error(format_otio_export_error(exc, prefix=f"OTIO-Fehler ({folder})"))
 
         plan = load_chapter_unified_plan(project, folder)
         if plan is not None and plan.slots:
@@ -2716,7 +2717,7 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         except EnhancedOtioExportError as exc:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
-            st.error(f"OTIO-Fehler: {exc}")
+            st.error(format_otio_export_error(exc))
 
     if run_music_scope:
         progress = st.empty()
