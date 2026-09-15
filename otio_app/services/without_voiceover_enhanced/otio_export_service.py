@@ -70,6 +70,21 @@ class EnhancedOtioExportError(RuntimeError):
     pass
 
 
+def format_otio_export_error(
+    exc: BaseException, *, prefix: str = "OTIO-Fehler"
+) -> str:
+    """Kurzer Hinweis für die Cut-Plan-Seite — keine Python-KeyError-Rohform."""
+    if isinstance(exc, KeyError):
+        key = exc.args[0] if exc.args else ""
+        return (
+            f"{prefix}: Ein Clip zeigt auf `{key}`, aber diese Datei "
+            "ist gerade nicht eindeutig in der Medienliste "
+            "(oft zweimal derselbe Name oder ein gelöschtes Bild). "
+            "Die einzelnen grünen Kapitel-OTIO-Buttons funktionieren trotzdem."
+        )
+    return f"{prefix}: {exc}"
+
+
 # PTS-Jitter liegt typisch unter 0.2s; Kamera-SMPTE-TC beginnt oft bei ≥1s
 # (häufig Stunden). Darüber: Clean mit -timecode 00:00:00:00 erzwingen.
 _CAMERA_TC_THRESHOLD_SEC = 1.0
@@ -463,7 +478,10 @@ def _original_still_path_for_export(
     if is_image_media(path) and not is_video_media(path):
         return path
     cat = catalog if catalog is not None else build_asset_catalog(project, fps=fps)
-    entry, _err = lookup_catalog_entry(cat, str(shot.asset_id or ""))
+    try:
+        entry, _err = lookup_catalog_entry(cat, str(shot.asset_id or ""))
+    except Exception:  # noqa: BLE001 — Katalog darf Cover+Pan nicht den Export killen
+        return None
     found = still_image_path_from_catalog_entry(entry, path)
     if found is not None:
         return found
@@ -1234,9 +1252,13 @@ def export_otio_from_resolved_timeline(
                     shot_index=shot_index,
                 )
             )
-        except EnhancedOtioExportError:
+        except Exception as exc:  # noqa: BLE001
             if not allow_errors:
-                raise
+                if isinstance(exc, EnhancedOtioExportError):
+                    raise
+                raise EnhancedOtioExportError(
+                    f"{shot.shot_id} / {shot.asset_id}: {exc}"
+                ) from exc
             _append_test_placeholder_clip(
                 video_track,
                 project,
